@@ -10,6 +10,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
+	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/agentcore/subagent"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
@@ -63,17 +64,26 @@ type UsageRecorder func(agentName string, msg agentcore.AgentMessage)
 type ApplyThinking func(role string, level agentcore.ThinkingLevel)
 
 // ParseThinkingLevel 把配置字符串转 agentcore.ThinkingLevel。
-// "" 合法（= 不覆盖/继承）；其余须是 off/minimal/low/medium/high/xhigh 之一，
+// "" 合法（= 不覆盖/继承）；其余须是 off/minimal/low/medium/high/xhigh/max 之一，
 // 否则返回 error（启动时降级当空并 warn，运行时把 error 回显给用户）。
 func ParseThinkingLevel(s string) (agentcore.ThinkingLevel, error) {
-	lv := agentcore.ThinkingLevel(strings.ToLower(strings.TrimSpace(s)))
+	lv := agentcore.NormalizeThinkingLevel(agentcore.ThinkingLevel(s))
 	switch lv {
 	case "", agentcore.ThinkingOff, agentcore.ThinkingMinimal, agentcore.ThinkingLow,
-		agentcore.ThinkingMedium, agentcore.ThinkingHigh, agentcore.ThinkingXHigh:
+		agentcore.ThinkingMedium, agentcore.ThinkingHigh, agentcore.ThinkingXHigh,
+		agentcore.ThinkingMax:
 		return lv, nil
 	default:
-		return "", fmt.Errorf("无效思考强度 %q（可选：off/minimal/low/medium/high/xhigh）", s)
+		return "", fmt.Errorf("无效思考强度 %q（可选：off/minimal/low/medium/high/xhigh/max）", s)
 	}
+}
+
+func ResolveThinkingForModel(model agentcore.ChatModel, level agentcore.ThinkingLevel) (agentcore.ThinkingLevel, bool) {
+	return llm.ThinkingPolicyFor(model).Resolve(level)
+}
+
+func AvailableThinkingForModel(model agentcore.ChatModel) []agentcore.ThinkingLevel {
+	return llm.ThinkingPolicyFor(model).Available
 }
 
 // roleThinking 解析某角色生效的思考强度；非法值降级为空（不覆盖）并 warn。
@@ -84,6 +94,11 @@ func roleThinking(cfg bootstrap.Config, role string) agentcore.ThinkingLevel {
 		return ""
 	}
 	return lv
+}
+
+func resolvedRoleThinking(model agentcore.ChatModel, cfg bootstrap.Config, role string) agentcore.ThinkingLevel {
+	resolved, _ := ResolveThinkingForModel(model, roleThinking(cfg, role))
+	return resolved
 }
 
 // BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
@@ -179,7 +194,7 @@ func BuildCoordinator(
 	architectStopGuardFactory := func(_, _ string) agentcore.StopGuard {
 		return reminder.NewArchitectStopGuard(store)
 	}
-	architectThinking := roleThinking(cfg, "architect")
+	architectThinking, _ := ResolveThinkingForModel(architectModel, roleThinking(cfg, "architect"))
 	architectShort := subagent.Config{
 		Name:               "architect_short",
 		Description:        "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
@@ -236,7 +251,7 @@ func BuildCoordinator(
 		Tools:              writerTools,
 		MaxTurns:           30,
 		MaxRetries:         subagentMaxRetries,
-		ThinkingLevel:      roleThinking(cfg, "writer"),
+		ThinkingLevel:      resolvedRoleThinking(writerModel, cfg, "writer"),
 		ToolsAreIdempotent: true,
 		StopAfterTools:     []string{"commit_chapter"},
 		OnMessage:          onMsg,
@@ -281,7 +296,7 @@ func BuildCoordinator(
 		Tools:              editorTools,
 		MaxTurns:           20,
 		MaxRetries:         subagentMaxRetries,
-		ThinkingLevel:      roleThinking(cfg, "editor"),
+		ThinkingLevel:      resolvedRoleThinking(editorModel, cfg, "editor"),
 		ToolsAreIdempotent: true,
 		OnMessage:          onMsg,
 		// 仅摘要类终态产物命中即停；save_review 不再硬停——StopAfterTool 退出会绕过
@@ -325,17 +340,21 @@ func BuildCoordinator(
 	// Coordinator 思考强度：无条件应用解析结果。未配置时为空（不发 thinking，用 provider
 	// 默认），与各子代理（Config.ThinkingLevel 默认空）一致——避免覆盖 agentcore 默认
 	// ThinkingLow 而对所有 provider 强制发 low（含会被强制开思考的 GLM/Ollama）。
-	agent.SetThinkingLevel(roleThinking(cfg, "coordinator"))
+	coordinatorThinking, _ := ResolveThinkingForModel(models.ForRole("coordinator"), roleThinking(cfg, "coordinator"))
+	agent.SetThinkingLevel(coordinatorThinking)
 
 	// 运行时联动各角色思考强度：coordinator 走 Agent，子代理走 subagentTool override。
 	applyThinking := func(role string, level agentcore.ThinkingLevel) {
 		switch role {
 		case "coordinator":
+			level, _ = ResolveThinkingForModel(models.ForRole("coordinator"), level)
 			agent.SetThinkingLevel(level)
 		case "architect":
+			level, _ = ResolveThinkingForModel(models.ForRole("architect"), level)
 			subagentTool.SetThinkingLevel("architect_short", level)
 			subagentTool.SetThinkingLevel("architect_long", level)
 		case "writer", "editor":
+			level, _ = ResolveThinkingForModel(models.ForRole(role), level)
 			subagentTool.SetThinkingLevel(role, level)
 		}
 	}

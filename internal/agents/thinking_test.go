@@ -9,12 +9,14 @@ import (
 func TestParseThinkingLevel(t *testing.T) {
 	ok := map[string]agentcore.ThinkingLevel{
 		"":        "",
+		"auto":    "",
 		"off":     agentcore.ThinkingOff,
 		"minimal": agentcore.ThinkingMinimal,
 		"low":     agentcore.ThinkingLow,
 		"medium":  agentcore.ThinkingMedium,
 		"high":    agentcore.ThinkingHigh,
 		"xhigh":   agentcore.ThinkingXHigh,
+		"max":     agentcore.ThinkingMax,
 		"  HIGH ": agentcore.ThinkingHigh, // 大小写/空白归一
 	}
 	for in, want := range ok {
@@ -28,7 +30,7 @@ func TestParseThinkingLevel(t *testing.T) {
 		}
 	}
 
-	for _, bad := range []string{"ultra", "max", "true", "0"} {
+	for _, bad := range []string{"ultra", "true", "0"} {
 		if _, err := ParseThinkingLevel(bad); err == nil {
 			t.Errorf("ParseThinkingLevel(%q) 应报错，实际通过", bad)
 		}

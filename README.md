@@ -442,7 +442,7 @@ output/novel/meta/simulation_profile.json
 关于 `api_key`：
 
 - `openrouter` / `anthropic` / `gemini` / `openai` / `deepseek` / `qwen` / `glm` / `grok` 这类托管接口通常需要填写 `api_key`
-- `ollama` 和 `bedrock` 允许不填 `api_key`
+- `ollama` 和 `bedrock` 允许不填 `api_key`；Bedrock 需在 `extra` 中配置 `region`、`access_key_id`、`secret_access_key`（可选 `session_token`）
 - 显式指定了 `type` 的自定义代理允许不填 `api_key`
 
 例如本地 `ollama` 配置：
