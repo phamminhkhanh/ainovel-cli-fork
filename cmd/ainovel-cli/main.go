@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/entry/headless"
 	"github.com/voocel/ainovel-cli/internal/entry/tui"
+	"github.com/voocel/ainovel-cli/internal/entry/web"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	buildversion "github.com/voocel/ainovel-cli/internal/version"
 )
@@ -43,8 +44,8 @@ func main() {
 
 	// 首次引导
 	if bootstrap.NeedsSetup(opts.ConfigPath) {
-		if opts.Headless {
-			die("error: headless 模式不支持首次引导，请先运行一次 TUI 完成配置")
+		if opts.Headless || opts.Web {
+			die("error: headless / web 模式不支持首次引导，请先运行一次 TUI 完成配置")
 		}
 		setupCfg, err := bootstrap.RunSetup()
 		if err != nil {
@@ -98,6 +99,18 @@ func runWithConfig(cfg bootstrap.Config, opts cliOptions, args []string) {
 	}
 
 	bundle := assets.Load(cfg.Style)
+	if opts.Web && opts.Headless {
+		die("error: --web 与 --headless 不能同时使用")
+	}
+	if opts.Web {
+		if opts.Prompt != "" || opts.PromptFile != "" {
+			die("error: --prompt/--prompt-file 仅能在 --headless 模式下使用")
+		}
+		if err := web.Run(cfg, bundle, web.Options{Addr: opts.Addr, AllowPublic: opts.UnsafePublicWeb}); err != nil {
+			die("error: %v", err)
+		}
+		return
+	}
 	if opts.Headless {
 		prompt, err := loadPrompt(opts)
 		if err != nil {
@@ -117,13 +130,16 @@ func runWithConfig(cfg bootstrap.Config, opts cliOptions, args []string) {
 }
 
 type cliOptions struct {
-	ConfigPath    string
-	Headless      bool
-	Prompt        string
-	PromptFile    string
-	Version       bool
-	Update        bool
-	UpdateVersion string
+	ConfigPath      string
+	Headless        bool
+	Web             bool
+	Addr            string
+	UnsafePublicWeb bool
+	Prompt          string
+	PromptFile      string
+	Version         bool
+	Update          bool
+	UpdateVersion   string
 }
 
 // parseCLIOptions 提取 CLI flag，返回选项和剩余参数。
@@ -162,6 +178,16 @@ func parseCLIOptions(argv []string) (cliOptions, []string, error) {
 			i++
 		case "--headless":
 			opts.Headless = true
+		case "--web":
+			opts.Web = true
+		case "--addr":
+			if i+1 >= len(argv) {
+				return opts, nil, fmt.Errorf("--addr 缺少值")
+			}
+			opts.Addr = argv[i+1]
+			i++
+		case "--unsafe-public-web":
+			opts.UnsafePublicWeb = true
 		case "--prompt":
 			if i+1 >= len(argv) {
 				return opts, nil, fmt.Errorf("--prompt 缺少值")
@@ -181,10 +207,16 @@ func parseCLIOptions(argv []string) (cliOptions, []string, error) {
 	if opts.Prompt != "" && opts.PromptFile != "" {
 		return opts, nil, fmt.Errorf("--prompt 和 --prompt-file 不能同时使用")
 	}
-	if opts.Version && (opts.Update || opts.ConfigPath != "" || opts.Headless || opts.Prompt != "" || opts.PromptFile != "" || len(args) > 0) {
+	if opts.Addr != "" && !opts.Web {
+		return opts, nil, fmt.Errorf("--addr 仅能与 --web 同用")
+	}
+	if opts.UnsafePublicWeb && !opts.Web {
+		return opts, nil, fmt.Errorf("--unsafe-public-web requires --web")
+	}
+	if opts.Version && (opts.Update || opts.ConfigPath != "" || opts.Headless || opts.Web || opts.UnsafePublicWeb || opts.Prompt != "" || opts.PromptFile != "" || len(args) > 0) {
 		return opts, nil, fmt.Errorf("version 不能与其他启动参数混用")
 	}
-	if opts.Update && (opts.ConfigPath != "" || opts.Headless || opts.Prompt != "" || opts.PromptFile != "" || len(args) > 0) {
+	if opts.Update && (opts.ConfigPath != "" || opts.Headless || opts.Web || opts.UnsafePublicWeb || opts.Prompt != "" || opts.PromptFile != "" || len(args) > 0) {
 		return opts, nil, fmt.Errorf("update 不能与其他启动参数混用")
 	}
 	return opts, args, nil

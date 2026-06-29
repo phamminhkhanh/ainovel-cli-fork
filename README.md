@@ -7,6 +7,8 @@
   <img src="scripts/novel.png" alt="ainovel-cli bg" width="800">
 </p>
 
+> 📘 **Tiếng Việt — Tổng quan nhanh:** nội dung dự án · triết lý thiết kế · flow hoạt động (bản图解 gọn) xem [TONG-QUAN-DU-AN.md](TONG-QUAN-DU-AN.md).
+
 ## 特性
 
 - **多智能体协作** — Coordinator 在一次长循环中调度 Architect / Writer / Editor 三个子代理，自主决策创作流程

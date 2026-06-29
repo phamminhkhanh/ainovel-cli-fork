@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ainovel · web</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar: dashboard từ Snapshot() -->
+    <aside class="sidebar" id="sidebar">
+      <header class="brand">
+        <span class="brand-mark">✒</span>
+        <span class="brand-name" id="novelName">Chưa có tên</span>
+        <span class="badge" id="stateBadge" data-state="idle">idle</span>
+      </header>
+
+      <section class="card">
+        <h3>Tiến độ</h3>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <dl class="kv">
+          <dt>Chương</dt><dd id="chapters">—</dd>
+          <dt>Hoàn thành</dt><dd id="completed">—</dd>
+          <dt>Tổng từ</dt><dd id="words">—</dd>
+          <dt>Phase</dt><dd id="phase">—</dd>
+          <dt>Flow</dt><dd id="flow">—</dd>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h3>Agents</h3>
+        <ul class="agents" id="agents"><li class="muted">—</li></ul>
+      </section>
+
+      <section class="card">
+        <h3>Context · Usage</h3>
+        <dl class="kv">
+          <dt>Context</dt><dd id="ctx">—</dd>
+          <dt>Model</dt><dd id="model">—</dd>
+          <dt>Chi phí</dt><dd id="cost">—</dd>
+        </dl>
+        <div class="progress-bar slim"><div class="progress-fill ctx" id="ctxFill"></div></div>
+      </section>
+
+      <section class="card" id="premiseCard" hidden>
+        <h3>Premise</h3>
+        <p class="premise" id="premise"></p>
+        <h3>Nhân vật</h3>
+        <ul class="chips" id="characters"></ul>
+      </section>
+    </aside>
+
+    <!-- Main: stream + event log -->
+    <main class="main">
+      <div class="panes">
+        <section class="pane stream-pane">
+          <div class="pane-head"><h3>Bản thảo (stream)</h3><button class="ghost" id="clearStream" title="Xóa khung xem">⟲</button></div>
+          <div class="thinking-box">
+            <div class="thinking-head"><span>Suy nghĩ của model</span><small>debug · scroll</small></div>
+            <div class="thinking-stream" id="thinkingStream"><div class="placeholder">Thinking sẽ hiện ở đây, tách khỏi bản thảo.</div></div>
+          </div>
+          <div class="stream" id="stream"><div class="placeholder">Nhập yêu cầu bên dưới rồi bấm Bắt đầu để engine viết truyện.</div></div>
+        </section>
+        <section class="pane log-pane">
+          <div class="pane-head"><h3>Nhật ký sự kiện</h3></div>
+          <ul class="log" id="log"></ul>
+        </section>
+      </div>
+
+      <!-- Input bar -->
+      <footer class="inputbar">
+        <div class="toolbar">
+          <span class="hint" id="modeHint">Chế độ: Bắt đầu</span>
+          <span class="spacer"></span>
+          <button class="btn" id="cmdBtn" title="Bảng lệnh (phím /)">⌘ Lệnh</button>
+          <button class="btn" id="settingsBtn">⚙ Model</button>
+          <button class="btn" id="resumeBtn" hidden>Khôi phục</button>
+          <button class="btn danger" id="abortBtn" hidden>Dừng</button>
+        </div>
+        <div class="composer">
+          <textarea id="input" rows="2" placeholder="Mô tả truyện bạn muốn viết… (Ctrl/Cmd + Enter để gửi)"></textarea>
+          <button class="btn primary" id="sendBtn">Bắt đầu</button>
+        </div>
+        <div class="toast" id="toast" hidden></div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Modal: ask_user (engine hỏi giữa chừng — mirror modal hỏi của TUI) -->
+  <div class="modal-overlay" id="askOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="askTitle">
+      <header class="modal-head"><h2 id="askTitle">Engine cần bạn quyết định</h2></header>
+      <div class="modal-body" id="askBody"></div>
+      <footer class="modal-foot">
+        <button class="btn" id="askSkip">Bỏ qua (để engine tự quyết)</button>
+        <button class="btn primary" id="askSubmit">Gửi trả lời</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Modal: settings (đổi model + mức suy luận theo vai trò) -->
+  <div class="modal-overlay" id="setOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="setTitle">
+      <header class="modal-head">
+        <h2 id="setTitle">Model & Mức suy luận</h2>
+        <button class="btn ghost" id="setClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body" id="setBody"><p class="muted">Đang tải…</p></div>
+    </div>
+  </div>
+
+  <!-- Modal: command palette (mirror command_registry.go — mở bằng nút ⌘ Lệnh hoặc phím /) -->
+  <div class="modal-overlay" id="cmdOverlay" hidden>
+    <div class="modal cmd-modal" role="dialog" aria-modal="true" aria-labelledby="cmdTitle">
+      <header class="modal-head">
+        <h2 id="cmdTitle">Bảng lệnh</h2>
+        <button class="btn ghost" id="cmdClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body">
+        <input type="text" id="cmdFilter" class="cmd-filter" placeholder="Gõ để lọc lệnh… (Enter chạy lệnh đầu, Esc đóng)">
+        <ul class="cmd-list" id="cmdList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: đồng sáng tác (chat — khởi tạo lạnh hoặc định hướng giai đoạn) -->
+  <div class="modal-overlay" id="ccOverlay" hidden>
+    <div class="modal cc-modal" role="dialog" aria-modal="true" aria-labelledby="ccTitle">
+      <header class="modal-head">
+        <h2 id="ccTitle">Đồng sáng tác</h2>
+        <button class="btn ghost" id="ccClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body cc-body">
+        <div class="cc-conv" id="ccConv"></div>
+        <div class="cc-thinking" id="ccThinkingWrap" hidden>
+          <span class="cc-think-label">Suy nghĩ</span>
+          <pre id="ccThinking"></pre>
+        </div>
+        <div class="cc-draft" id="ccDraftWrap" hidden>
+          <span class="cc-draft-label">Bản nháp chỉ thị sáng tác</span>
+          <pre id="ccDraft"></pre>
+        </div>
+        <ul class="cc-sugs" id="ccSugs"></ul>
+        <div class="composer">
+          <textarea id="ccInput" rows="2" placeholder="Trả lời AI… (Ctrl/Cmd + Enter để gửi)"></textarea>
+          <button class="btn primary" id="ccSend">Gửi</button>
+        </div>
+      </div>
+      <footer class="modal-foot">
+        <button class="btn" id="ccCancel">Hủy</button>
+        <button class="btn primary" id="ccFinish" disabled>Bắt đầu viết</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Modal: xuất bản (TXT/EPUB) -->
+  <div class="modal-overlay" id="expOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="expTitle">
+      <header class="modal-head">
+        <h2 id="expTitle">Xuất bản</h2>
+        <button class="btn ghost" id="expClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="field">
+          <label for="expFormat">Định dạng</label>
+          <select id="expFormat">
+            <option value="txt">TXT (mỗi chương một tệp)</option>
+            <option value="epub">EPUB (một tệp)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="expPath">Đường dẫn ra (trống = mặc định trong thư mục truyện)</label>
+          <input type="text" id="expPath" placeholder="vd: ./export hoặc ./novel.epub">
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="expFrom">Từ chương (0 = đầu)</label><input type="number" id="expFrom" min="0" value="0"></div>
+          <div class="field"><label for="expTo">Đến chương (0 = cuối)</label><input type="number" id="expTo" min="0" value="0"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="expOverwrite"> Ghi đè nếu tệp đã tồn tại</label>
+        <div class="result" id="expResult" hidden></div>
+      </div>
+      <footer class="modal-foot">
+        <button class="btn" id="expCancel">Đóng</button>
+        <button class="btn primary" id="expSubmit">Xuất</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Modal: nhập tiểu thuyết ngoài (phản suy để viết tiếp) -->
+  <div class="modal-overlay" id="impOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="impTitle">
+      <header class="modal-head">
+        <h2 id="impTitle">Nhập tiểu thuyết ngoài</h2>
+        <button class="btn ghost" id="impClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="muted">Phản suy từ một truyện có sẵn (tệp .txt hoặc thư mục chương) để engine viết tiếp. Cần engine đang rảnh.</p>
+        <div class="field">
+          <label for="impPath">Đường dẫn nguồn</label>
+          <input type="text" id="impPath" placeholder="vd: ./source.txt hoặc ./chapters">
+        </div>
+        <div class="field">
+          <label for="impFrom">Tiếp tục từ chương (0 = phản suy toàn bộ)</label>
+          <input type="number" id="impFrom" min="0" value="0">
+        </div>
+      </div>
+      <footer class="modal-foot">
+        <button class="btn primary" id="impSubmit">Bắt đầu nhập</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Modal: nhập hồ sơ mô phỏng (.json) -->
+  <div class="modal-overlay" id="simimpOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="simimpTitle">
+      <header class="modal-head">
+        <h2 id="simimpTitle">Nhập hồ sơ mô phỏng</h2>
+        <button class="btn ghost" id="simimpClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="muted">Nhập một hồ sơ văn phong (.json) đã có và hợp nhất theo dấu vân ngữ liệu. Cần engine đang rảnh.</p>
+        <div class="field">
+          <label for="simimpPath">Đường dẫn hồ sơ .json</label>
+          <input type="text" id="simimpPath" placeholder="vd: ./style-profile.json">
+        </div>
+      </div>
+      <footer class="modal-foot">
+        <button class="btn primary" id="simimpSubmit">Bắt đầu nhập</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Modal: chẩn đoán (markdown chỉ-đọc) -->
+  <div class="modal-overlay" id="diagOverlay" hidden>
+    <div class="modal diag-modal" role="dialog" aria-modal="true" aria-labelledby="diagTitle">
+      <header class="modal-head">
+        <h2 id="diagTitle">Chẩn đoán</h2>
+        <button class="btn ghost" id="diagClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body">
+        <pre class="diag-md" id="diagBody">Đang tải…</pre>
+        <p class="muted" id="diagPath"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Thanh tiến trình tác vụ nền (import/simulate/importsim) — frame SSE "job" -->
+  <div class="jobbar" id="jobBar" hidden></div>
+
+  <script src="/app.js"></script>
+  <script src="/app-studio.js"></script>
+</body>
+</html>
