@@ -63,23 +63,25 @@ Ngoài ra (nếu đã sửa): `README.md`, `.gitignore`.
 → Đây là **tất cả** bề mặt có thể xung đột khi merge. Mọi thứ trong `internal/entry/web/`
 là file mới → không bao giờ đụng nhau.
 
-## 4. Port: biến repo này thành fork (LÀM 1 LẦN)
+## 4. Port: biến repo này thành fork (ĐÃ XONG — 2026-06-30)
 
-**Hiện trạng:** `origin` đang trỏ **thẳng** vào voocel (`git remote -v` → `origin = github.com/voocel/ainovel-cli`).
-Tức là **chưa fork** — không push được.
+**Trạng thái remote** (đã set up, xác nhận bằng `git remote -v`):
+- `origin`   = `github.com/phamminhkhanh/ainovel-cli-fork` — fork của bạn, push/pull thoải mái
+- `upstream` = `github.com/voocel/ainovel-cli` — gốc, chỉ kéo về
+
+Web UI đã đẩy lên fork (commit đầu `c793074`). **Flow thật của lần đẩy đầu** — web UI lúc đó
+**chưa commit**, và fork đã có sẵn lịch sử voocel **mới hơn** local nên không push thẳng được:
 
 ```bash
-# 1. Đã fork voocel/ainovel-cli → github.com/phamminhkhanh/ainovel-cli-fork
-# 2. Đổi remote cũ (voocel) thành upstream — chỉ để kéo về:
-git remote rename origin upstream
-# 3. Thêm fork của bạn làm origin:
-git remote add origin https://github.com/phamminhkhanh/ainovel-cli-fork.git
-# 4. Đẩy main (gồm toàn bộ web UI) lên fork:
+git add -A
+git commit -m "feat: add web UI adapter (internal/entry/web) + docs"
+git merge upstream/main          # kéo voocel mới nhất vào local → mới đủ điều kiện push
+#   → kẹt đúng 1 dòng import trong cmd/ainovel-cli/main.go → giải keep-both (xem mục 5)
+go build ./... && go vet ./... && go test ./internal/entry/web/...
 git push -u origin main
 ```
 
-Sau bước này: `origin` = fork của bạn (push/pull thoải mái), `upstream` = voocel (chỉ kéo về).
-Solo-dev thì cứ để hết trên `main` của fork cho gọn — không cần nhánh riêng.
+Solo-dev: để hết trên `main` của fork cho gọn — không cần nhánh riêng. Từ giờ update upstream theo mục 5.
 
 ## 5. Lưu ý mỗi lần update từ upstream
 
@@ -94,8 +96,10 @@ git push origin main
 ```
 
 **Xung đột CHỈ có thể ở** (theo thứ tự khả năng):
-1. `cmd/ainovel-cli/main.go` — nếu upstream sửa đúng vùng cờ/parse. Giải: **giữ cả hai** —
+1. `cmd/ainovel-cli/main.go` — nếu upstream sửa đúng vùng cờ/parse/import. Giải: **giữ cả hai** —
    phần upstream mới + các dòng `--web` của bạn (chúng độc lập, chỉ cần đặt cạnh nhau).
+   *(Ví dụ thật — merge tính năng `eval` ngày 2026-06-30: chỉ kẹt 1 dòng import, giữ cả
+   `internal/entry/web` lẫn `internal/eval`; thân hàm git tự merge sạch.)*
 2. `README.md`, `.gitignore` — nếu cả hai cùng sửa. Giải: gộp tay.
 3. *(Hiếm)* Upstream đổi **API công khai của Host** (`Steer`/`Snapshot`/`SwitchModel`/…):
    vá các call-site trong `internal/entry/web/` cho khớp chữ ký mới. `go build` sẽ chỉ ngay chỗ hỏng.
@@ -108,3 +112,4 @@ git push origin main
 - Assets nhúng bằng `go:embed` → sửa `app.js`/`app.css`/`index.html` xong phải **rebuild binary**
   rồi restart server (refresh trình duyệt KHÔNG đủ — nó phục vụ asset đã nhúng lúc compile).
 - Sau mỗi merge, tối thiểu: `go build ./...` + `go vet ./...` + test package web.
+- `.gitattributes` ép LF mọi nơi (kể cả Windows) → hết warning CRLF khi `git add`, `start-web.sh` không vỡ shebang trên Linux.
