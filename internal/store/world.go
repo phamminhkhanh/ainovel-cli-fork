@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -37,7 +38,8 @@ func (s *WorldStore) LoadTimeline() ([]domain.TimelineEvent, error) {
 	return events, nil
 }
 
-// AppendTimelineEvents 追加时间线事件。
+// AppendTimelineEvents 追加时间线事件。同一事件重复提交时按稳定 key 去重，保证
+// commit_chapter 崩溃后重跑不会污染时间线。
 func (s *WorldStore) AppendTimelineEvents(newEvents []domain.TimelineEvent) error {
 	return s.io.WithWriteLock(func() error {
 		var existing []domain.TimelineEvent
@@ -46,7 +48,19 @@ func (s *WorldStore) AppendTimelineEvents(newEvents []domain.TimelineEvent) erro
 				return err
 			}
 		}
-		all := append(existing, newEvents...)
+		seen := make(map[string]struct{}, len(existing)+len(newEvents))
+		for _, e := range existing {
+			seen[timelineEventKey(e)] = struct{}{}
+		}
+		all := existing
+		for _, e := range newEvents {
+			key := timelineEventKey(e)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			all = append(all, e)
+		}
 		if err := s.io.WriteJSONUnlocked("timeline.json", all); err != nil {
 			return err
 		}
@@ -110,6 +124,18 @@ func (s *WorldStore) UpdateForeshadow(chapter int, updates []domain.ForeshadowUp
 		for _, u := range updates {
 			switch u.Action {
 			case "plant":
+				if i, ok := idx[u.ID]; ok {
+					if entries[i].Description == "" {
+						entries[i].Description = u.Description
+					}
+					if entries[i].PlantedAt == 0 {
+						entries[i].PlantedAt = chapter
+					}
+					if entries[i].Status == "" {
+						entries[i].Status = "planted"
+					}
+					continue
+				}
 				idx[u.ID] = len(entries)
 				entries = append(entries, domain.ForeshadowEntry{
 					ID:          u.ID,
@@ -206,7 +232,7 @@ func (s *WorldStore) UpdateRelationships(changes []domain.RelationshipEntry) err
 
 // ── 状态变化 ──
 
-// AppendStateChanges 追加角色状态变化。
+// AppendStateChanges 追加角色状态变化。同一状态变化重复提交时按稳定 key 去重。
 func (s *WorldStore) AppendStateChanges(changes []domain.StateChange) error {
 	return s.io.WithWriteLock(func() error {
 		var existing []domain.StateChange
@@ -215,7 +241,20 @@ func (s *WorldStore) AppendStateChanges(changes []domain.StateChange) error {
 				return err
 			}
 		}
-		return s.io.WriteJSONUnlocked("meta/state_changes.json", append(existing, changes...))
+		seen := make(map[string]struct{}, len(existing)+len(changes))
+		for _, c := range existing {
+			seen[stateChangeKey(c)] = struct{}{}
+		}
+		all := existing
+		for _, c := range changes {
+			key := stateChangeKey(c)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			all = append(all, c)
+		}
+		return s.io.WriteJSONUnlocked("meta/state_changes.json", all)
 	})
 }
 
@@ -326,6 +365,16 @@ func pairKey(a, b string) string {
 		a, b = b, a
 	}
 	return a + "|" + b
+}
+
+func timelineEventKey(e domain.TimelineEvent) string {
+	chars := append([]string(nil), e.Characters...)
+	slices.Sort(chars)
+	return fmt.Sprintf("%d|%s|%s|%s", e.Chapter, e.Time, e.Event, strings.Join(chars, ","))
+}
+
+func stateChangeKey(c domain.StateChange) string {
+	return fmt.Sprintf("%d|%s|%s|%s|%s", c.Chapter, c.Entity, c.Field, c.OldValue, c.NewValue)
 }
 
 func renderTimeline(events []domain.TimelineEvent) string {

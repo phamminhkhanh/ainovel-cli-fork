@@ -114,6 +114,9 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	if t.store.Progress.IsChapterCompleted(a.Chapter) {
 		// 清理可能残留的 PendingCommit（崩溃发生在 ProgressMarked 之后、ClearPendingCommit 之前）
 		if pending, _ := t.store.Signals.LoadPendingCommit(); pending != nil && pending.Chapter == a.Chapter {
+			if err := t.appendCommitCheckpoint(a.Chapter); err != nil {
+				return nil, fmt.Errorf("checkpoint commit: %w: %w", errs.ErrStoreWrite, err)
+			}
 			_ = t.store.Signals.ClearPendingCommit()
 		}
 		// 打磨/重写路径：章节虽已完成，但仍在 pending_rewrites 中，允许覆盖并 drain 队列
@@ -314,7 +317,13 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		return nil, fmt.Errorf("update pending commit result: %w: %w", errs.ErrStoreWrite, err)
 	}
 
-	// 9. 清除进度中间状态
+	// 9. 追加 checkpoint。必须先于清除 pending_commit，确保重启后可见的
+	// pending_commit 总能驱动重跑补齐缺失 checkpoint。
+	if err := t.appendCommitCheckpoint(a.Chapter); err != nil {
+		return nil, fmt.Errorf("checkpoint commit: %w: %w", errs.ErrStoreWrite, err)
+	}
+
+	// 10. 清除进度中间状态
 	if err := t.store.Progress.ClearInProgress(); err != nil {
 		return nil, fmt.Errorf("clear in-progress: %w: %w", errs.ErrStoreWrite, err)
 	}
@@ -322,17 +331,17 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		return nil, fmt.Errorf("clear pending commit: %w: %w", errs.ErrStoreWrite, err)
 	}
 
-	// 10. 追加 checkpoint
-	if _, err := t.store.Checkpoints.AppendArtifact(
-		domain.ChapterScope(a.Chapter), "commit",
-		fmt.Sprintf("chapters/%02d.md", a.Chapter),
-	); err != nil {
-		return nil, fmt.Errorf("checkpoint commit: %w: %w", errs.ErrStoreWrite, err)
-	}
-
 	// 11. 机械规则检查（仅返事实，不阻断）
 	violations := t.checkRules(content, wordCount)
 	return json.Marshal(commitOutput{CommitResult: result, RuleViolations: violations})
+}
+
+func (t *CommitChapterTool) appendCommitCheckpoint(chapter int) error {
+	_, err := t.store.Checkpoints.AppendArtifact(
+		domain.ChapterScope(chapter), "commit",
+		fmt.Sprintf("chapters/%02d.md", chapter),
+	)
+	return err
 }
 
 // checkRules 对章节正文做机械检查：内置产品底线 Lint（机制残留，始终执行）

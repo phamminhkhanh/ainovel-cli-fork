@@ -206,6 +206,91 @@ func TestCommitChapterUpdatesCastLedger(t *testing.T) {
 	}
 }
 
+func TestCommitChapterReplayAfterPartialCommitDoesNotDuplicateWorldState(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Progress.Init("test", 10); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := s.Drafts.SaveDraft(1, "第一章正文，林墨遇到黑影并突破。"); err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+
+	timeline := []domain.TimelineEvent{{
+		Chapter:    1,
+		Time:       "清晨",
+		Event:      "林墨遇到黑影",
+		Characters: []string{"林墨"},
+	}}
+	stateChanges := []domain.StateChange{{
+		Chapter:  1,
+		Entity:   "林墨",
+		Field:    "realm",
+		OldValue: "凡人",
+		NewValue: "练气期",
+	}}
+	foreshadow := []domain.ForeshadowUpdate{{
+		ID:          "f1",
+		Action:      "plant",
+		Description: "黑影身份",
+	}}
+
+	// 模拟 commit_chapter 已写入世界状态，但尚未 MarkChapterComplete 时进程崩溃。
+	if err := s.World.AppendTimelineEvents(timeline); err != nil {
+		t.Fatalf("AppendTimelineEvents seed: %v", err)
+	}
+	if err := s.World.AppendStateChanges(stateChanges); err != nil {
+		t.Fatalf("AppendStateChanges seed: %v", err)
+	}
+	if err := s.World.UpdateForeshadow(1, foreshadow); err != nil {
+		t.Fatalf("UpdateForeshadow seed: %v", err)
+	}
+	if err := s.Signals.SavePendingCommit(domain.PendingCommit{
+		Chapter: 1,
+		Stage:   domain.CommitStageStateApplied,
+		Summary: "半提交摘要",
+	}); err != nil {
+		t.Fatalf("SavePendingCommit: %v", err)
+	}
+
+	tool := NewCommitChapterTool(s)
+	args, _ := json.Marshal(map[string]any{
+		"chapter":            1,
+		"summary":            "林墨遇到黑影并突破",
+		"characters":         []string{"林墨"},
+		"key_events":         []string{"遇到黑影", "突破"},
+		"timeline_events":    timeline,
+		"state_changes":      stateChanges,
+		"foreshadow_updates": foreshadow,
+	})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("Execute replay: %v", err)
+	}
+
+	events, _ := s.World.LoadTimeline()
+	if len(events) != 1 {
+		t.Fatalf("timeline duplicated after replay, got %d: %+v", len(events), events)
+	}
+	changes, _ := s.World.LoadStateChanges()
+	if len(changes) != 1 {
+		t.Fatalf("state changes duplicated after replay, got %d: %+v", len(changes), changes)
+	}
+	ledger, _ := s.World.LoadForeshadowLedger()
+	if len(ledger) != 1 {
+		t.Fatalf("foreshadow duplicated after replay, got %d: %+v", len(ledger), ledger)
+	}
+	pending, _ := s.Signals.LoadPendingCommit()
+	if pending != nil {
+		t.Fatalf("pending commit should be cleared, got %+v", pending)
+	}
+	if cp := s.Checkpoints.LatestByStep(domain.ChapterScope(1), "commit"); cp == nil {
+		t.Fatal("commit checkpoint should be written")
+	}
+}
+
 // TestCommitChapterRejectsPolishWithoutDraftChange 验证：已完成章节进入打磨/重写队列后，
 // 若 writer 跳过 draft_chapter 直接 commit（drafts 与 chapters 内容完全相同），
 // commit_chapter 必须拒绝，强制 writer 先调 draft_chapter 写入新版本。

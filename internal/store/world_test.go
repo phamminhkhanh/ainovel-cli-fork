@@ -77,6 +77,31 @@ func TestTimeline_Append(t *testing.T) {
 	}
 }
 
+func TestTimeline_AppendIsIdempotent(t *testing.T) {
+	s := newTestStore(t)
+	event := domain.TimelineEvent{
+		Chapter:    1,
+		Time:       "清晨",
+		Event:      "林墨入住客栈",
+		Characters: []string{"林墨", "老周"},
+	}
+	if err := s.World.AppendTimelineEvents([]domain.TimelineEvent{event}); err != nil {
+		t.Fatalf("append first: %v", err)
+	}
+	event.Characters = []string{"老周", "林墨"} // 角色顺序不应影响同一事件判定
+	if err := s.World.AppendTimelineEvents([]domain.TimelineEvent{event}); err != nil {
+		t.Fatalf("append duplicate: %v", err)
+	}
+
+	loaded, err := s.World.LoadTimeline()
+	if err != nil {
+		t.Fatalf("LoadTimeline: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("duplicate timeline event should be ignored, got %d: %+v", len(loaded), loaded)
+	}
+}
+
 func TestTimeline_LoadRecent(t *testing.T) {
 	s := newTestStore(t)
 	_ = s.World.SaveTimeline([]domain.TimelineEvent{
@@ -128,6 +153,31 @@ func TestForeshadow_UpdateLifecycle(t *testing.T) {
 	active, _ := s.World.LoadActiveForeshadow()
 	if len(active) != 1 || active[0].ID != "f1" {
 		t.Errorf("active: want [f1], got %v", active)
+	}
+}
+
+func TestForeshadow_PlantIsIdempotent(t *testing.T) {
+	s := newTestStore(t)
+
+	_ = s.World.UpdateForeshadow(1, []domain.ForeshadowUpdate{
+		{ID: "f1", Action: "plant", Description: "黑影"},
+	})
+	_ = s.World.UpdateForeshadow(1, []domain.ForeshadowUpdate{
+		{ID: "f1", Action: "plant", Description: "黑影"},
+	})
+	_ = s.World.UpdateForeshadow(3, []domain.ForeshadowUpdate{
+		{ID: "f1", Action: "advance"},
+	})
+	_ = s.World.UpdateForeshadow(3, []domain.ForeshadowUpdate{
+		{ID: "f1", Action: "plant", Description: "黑影"},
+	})
+
+	all, _ := s.World.LoadForeshadowLedger()
+	if len(all) != 1 {
+		t.Fatalf("duplicate plant should not append entries, got %d: %+v", len(all), all)
+	}
+	if all[0].Status != "advanced" {
+		t.Fatalf("duplicate plant should not downgrade status, got %s", all[0].Status)
 	}
 }
 
@@ -190,6 +240,24 @@ func TestStateChanges_Append(t *testing.T) {
 	}
 	if loaded[1].NewValue != "筑基期" {
 		t.Errorf("second: %+v", loaded[1])
+	}
+}
+
+func TestStateChanges_AppendIsIdempotent(t *testing.T) {
+	s := newTestStore(t)
+	change := domain.StateChange{
+		Chapter:  1,
+		Entity:   "张三",
+		Field:    "realm",
+		OldValue: "凡人",
+		NewValue: "练气期",
+	}
+	_ = s.World.AppendStateChanges([]domain.StateChange{change})
+	_ = s.World.AppendStateChanges([]domain.StateChange{change})
+
+	loaded, _ := s.World.LoadStateChanges()
+	if len(loaded) != 1 {
+		t.Fatalf("duplicate state change should be ignored, got %d: %+v", len(loaded), loaded)
 	}
 }
 
