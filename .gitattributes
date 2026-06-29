@@ -1,0 +1,10 @@
+# Chuẩn hoá xuống dòng: repo luôn lưu LF, working tree cũng LF trên mọi OS.
+# → hết cảnh báo "LF will be replaced by CRLF" trên Windows; build/diff nhất quán Win↔Linux.
+* text=auto eol=lf
+
+# Shell script BẮT BUỘC LF — CRLF làm hỏng shebang (#!/usr/bin/env bash) trên Linux/macOS.
+*.sh text eol=lf
+
+# File batch của Windows cần CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
