@@ -16,10 +16,19 @@
         <span class="badge" id="stateBadge" data-state="idle">idle</span>
       </header>
 
+      <!-- Chapter list with status icons (PRIMARY) -->
+      <section class="card" id="chapterCard">
+        <h3>Chương</h3>
+        <ul class="chapter-list" id="chapterItems"><li class="muted">Chưa có chương</li></ul>
+      </section>
+
+      <!-- Compact progress -->
       <section class="card">
         <h3>Tiến độ</h3>
         <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-        <dl class="kv">
+        <div class="progress-summary" id="progressSummary">—</div>
+        <!-- Hidden KV for backward compat — app.js still writes here -->
+        <dl class="kv" hidden>
           <dt>Chương</dt><dd id="chapters">—</dd>
           <dt>Hoàn thành</dt><dd id="completed">—</dd>
           <dt>Tổng từ</dt><dd id="words">—</dd>
@@ -28,28 +37,35 @@
         </dl>
       </section>
 
+      <!-- Action buttons (contextual) -->
+      <section class="card" id="actionsCard">
+        <h3>Hành động</h3>
+        <div class="actions-stack" id="actionsStack"></div>
+      </section>
+
+      <!-- Outline card (hidden — replaced by chapter list, but DOM kept for app-dashboard.js) -->
       <section class="card" id="outlineCard" hidden>
         <h3>Outline</h3>
         <div class="outline-meta" id="outlineMeta"></div>
         <ul class="outline-list" id="outlineList"></ul>
       </section>
 
+      <!-- Runtime state cards (kept — renderRuntimeState writes here) -->
       <section class="card" id="rewriteCard" hidden>
         <h3>返工 · Rewrite</h3>
         <div class="rewrite-body" id="rewriteBody"></div>
       </section>
-
       <section class="card" id="steerCard" hidden>
         <h3>干预 · Pending steer</h3>
         <p class="steer-text" id="steerText"></p>
       </section>
 
-      <section class="card">
+      <!-- Hidden cards — JS still writes, won't crash, but not shown -->
+      <section class="card" hidden>
         <h3>Agents</h3>
         <ul class="agents" id="agents"><li class="muted">—</li></ul>
       </section>
-
-      <section class="card">
+      <section class="card" hidden>
         <h3>Context · Usage</h3>
         <dl class="kv">
           <dt>Context</dt><dd id="ctx">—</dd>
@@ -59,12 +75,10 @@
         <div class="progress-bar slim"><div class="progress-fill ctx" id="ctxFill"></div></div>
         <div class="usage-breakdown" id="usageBreakdown"></div>
       </section>
-
       <section class="card" id="cacheCard" hidden>
         <h3>缓存 · Cache</h3>
         <div class="cache-body" id="cacheBody"></div>
       </section>
-
       <section class="card" id="premiseCard" hidden>
         <h3>Premise</h3>
         <p class="premise" id="premise"></p>
@@ -105,7 +119,7 @@
             </div>
             <div class="tab-panel" id="tab-chapter" role="tabpanel">
               <div class="chapter-meta" id="chapterMeta"></div>
-              <div class="chapter-text" id="chapterText"><div class="placeholder">Chọn chương ở outline bên trái để đọc.</div></div>
+              <div class="chapter-text" id="chapterText"><div class="placeholder">Chọn chương ở danh sách bên trái để đọc.</div></div>
             </div>
             <div class="tab-panel" id="tab-outline" role="tabpanel">
               <div class="outline-premise" id="outlinePremise"></div>
@@ -336,8 +350,9 @@
 
   <script src="/app-i18n.js"></script>
   <script src="/app.js"></script>
-  <script src="/app-dashboard.js"></script>
   <script src="/app-workspace.js"></script>
+  <script src="/app-chapters.js"></script>
+  <script src="/app-dashboard.js"></script>
   <script src="/app-studio.js"></script>
   <script src="/app-input.js"></script>
 </body>

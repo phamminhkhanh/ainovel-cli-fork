@@ -38,8 +38,18 @@
   --radius-md: 10px;
   --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.4);
   --color-overlay: rgba(0, 0, 0, 0.55);
-  --sidebar-w: 320px;
+  --sidebar-w: 420px;
 }
+
+/* Thin scrollbars globally */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-faint); }
 
 * { box-sizing: border-box; }
 
@@ -150,6 +160,33 @@ html, body {
 .chips li { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 2px var(--space-2); font-size: 12px; }
 .muted { color: var(--color-text-faint); }
 
+/* ── Chapter list ── */
+.chapter-list { list-style: none; margin: 0; padding: 0; max-height: 340px; overflow-y: auto; }
+.chapter-item {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer; border-radius: var(--radius-sm);
+  font-size: 13px; transition: background 0.15s;
+}
+.chapter-item:hover { background: var(--color-surface-2); }
+.chapter-item.selected { background: var(--color-accent); color: #fff; }
+.chapter-item.selected:hover { background: var(--color-accent-strong); }
+.chapter-item.is-writing { color: var(--color-running); }
+.chapter-icon { flex-shrink: 0; width: 20px; text-align: center; font-size: 13px; }
+.chapter-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Action buttons ── */
+.actions-stack { display: flex; flex-direction: column; gap: var(--space-2); }
+.actions-stack .btn { width: 100%; justify-content: flex-start; text-align: left; }
+.rewrite-hint {
+  font-size: 12px; color: var(--color-warn); margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: rgba(224, 162, 60, 0.08); border-radius: var(--radius-sm);
+}
+
+/* ── Compact progress summary ── */
+.progress-summary { font-size: 13px; color: var(--color-text-dim); margin-top: var(--space-2); }
+
 /* ── Dashboard extras: outline, rewrite, steer, usage, cache ── */
 .outline-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); max-height: 280px; overflow-y: auto; }
 .outline-item { display: flex; align-items: baseline; gap: var(--space-2); font-size: 13px; }
@@ -189,7 +226,7 @@ html, body {
 .startup-card p { margin: 0 0 var(--space-4); }
 .startup-actions { display: flex; gap: var(--space-3); justify-content: center; }
 
-.panes { flex: 1; display: grid; grid-template-columns: 1.6fr 1fr; gap: 1px; background: var(--color-border); overflow: hidden; }
+.panes { flex: 1; display: grid; grid-template-columns: 2.2fr 0.75fr; gap: 1px; background: var(--color-border); overflow: hidden; }
 .pane { background: var(--color-bg); display: flex; flex-direction: column; overflow: hidden; }
 .pane:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .pane-head {
@@ -236,14 +273,19 @@ html, body {
   flex: 1;
   overflow-y: auto;
   padding: var(--space-5);
-  font-family: var(--font-serif);
-  font-size: 16px;
-  line-height: 1.8;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .stream .placeholder { color: var(--color-text-faint); font-family: var(--font-sans); font-size: 14px; }
 .stream .divider { height: 1px; background: var(--color-border); margin: var(--space-4) 0; border: 0; }
+
+/* Stream markdown-lite: paragraphs + scene breaks */
+.stream p { margin: 0 0 1.2em; }
+.stream p:last-child { margin-bottom: 0; }
+.stream hr.scene-break {
+  border: 0; height: 1px; margin: 1.5em auto; width: 60%;
+  background: linear-gradient(to right, transparent, var(--color-border), transparent);
+}
 
 /* ── Workspace tabs ── */
 .workspace-pane { position: relative; }

@@ -40,6 +40,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/app.js", s.handleAsset("assets/app.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-dashboard.js", s.handleAsset("assets/app-dashboard.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-workspace.js", s.handleAsset("assets/app-workspace.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("/app-chapters.js", s.handleAsset("assets/app-chapters.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-studio.js", s.handleAsset("assets/app-studio.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-input.js", s.handleAsset("assets/app-input.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app.css", s.handleAsset("assets/app.css", "text/css; charset=utf-8"))

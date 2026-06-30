@@ -8,7 +8,7 @@ function renderOutline(s) {
   const list = $('#outlineList');
   const meta = $('#outlineMeta');
   const outline = s.Outline || [];
-  if (!outline.length) { card.hidden = true; return; }
+  if (!outline.length || card.hidden) { card.hidden = true; return; }
   card.hidden = false;
 
   list.innerHTML = '';
@@ -200,4 +200,7 @@ function renderDashboard(s) {
   renderRuntimeState(s);
   renderUsageBreakdown(s);
   renderCache(s);
+  if (typeof renderChapterList === 'function') renderChapterList(s);
+  if (typeof renderActions === 'function') renderActions(s);
+  if (typeof renderProgress === 'function') renderProgress(s);
 }

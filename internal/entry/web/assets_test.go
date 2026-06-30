@@ -175,3 +175,102 @@ func TestEmbeddedJSStreamSwitchesToStreamOnSend(t *testing.T) {
 		t.Fatal("app.js send() must switch back to Stream tab on start/continue/steer")
 	}
 }
+
+func TestEmbeddedHTMLHasChapterListAndActions(t *testing.T) {
+	html, err := assetFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read embedded html: %v", err)
+	}
+	text := string(html)
+	for _, want := range []string{
+		`id="actionsCard"`,
+		`id="actionsStack"`,
+		`id="chapterCard"`,
+		`id="chapterItems"`,
+		`id="progressSummary"`,
+		`/app-chapters.js`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("index.html missing chapter/action element %q", want)
+		}
+	}
+}
+
+func TestEmbeddedJSChaptersHooksExist(t *testing.T) {
+	js, err := assetFS.ReadFile("assets/app-chapters.js")
+	if err != nil {
+		t.Fatalf("read embedded chapters js: %v", err)
+	}
+	text := string(js)
+	for _, want := range []string{
+		"function renderChapterList(",
+		"function renderActions(",
+		"function renderProgress(",
+		"function chapterStatus(",
+		"function chapterCount(",
+		"PendingRewrites",
+		"InProgressChapter",
+		"CompletedCount",
+		"selectChapter",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("app-chapters.js missing hook %q", want)
+		}
+	}
+}
+
+func TestEmbeddedHTMLScriptOrderChaptersBeforeDashboard(t *testing.T) {
+	html, err := assetFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read embedded html: %v", err)
+	}
+	text := string(html)
+	chapIdx := strings.Index(text, "/app-chapters.js")
+	dashIdx := strings.Index(text, "/app-dashboard.js")
+	workIdx := strings.Index(text, "/app-workspace.js")
+	if chapIdx < 0 || dashIdx < 0 || workIdx < 0 {
+		t.Fatal("missing script references")
+	}
+	if workIdx >= chapIdx {
+		t.Fatal("app-workspace.js must load before app-chapters.js (selectChapter dependency)")
+	}
+	if chapIdx >= dashIdx {
+		t.Fatal("app-chapters.js must load before app-dashboard.js (renderChapterList dependency)")
+	}
+}
+
+func TestEmbeddedHTMLBootCriticalSelectors(t *testing.T) {
+	html, err := assetFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read embedded html: %v", err)
+	}
+	text := string(html)
+	for _, id := range []string{
+		"sendBtn", "abortBtn", "resumeBtn", "clearStream",
+		"settingsBtn", "cmdBtn", "jobBar", "log", "input",
+		"novelName", "stateBadge", "progressFill",
+		"chapters", "completed", "words", "phase", "flow",
+		"agents", "ctx", "ctxFill", "model", "cost",
+	} {
+		if !strings.Contains(text, `id="`+id+`"`) {
+			t.Fatalf("index.html missing boot-critical selector #%s", id)
+		}
+	}
+}
+
+func TestEmbeddedJSDashboardCallsChapterRendering(t *testing.T) {
+	js, err := assetFS.ReadFile("assets/app-dashboard.js")
+	if err != nil {
+		t.Fatalf("read embedded dashboard js: %v", err)
+	}
+	text := string(js)
+	for _, want := range []string{
+		"renderChapterList",
+		"renderActions",
+		"renderProgress",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("app-dashboard.js must call %s from renderDashboard", want)
+		}
+	}
+}

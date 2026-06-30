@@ -7,6 +7,7 @@ const $ = (sel) => document.querySelector(sel);
 
 const THINKING_SEP = '\x02';
 let currentState = 'idle';
+let pendingMode = null; // 'steer' | 'continue' | null — override send() dispatch
 let roundHasContent = false; // round stream hiện tại đã có chữ chưa (để chèn divider khi clear)
 let streamIsThinking = false; // Host uses \x02 to toggle thinking; route it to the thinking pane.
 let lastSnapshot = null;     // snapshot mới nhất — app-studio.js đọc để biết tiến độ/trạng thái (Phase 3)
@@ -42,9 +43,47 @@ function appendDraft(text) {
   const s = $('#stream');
   const ph = s.querySelector('.placeholder');
   if (ph) ph.remove();
-  s.appendChild(document.createTextNode(text));
+
+  // Markdown-lite: scene breaks + paragraphs
+  const processed = renderMarkdownLite(text);
+  s.insertAdjacentHTML('beforeend', processed);
   s.scrollTop = s.scrollHeight;
   return true;
+}
+
+// Markdown-lite renderer: ***/--- → styled hr, double-newline → paragraph
+function renderMarkdownLite(text) {
+  const ESC = {
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'
+  };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ESC[c]);
+
+  // Split on scene breaks (*** or --- or ===), preserve markers
+  const sceneBreakRx = /(\n|^)([*\-=]{3,})(\n|$)/gm;
+  const parts = text.split(sceneBreakRx);
+
+  let html = '';
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part === undefined || part === null) continue;
+
+    // Even indices are text, odd indices are scene break markers
+    if (i % 2 === 1) {
+      // This is a scene break marker — render as styled hr
+      html += '<hr class="scene-break">';
+    } else {
+      // Text content — convert double newlines to paragraphs
+      const paragraphs = part.split(/\n{2,}/);
+      for (let j = 0; j < paragraphs.length; j++) {
+        let p = paragraphs[j].trim();
+        if (!p) continue;
+        // Single newlines → <br>
+        p = esc(p).replace(/\n/g, '<br>');
+        html += '<p>' + p + '</p>';
+      }
+    }
+  }
+  return html || esc(text);
 }
 function appendStream(text) {
   if (!text) return false;
@@ -236,7 +275,8 @@ async function startNovel(prompt, force) {
 async function send() {
   const input = $('#input');
   const text = input.value.trim();
-  const mode = sendModeFor(currentState);
+  const mode = pendingMode || sendModeFor(currentState);
+  pendingMode = null; // reset after use
   let res;
   if (mode === 'start') {
     if (!text) { toast('Nhập yêu cầu trước khi bắt đầu', 'error'); return; }
