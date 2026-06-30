@@ -54,14 +54,22 @@ func TestEmbeddedJSTranslatesEngineEventSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read embedded js: %v", err)
 	}
-	text := string(js)
+	if !strings.Contains(string(js), "translateSummary(ev.Summary)") {
+		t.Fatalf("app.js must call translateSummary on event summaries")
+	}
+	i18n, err := assetFS.ReadFile("assets/app-i18n.js")
+	if err != nil {
+		t.Fatalf("read embedded i18n js: %v", err)
+	}
+	text := string(i18n)
 	for _, want := range []string{
 		"function translateSummary(",
 		"'开始创作': 'Bắt đầu sáng tác'",
-		"translateSummary(ev.Summary)",
+		"const EVENT_PREFIX_MAP",
+		"const RETRY_RE",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("app.js missing event-summary i18n %q", want)
+			t.Fatalf("app-i18n.js missing event-summary i18n %q", want)
 		}
 	}
 }

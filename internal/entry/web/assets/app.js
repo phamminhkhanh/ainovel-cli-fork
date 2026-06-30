@@ -77,38 +77,6 @@ function fmtTime(t) {
   return d.toTimeString().slice(0, 8);
 }
 
-// ── i18n nhật ký sự kiện ──
-// Engine phát Event.Summary bằng tiếng Trung (host.go / observer.go). Đây là lớp dịch CHỈ Ở UI
-// cho các chuỗi SYSTEM/USER cố định — additive, KHÔNG đụng engine (giữ git pull upstream sạch).
-// Chỉ phủ chuỗi cố định + tiền tố ổn định; đuôi động (tên/nội dung) và nhãn dashboard giữ nguyên.
-const EVENT_SUMMARY_MAP = {
-  '开始创作': 'Bắt đầu sáng tác',
-  '进入阶段共创': 'Vào đồng sáng tác theo giai đoạn',
-  '进入阶段共创，创作已暂停': 'Vào đồng sáng tác theo giai đoạn — đã tạm dừng',
-  '阶段共创完成，已注入后续方向并恢复创作': 'Đồng sáng tác xong — đã chèn hướng đi tiếp và tiếp tục sáng tác',
-  '已退出阶段共创，创作保持暂停（可在输入框继续）': 'Đã thoát đồng sáng tác — vẫn tạm dừng (gõ ở ô nhập để tiếp tục)',
-  '干预已保存，下次启动时生效': 'Đã lưu can thiệp — áp dụng ở lần khởi động kế tiếp',
-  '用户手动暂停当前创作': 'Người dùng tạm dừng sáng tác thủ công',
-};
-const EVENT_PREFIX_MAP = [
-  ['指令重复: ', 'Lệnh trùng lặp: '],
-  ['恢复创作: ', 'Tiếp tục sáng tác: '],
-  ['一致性告警: ', 'Cảnh báo nhất quán: '],
-  ['[继续] ', '[Tiếp tục] '],
-  ['[用户干预] ', '[Can thiệp] '],
-];
-const RETRY_RE = /^重试 \((\d+)\/(\d+)\): /; // observer.go: "重试 (n/m): "
-function translateSummary(text) {
-  if (!text) return text;
-  if (EVENT_SUMMARY_MAP[text]) return EVENT_SUMMARY_MAP[text];
-  const m = text.match(RETRY_RE);
-  if (m) return text.replace(RETRY_RE, `Thử lại (${m[1]}/${m[2]}): `);
-  for (const [zh, vi] of EVENT_PREFIX_MAP) {
-    if (text.startsWith(zh)) return vi + text.slice(zh.length);
-  }
-  return text;
-}
-
 function handleEvent(ev) {
   if (!ev || !ev.Summary) return;
   const id = ev.ID || '';
@@ -127,6 +95,12 @@ function handleEvent(ev) {
   const cat = document.createElement('span'); cat.className = 'cat'; cat.textContent = ev.Category || '';
   const sum = document.createElement('span'); sum.className = 'sum'; sum.textContent = translateSummary(ev.Summary);
   li.append(ts, cat, sum);
+  if (running) {
+    const spin = document.createElement('span');
+    spin.className = 'spinner';
+    spin.setAttribute('aria-label', 'running');
+    li.append(spin);
+  }
   logEl.scrollTop = logEl.scrollHeight;
   // chặn log phình vô hạn
   while (logEl.children.length > 500) {
@@ -194,6 +168,9 @@ function renderSnapshot(s) {
   } else {
     pc.hidden = true;
   }
+
+  if (typeof renderDashboard === 'function') renderDashboard(s);
+  if (typeof renderStartupSelector === 'function') renderStartupSelector(s);
 
   updateControls(s);
 }
@@ -273,6 +250,7 @@ async function send() {
   if (res) {
     input.value = '';
     if (mode === 'steer') toast('Đã gửi can thiệp', 'ok');
+    if (typeof onInputSent === 'function') onInputSent(text);
   }
 }
 
@@ -402,7 +380,7 @@ function renderSettings() {
   (modelData.roles || []).forEach((role) => {
     const row = document.createElement('div');
     row.className = 'role-row';
-    const h = document.createElement('h3'); h.textContent = role.label; row.appendChild(h);
+    const h = document.createElement('h3'); h.textContent = trLabel(role.label); row.appendChild(h);
 
     // hàng provider + model + nút Đổi
     const line1 = document.createElement('div'); line1.className = 'role-line';
@@ -426,7 +404,7 @@ function renderSettings() {
     const line2 = document.createElement('div'); line2.className = 'role-line';
     const tLbl = document.createElement('span'); tLbl.className = 'lbl'; tLbl.textContent = 'Suy luận';
     const tSel = document.createElement('select');
-    (role.thinkingOptions || []).forEach((opt) => { const o = document.createElement('option'); o.value = opt.key; o.textContent = opt.label; if (opt.key === role.thinking) o.selected = true; tSel.appendChild(o); });
+    (role.thinkingOptions || []).forEach((opt) => { const o = document.createElement('option'); o.value = opt.key; o.textContent = trLabel(opt.label); if (opt.key === role.thinking) o.selected = true; tSel.appendChild(o); });
     const tApply = document.createElement('button'); tApply.className = 'btn sm'; tApply.textContent = 'Đặt';
     tApply.addEventListener('click', () => applyThinking(role.key, tSel.value));
     line2.append(tLbl, tSel, tApply);

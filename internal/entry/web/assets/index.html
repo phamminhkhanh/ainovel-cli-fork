@@ -28,6 +28,22 @@
         </dl>
       </section>
 
+      <section class="card" id="outlineCard" hidden>
+        <h3>Outline</h3>
+        <div class="outline-meta" id="outlineMeta"></div>
+        <ul class="outline-list" id="outlineList"></ul>
+      </section>
+
+      <section class="card" id="rewriteCard" hidden>
+        <h3>返工 · Rewrite</h3>
+        <div class="rewrite-body" id="rewriteBody"></div>
+      </section>
+
+      <section class="card" id="steerCard" hidden>
+        <h3>干预 · Pending steer</h3>
+        <p class="steer-text" id="steerText"></p>
+      </section>
+
       <section class="card">
         <h3>Agents</h3>
         <ul class="agents" id="agents"><li class="muted">—</li></ul>
@@ -41,6 +57,12 @@
           <dt>Chi phí</dt><dd id="cost">—</dd>
         </dl>
         <div class="progress-bar slim"><div class="progress-fill ctx" id="ctxFill"></div></div>
+        <div class="usage-breakdown" id="usageBreakdown"></div>
+      </section>
+
+      <section class="card" id="cacheCard" hidden>
+        <h3>缓存 · Cache</h3>
+        <div class="cache-body" id="cacheBody"></div>
       </section>
 
       <section class="card" id="premiseCard" hidden>
@@ -53,8 +75,17 @@
 
     <!-- Main: stream + event log -->
     <main class="main">
+      <div class="startup-card" id="startupCard" hidden>
+        <h2>ainovel · bắt đầu sáng tác</h2>
+        <p class="muted">Chọn cách bạn muốn khởi động dự án.</p>
+        <div class="startup-actions">
+          <button class="btn primary" id="startupQuick">✍ Bắt đầu nhanh</button>
+          <button class="btn" id="startupCoCreate">💬 Đồng sáng tác</button>
+        </div>
+      </div>
+
       <div class="panes">
-        <section class="pane stream-pane">
+        <section class="pane stream-pane" tabindex="0">
           <div class="pane-head"><h3>Bản thảo (stream)</h3><button class="ghost" id="clearStream" title="Xóa khung xem">⟲</button></div>
           <div class="thinking-box">
             <div class="thinking-head"><span>Suy nghĩ của model</span><small>debug · scroll</small></div>
@@ -62,7 +93,7 @@
           </div>
           <div class="stream" id="stream"><div class="placeholder">Nhập yêu cầu bên dưới rồi bấm Bắt đầu để engine viết truyện.</div></div>
         </section>
-        <section class="pane log-pane">
+        <section class="pane log-pane" tabindex="0">
           <div class="pane-head"><h3>Nhật ký sự kiện</h3></div>
           <ul class="log" id="log"></ul>
         </section>
@@ -132,14 +163,20 @@
         <button class="btn ghost" id="ccClose" title="Đóng">✕</button>
       </header>
       <div class="modal-body cc-body">
-        <div class="cc-conv" id="ccConv"></div>
-        <div class="cc-thinking" id="ccThinkingWrap" hidden>
-          <span class="cc-think-label">Suy nghĩ</span>
-          <pre id="ccThinking"></pre>
-        </div>
-        <div class="cc-draft" id="ccDraftWrap" hidden>
-          <span class="cc-draft-label">Bản nháp chỉ thị sáng tác</span>
-          <pre id="ccDraft"></pre>
+        <div class="cc-panes">
+          <div class="cc-pane cc-conv-pane">
+            <div class="cc-conv" id="ccConv"></div>
+          </div>
+          <div class="cc-pane cc-draft-pane">
+            <div class="cc-thinking" id="ccThinkingWrap" hidden>
+              <span class="cc-think-label">Suy nghĩ</span>
+              <pre id="ccThinking"></pre>
+            </div>
+            <div class="cc-draft" id="ccDraftWrap" hidden>
+              <span class="cc-draft-label">Bản nháp chỉ thị sáng tác</span>
+              <pre id="ccDraft"></pre>
+            </div>
+          </div>
         </div>
         <ul class="cc-sugs" id="ccSugs"></ul>
         <div class="composer">
@@ -245,10 +282,38 @@
     </div>
   </div>
 
+  <!-- Modal: trợ giúp lệnh (mirror TUI /help) -->
+  <div class="modal-overlay" id="helpOverlay" hidden>
+    <div class="modal help-modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+      <header class="modal-head">
+        <h2 id="helpTitle">Trợ giúp lệnh</h2>
+        <button class="btn ghost" id="helpClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body" id="helpBody"></div>
+    </div>
+  </div>
+
+  <!-- Modal: log tiến trình tác vụ nền (import/simulate/importsim) -->
+  <div class="modal-overlay" id="jobLogOverlay" hidden>
+    <div class="modal joblog-modal" role="dialog" aria-modal="true" aria-labelledby="jobLogTitle">
+      <header class="modal-head">
+        <h2 id="jobLogTitle">Tiến trình tác vụ</h2>
+        <button class="btn ghost" id="jobLogClose" title="Đóng">✕</button>
+      </header>
+      <div class="modal-body">
+        <ul class="job-log-list" id="jobLogList"></ul>
+        <p class="muted" id="jobLogHint">Tác vụ chạy nền — chưa hỗ trợ hủy từ giao diện web.</p>
+      </div>
+    </div>
+  </div>
+
   <!-- Thanh tiến trình tác vụ nền (import/simulate/importsim) — frame SSE "job" -->
   <div class="jobbar" id="jobBar" hidden></div>
 
+  <script src="/app-i18n.js"></script>
   <script src="/app.js"></script>
+  <script src="/app-dashboard.js"></script>
   <script src="/app-studio.js"></script>
+  <script src="/app-input.js"></script>
 </body>
 </html>

@@ -15,7 +15,7 @@ function isTyping(el) {
   return t === 'TEXTAREA' || t === 'INPUT' || (el && el.isContentEditable);
 }
 function allOverlaysHidden() {
-  return ['#cmdOverlay', '#ccOverlay', '#expOverlay', '#impOverlay', '#simimpOverlay', '#diagOverlay', '#askOverlay', '#setOverlay']
+  return ['#cmdOverlay', '#ccOverlay', '#expOverlay', '#impOverlay', '#simimpOverlay', '#diagOverlay', '#askOverlay', '#setOverlay', '#helpOverlay', '#jobLogOverlay']
     .every((id) => { const el = $(id); return !el || el.hidden; });
 }
 function openCmd() { $('#cmdFilter').value = ''; renderCmdList(); $('#cmdOverlay').hidden = false; $('#cmdFilter').focus(); }
@@ -74,12 +74,27 @@ function updateCcFinish() { $('#ccFinish').disabled = ccBusy || !ccDraft.trim();
 function renderSugs(sugs) {
   const ul = $('#ccSugs');
   ul.innerHTML = '';
-  (sugs || []).forEach((s) => {
+  (sugs || []).forEach((s, i) => {
     const li = document.createElement('li');
-    li.textContent = s;
-    li.addEventListener('click', () => { $('#ccInput').value = s; $('#ccInput').focus(); });
+    li.dataset.idx = i;
+    const num = document.createElement('span');
+    num.className = 'sug-key';
+    num.textContent = (i + 1).toString();
+    const txt = document.createElement('span');
+    txt.className = 'sug-text';
+    txt.textContent = s;
+    li.append(num, txt);
+    li.addEventListener('click', () => { applyCcSuggestion(i); });
     ul.appendChild(li);
   });
+}
+function applyCcSuggestion(idx) {
+  const ul = $('#ccSugs');
+  const li = ul.children[idx];
+  if (!li) return;
+  const text = li.querySelector('.sug-text')?.textContent || '';
+  $('#ccInput').value = text;
+  $('#ccInput').focus();
 }
 
 async function openCoCreate() {
@@ -246,13 +261,65 @@ async function openDiag() {
 
 // ── Thanh tiến trình job ──
 let jobHideTimer;
+const jobLogs = { import: [], simulate: [], importsim: [] };
+let currentJobName = null;
+const JOB_LOG_CAP = 200;
 function jobLabel(name) {
   return name === 'import' ? 'Nhập truyện'
     : name === 'simulate' ? 'Hồ sơ mô phỏng'
     : name === 'importsim' ? 'Nhập hồ sơ' : (name || 'Tác vụ');
 }
+function pushJobLog(j) {
+  if (!j || !j.name || j.done) return;
+  if (!jobLogs[j.name]) jobLogs[j.name] = [];
+  if (currentJobName !== j.name) {
+    jobLogs[j.name] = [];
+    currentJobName = j.name;
+  }
+  jobLogs[j.name].push({
+    stage: j.stage,
+    current: j.current,
+    total: j.total,
+    message: j.message,
+    error: j.error,
+    time: new Date(),
+  });
+  if (jobLogs[j.name].length > JOB_LOG_CAP) jobLogs[j.name].shift();
+  renderJobLog();
+}
+function openJobLog() {
+  if (!currentJobName || !jobLogs[currentJobName] || !jobLogs[currentJobName].length) {
+    toast('Chưa có log tác vụ', 'error');
+    return;
+  }
+  $('#jobLogTitle').textContent = 'Tiến trình: ' + jobLabel(currentJobName);
+  $('#jobLogOverlay').hidden = false;
+  renderJobLog();
+}
+function closeJobLog() { $('#jobLogOverlay').hidden = true; }
+function renderJobLog() {
+  const ul = $('#jobLogList');
+  const entries = currentJobName ? (jobLogs[currentJobName] || []) : [];
+  if (!entries.length) { ul.innerHTML = ''; return; }
+  ul.innerHTML = '';
+  entries.forEach((e) => {
+    const li = document.createElement('li');
+    const head = document.createElement('span');
+    head.className = 'job-log-stage';
+    const prog = e.total ? ` ${e.current}/${e.total}` : '';
+    head.textContent = (e.stage || '-') + prog;
+    const msg = document.createElement('span');
+    msg.className = 'job-log-msg';
+    msg.textContent = e.error || e.message || '';
+    if (e.error) li.classList.add('error');
+    li.append(head, msg);
+    ul.appendChild(li);
+  });
+  ul.scrollTop = ul.scrollHeight;
+}
 function onJobEvent(j) {
   if (!j) return;
+  pushJobLog(j);
   const bar = $('#jobBar');
   clearTimeout(jobHideTimer);
   if (j.done) {
@@ -270,8 +337,55 @@ function onJobEvent(j) {
   bar.textContent = `${jobLabel(j.name)}${stage}${prog}${tail}`;
 }
 
+// ── Help modal ──
+function openHelp() {
+  closeCmd();
+  const body = $('#helpBody');
+  body.innerHTML = '';
+  const table = document.createElement('table');
+  table.className = 'help-table';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>Lệnh</th><th>Aliases</th><th>Usage</th><th>Mô tả</th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  COMMAND_HELP.forEach((c) => {
+    const tr = document.createElement('tr');
+    const keyTd = document.createElement('td');
+    keyTd.className = 'help-key';
+    keyTd.textContent = '/' + c.key;
+    const aliasTd = document.createElement('td');
+    aliasTd.textContent = c.aliases.length ? c.aliases.map((a) => '/' + a).join(' ') : '—';
+    const usageTd = document.createElement('td');
+    usageTd.className = 'help-usage';
+    usageTd.textContent = c.usage;
+    const descTd = document.createElement('td');
+    descTd.textContent = c.desc;
+    tr.append(keyTd, aliasTd, usageTd, descTd);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  body.appendChild(table);
+
+  const shortcuts = document.createElement('div');
+  shortcuts.className = 'help-shortcuts';
+  const st = document.createElement('h4');
+  st.textContent = 'Phím tắt';
+  shortcuts.appendChild(st);
+  const sul = document.createElement('ul');
+  SHORTCUT_HELP.forEach((line) => {
+    const li = document.createElement('li');
+    li.textContent = line;
+    sul.appendChild(li);
+  });
+  shortcuts.appendChild(sul);
+  body.appendChild(shortcuts);
+  $('#helpOverlay').hidden = false;
+}
+function closeHelp() { $('#helpOverlay').hidden = true; }
+
 // ── Catalog lệnh (mirror command_registry.go của TUI) ──
 const COMMANDS = [
+  { key: 'help', label: 'Trợ giúp', desc: 'Hiển thị danh sách lệnh, aliases, cú pháp, phím tắt', run: openHelp },
   { key: 'cocreate', label: 'Đồng sáng tác', desc: 'Trò chuyện với AI để lên kế hoạch rồi viết / định hướng tiếp', run: openCoCreate },
   { key: 'export', label: 'Xuất bản', desc: 'Xuất các chương đã hoàn thành ra TXT/EPUB', run: openExport },
   { key: 'import', label: 'Nhập tiểu thuyết ngoài', desc: 'Phản suy từ truyện có sẵn để viết tiếp (cần engine rảnh)', run: openImport },
@@ -279,6 +393,25 @@ const COMMANDS = [
   { key: 'importsim', label: 'Nhập hồ sơ mô phỏng', desc: 'Nhập hồ sơ văn phong .json có sẵn (cần engine rảnh)', run: openImportSim },
   { key: 'diag', label: 'Chẩn đoán', desc: 'Báo cáo chẩn đoán sáng tác + runtime', run: openDiag },
   { key: 'model', label: 'Model & suy luận', desc: 'Đổi model / mức suy luận theo vai trò', run: () => { closeCmd(); openSettings(); } },
+];
+
+// ── Help metadata (mirror command_help.go) ──
+const COMMAND_HELP = [
+  { key: 'help', aliases: [], usage: '/help', desc: 'Hiển thị trợ giúp lệnh và phím tắt.' },
+  { key: 'model', aliases: [], usage: '/model [role]', desc: 'Chuyển đổi model mặc định hoặc theo vai trò.' },
+  { key: 'diag', aliases: [], usage: '/diag', desc: 'Chẩn đoán sức khỏe tiến trình sáng tác.' },
+  { key: 'import', aliases: [], usage: '/import <path> [from=N]', desc: 'Phản suy truyện ngoài để tiếp tục viết.' },
+  { key: 'cocreate', aliases: ['plan'], usage: '/cocreate', desc: 'Tạm dừng và cùng AI lập kế hoạch tiếp theo.' },
+  { key: 'simulate', aliases: [], usage: '/simulate', desc: 'Đọc ./simulate để tạo/cập nhật hồ sơ văn phong.' },
+  { key: 'importsim', aliases: [], usage: '/importsim <profile.json>', desc: 'Nhập hồ sơ văn phong .json có sẵn.' },
+  { key: 'export', aliases: [], usage: '/export [path] [from=N] [to=M] [--overwrite]', desc: 'Xuất các chương đã hoàn thành.' },
+];
+const SHORTCUT_HELP = [
+  '/ mở bảng lệnh',
+  '↑↓ chọn lệnh trong bảng lệnh',
+  'Tab/Enter chấp nhận lệnh',
+  'Esc đóng modal / palette',
+  '? mở trợ giúp',
 ];
 
 // ── Wiring ──
@@ -293,6 +426,14 @@ function bootStudio() {
   $('#cmdOverlay').addEventListener('click', (e) => { if (e.target === $('#cmdOverlay')) closeCmd(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === '/' && !isTyping(e.target) && allOverlaysHidden()) { e.preventDefault(); openCmd(); }
+    else if (e.key === '?' && !isTyping(e.target) && allOverlaysHidden()) { e.preventDefault(); openHelp(); }
+    else if (!$('#ccOverlay').hidden && !isTyping(e.target)) {
+      const sugs = $('#ccSugs').children;
+      if (sugs.length && e.key >= '1' && e.key <= '3') {
+        const idx = parseInt(e.key, 10) - 1;
+        if (idx < sugs.length) { e.preventDefault(); applyCcSuggestion(idx); }
+      }
+    }
   });
 
   // cocreate
@@ -313,8 +454,13 @@ function bootStudio() {
   $('#simimpSubmit').addEventListener('click', submitImportSim);
   $('#simimpClose').addEventListener('click', () => { $('#simimpOverlay').hidden = true; });
 
-  // diag
+  // diag / help / job log
   $('#diagClose').addEventListener('click', () => { $('#diagOverlay').hidden = true; });
+  $('#helpClose').addEventListener('click', closeHelp);
+  $('#helpOverlay').addEventListener('click', (e) => { if (e.target === $('#helpOverlay')) closeHelp(); });
+  $('#jobLogClose').addEventListener('click', closeJobLog);
+  $('#jobLogOverlay').addEventListener('click', (e) => { if (e.target === $('#jobLogOverlay')) closeJobLog(); });
+  $('#jobBar').addEventListener('click', openJobLog);
 }
 
 bootStudio();

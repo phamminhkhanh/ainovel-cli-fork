@@ -28,7 +28,11 @@ func (s *server) mux() http.Handler {
 
 	// 静态单页（go:embed）
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/app-i18n.js", s.handleAsset("assets/app-i18n.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app.js", s.handleAsset("assets/app.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("/app-dashboard.js", s.handleAsset("assets/app-dashboard.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("/app-studio.js", s.handleAsset("assets/app-studio.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("/app-input.js", s.handleAsset("assets/app-input.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app.css", s.handleAsset("assets/app.css", "text/css; charset=utf-8"))
 
 	// 只读
@@ -50,7 +54,6 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/api/thinking", s.handleThinking)
 
 	// 共创 / 导出 / 导入 / 仿写 / 诊断（Phase 3）
-	mux.HandleFunc("/app-studio.js", s.handleAsset("assets/app-studio.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/api/cocreate/send", s.handleCoCreateSend)
 	mux.HandleFunc("/api/cocreate/pause", s.handleCoCreatePause)
 	mux.HandleFunc("/api/cocreate/resume", s.handleCoCreateResume)
