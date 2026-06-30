@@ -44,3 +44,4 @@ refer/
 output*
 workspace/
 plans/*
+.claude/*
