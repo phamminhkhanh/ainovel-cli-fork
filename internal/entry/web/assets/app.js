@@ -250,6 +250,8 @@ async function send() {
   if (res) {
     input.value = '';
     if (mode === 'steer') toast('Đã gửi can thiệp', 'ok');
+    if (typeof focusStreamTab === 'function') focusStreamTab();
+    if (typeof clearContentCache === 'function') clearContentCache();
     if (typeof onInputSent === 'function') onInputSent(text);
   }
 }

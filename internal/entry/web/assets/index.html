@@ -85,13 +85,37 @@
       </div>
 
       <div class="panes">
-        <section class="pane stream-pane" tabindex="0">
-          <div class="pane-head"><h3>Bản thảo (stream)</h3><button class="ghost" id="clearStream" title="Xóa khung xem">⟲</button></div>
-          <div class="thinking-box">
-            <div class="thinking-head"><span>Suy nghĩ của model</span><small>debug · scroll</small></div>
-            <div class="thinking-stream" id="thinkingStream"><div class="placeholder">Thinking sẽ hiện ở đây, tách khỏi bản thảo.</div></div>
+        <section class="pane workspace-pane" tabindex="0">
+          <div class="pane-head">
+            <div class="tabs" id="workspaceTabs" role="tablist">
+              <button class="tab active" data-tab="stream" role="tab" aria-selected="true">Stream</button>
+              <button class="tab" data-tab="chapter" role="tab" aria-selected="false">Chương</button>
+              <button class="tab" data-tab="outline" role="tab" aria-selected="false">Outline</button>
+              <button class="tab" data-tab="world" role="tab" aria-selected="false">World</button>
+            </div>
+            <button class="ghost" id="clearStream" title="Xóa khung xem">⟲</button>
           </div>
-          <div class="stream" id="stream"><div class="placeholder">Nhập yêu cầu bên dưới rồi bấm Bắt đầu để engine viết truyện.</div></div>
+          <div class="tab-panels">
+            <div class="tab-panel active" id="tab-stream" role="tabpanel">
+              <div class="thinking-box">
+                <div class="thinking-head"><span>Suy nghĩ của model</span><small>debug · scroll</small></div>
+                <div class="thinking-stream" id="thinkingStream"><div class="placeholder">Thinking sẽ hiện ở đây, tách khỏi bản thảo.</div></div>
+              </div>
+              <div class="stream" id="stream"><div class="placeholder">Nhập yêu cầu bên dưới rồi bấm Bắt đầu để engine viết truyện.</div></div>
+            </div>
+            <div class="tab-panel" id="tab-chapter" role="tabpanel">
+              <div class="chapter-meta" id="chapterMeta"></div>
+              <div class="chapter-text" id="chapterText"><div class="placeholder">Chọn chương ở outline bên trái để đọc.</div></div>
+            </div>
+            <div class="tab-panel" id="tab-outline" role="tabpanel">
+              <div class="outline-premise" id="outlinePremise"></div>
+              <div class="outline-detail" id="outlineDetail"></div>
+            </div>
+            <div class="tab-panel" id="tab-world" role="tabpanel">
+              <div class="world-chars" id="worldChars"></div>
+              <div class="world-rules" id="worldRules"></div>
+            </div>
+          </div>
         </section>
         <section class="pane log-pane" tabindex="0">
           <div class="pane-head"><h3>Nhật ký sự kiện</h3></div>
@@ -313,6 +337,7 @@
   <script src="/app-i18n.js"></script>
   <script src="/app.js"></script>
   <script src="/app-dashboard.js"></script>
+  <script src="/app-workspace.js"></script>
   <script src="/app-studio.js"></script>
   <script src="/app-input.js"></script>
 </body>

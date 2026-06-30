@@ -17,6 +17,10 @@ function renderOutline(s) {
   outline.forEach((e) => {
     const li = document.createElement('li');
     li.className = 'outline-item';
+    li.dataset.chapter = e.Chapter;
+    li.style.cursor = 'pointer';
+    li.title = 'Click để đọc chương';
+    li.addEventListener('click', () => { if (typeof selectChapter === 'function') selectChapter(e.Chapter); });
     const marker = document.createElement('span');
     marker.className = 'outline-marker';
     const title = document.createElement('span');
@@ -36,6 +40,7 @@ function renderOutline(s) {
     li.append(marker, title);
     list.appendChild(li);
   });
+  if (typeof highlightOutline === 'function') highlightOutline(typeof selectedChapter !== 'undefined' ? selectedChapter : null);
 
   const parts = [];
   if (s.Layered && s.CurrentVolumeArc) parts.push(`Arc: ${s.CurrentVolumeArc}`);

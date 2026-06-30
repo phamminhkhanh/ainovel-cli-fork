@@ -108,3 +108,70 @@ func TestEmbeddedHTMLHasThinkingStreamBox(t *testing.T) {
 		}
 	}
 }
+
+func TestEmbeddedHTMLHasWorkspaceTabs(t *testing.T) {
+	html, err := assetFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read embedded html: %v", err)
+	}
+	text := string(html)
+	for _, want := range []string{
+		`id="workspaceTabs"`,
+		`id="tab-stream"`,
+		`id="tab-chapter"`,
+		`id="tab-outline"`,
+		`id="tab-world"`,
+		`id="chapterText"`,
+		`id="outlineDetail"`,
+		`id="worldChars"`,
+		`/app-workspace.js`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("index.html missing workspace tab element %q", want)
+		}
+	}
+}
+
+func TestEmbeddedJSWorkspaceHooksExist(t *testing.T) {
+	js, err := assetFS.ReadFile("assets/app-workspace.js")
+	if err != nil {
+		t.Fatalf("read embedded workspace js: %v", err)
+	}
+	text := string(js)
+	for _, want := range []string{
+		"function switchTab(",
+		"function selectChapter(",
+		"function focusStreamTab(",
+		"function loadOutlineTab(",
+		"function loadWorldTab(",
+		"sessionStorage.setItem(TAB_KEY",
+		"/api/chapters/${n}",
+		"/api/outline",
+		"/api/world",
+		"/api/characters",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("app-workspace.js missing hook or endpoint %q", want)
+		}
+	}
+}
+
+func TestEmbeddedJSDashboardCallsSelectChapter(t *testing.T) {
+	js, err := assetFS.ReadFile("assets/app-dashboard.js")
+	if err != nil {
+		t.Fatalf("read embedded dashboard js: %v", err)
+	}
+	if !strings.Contains(string(js), "selectChapter(e.Chapter)") {
+		t.Fatal("app-dashboard.js outline items must call selectChapter on click")
+	}
+}
+
+func TestEmbeddedJSStreamSwitchesToStreamOnSend(t *testing.T) {
+	js, err := assetFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("read embedded js: %v", err)
+	}
+	if !strings.Contains(string(js), "focusStreamTab()") {
+		t.Fatal("app.js send() must switch back to Stream tab on start/continue/steer")
+	}
+}

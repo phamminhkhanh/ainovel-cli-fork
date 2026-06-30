@@ -65,7 +65,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	ask := newAskBridge(h)
 	eng.AskUser().SetHandler(ask.handle)
 
-	srv := &server{eng: eng, hub: h, ask: ask, ctx: ctx, addr: addr}
+	srv := &server{eng: eng, store: store.NewStore(eng.Dir()), hub: h, ask: ask, ctx: ctx, addr: addr}
 	httpSrv := &http.Server{Addr: addr, Handler: srv.mux()}
 
 	errc := make(chan error, 1)

@@ -8,20 +8,28 @@ import (
 	"sync"
 
 	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // server 持有引擎与扇出 hub，注册所有 HTTP 路由。
 // ctx 取消（Ctrl+C）即触发 SSE 处理退出，让 http.Server.Shutdown 不被长连接挂住。
 type server struct {
-	eng  *host.Host
-	hub  *hub
-	ask  *askBridge
-	ctx  context.Context
-	addr string // 监听地址，用于 Host 头校验（仅回环绑定时加锁）
+	eng   *host.Host
+	store *store.Store
+	hub   *hub
+	ask   *askBridge
+	ctx   context.Context
+	addr  string // 监听地址，用于 Host 头校验（仅回环绑定时加锁）
 
 	jobMu      sync.Mutex // 串行化后台任务（import/simulate/importsim）
 	jobRunning bool       // 是否有后台任务在跑——guardExclusive 不跟踪它们，故 web 侧自锁
 }
+
+// Store returns the cached on-disk store for read-only content handlers.
+func (s *server) Store() *store.Store { return s.store }
+
+// Snapshot returns the latest Host UI snapshot.
+func (s *server) Snapshot() host.UISnapshot { return s.eng.Snapshot() }
 
 func (s *server) mux() http.Handler {
 	mux := http.NewServeMux()
@@ -31,6 +39,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/app-i18n.js", s.handleAsset("assets/app-i18n.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app.js", s.handleAsset("assets/app.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-dashboard.js", s.handleAsset("assets/app-dashboard.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("/app-workspace.js", s.handleAsset("assets/app-workspace.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-studio.js", s.handleAsset("assets/app-studio.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-input.js", s.handleAsset("assets/app-input.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app.css", s.handleAsset("assets/app.css", "text/css; charset=utf-8"))
@@ -39,6 +48,13 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/api/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/api/replay", s.handleReplay)
 	mux.HandleFunc("/api/events", s.handleEvents)
+
+	// 内容读取（workspace tabs）
+	mux.HandleFunc("GET /api/chapters/{n}", s.handleChapter)
+	mux.HandleFunc("GET /api/chapters/{n}/draft", s.handleChapterDraft)
+	mux.HandleFunc("GET /api/outline", s.handleOutline)
+	mux.HandleFunc("GET /api/world", s.handleWorld)
+	mux.HandleFunc("GET /api/characters", s.handleCharacters)
 
 	// 控制
 	mux.HandleFunc("/api/start", s.handleStart)

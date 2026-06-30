@@ -189,6 +189,7 @@ async function ccFinish() {
     const ok = await startNovel(draft, false);
     if (ok) { toast('Bắt đầu sáng tác từ chỉ thị đồng sáng tác', 'ok'); closeCc(true); }
   }
+  if (typeof clearContentCache === 'function') clearContentCache();
 }
 
 // closeCc: nếu thoát giữa cộng tác-giai đoạn mà chưa áp dụng → gỡ cờ (giữ trạng thái tạm dừng).
