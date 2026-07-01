@@ -21,8 +21,9 @@ type server struct {
 	ctx   context.Context
 	addr  string // 监听地址，用于 Host 头校验（仅回环绑定时加锁）
 
-	jobMu      sync.Mutex // 串行化后台任务（import/simulate/importsim）
-	jobRunning bool       // 是否有后台任务在跑——guardExclusive 不跟踪它们，故 web 侧自锁
+	jobMu      sync.Mutex         // 串行化后台任务（import/simulate/importsim）
+	jobRunning bool               // 是否有后台任务在跑——guardExclusive 不跟踪它们，故 web 侧自锁
+	jobCancel  context.CancelFunc // 取消当前后台任务的 ctx（无任务时为 nil）；imp/sim.Run 在章节边界检查 ctx
 }
 
 // Store returns the cached on-disk store for read-only content handlers.
@@ -80,6 +81,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/simulate", s.handleSimulate)
 	mux.HandleFunc("/api/importsim", s.handleImportSim)
+	mux.HandleFunc("/api/job/cancel", s.handleJobCancel)
 	mux.HandleFunc("/api/diag", s.handleDiag)
 
 	return s.guardHost(mux)
@@ -129,21 +131,40 @@ func isLoopbackHostPort(hostport string) bool {
 	return false
 }
 
-// tryStartJob 标记后台任务开始；已有任务在跑则返回 false（调用方应回 409）。
+// tryStartJob 标记后台任务开始并返回该任务专属的可取消 ctx；已有任务在跑则返回 (nil, false)（调用方应回 409）。
 // guardExclusive 只跟踪 running/cocreating，import/simulate 不置 lifecycle=running，故 web 侧自锁串行。
-func (s *server) tryStartJob() bool {
+// 返回的 ctx 派生自 s.ctx（服务端关停仍会级联取消），另存 cancel 供 /api/job/cancel 单独中止本任务。
+func (s *server) tryStartJob() (context.Context, bool) {
 	s.jobMu.Lock()
 	defer s.jobMu.Unlock()
 	if s.jobRunning {
-		return false
+		return nil, false
 	}
 	s.jobRunning = true
-	return true
+	jobCtx, cancel := context.WithCancel(s.ctx)
+	s.jobCancel = cancel
+	return jobCtx, true
 }
 
-// endJob 清除后台任务占用标记。
+// endJob 清除后台任务占用标记，并释放/清空 cancel（幂等：cancel 多调无害）。
 func (s *server) endJob() {
 	s.jobMu.Lock()
+	if s.jobCancel != nil {
+		s.jobCancel()
+		s.jobCancel = nil
+	}
 	s.jobRunning = false
 	s.jobMu.Unlock()
+}
+
+// cancelJob 中止当前后台任务的 ctx；无任务在跑则返回 false（调用方应回 409）。
+// imp/sim.Run 在章节边界检查 ctx.Err()，故取消会在下一章边界干净停下并 emit「用户取消」。
+func (s *server) cancelJob() bool {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	if !s.jobRunning || s.jobCancel == nil {
+		return false
+	}
+	s.jobCancel()
+	return true
 }

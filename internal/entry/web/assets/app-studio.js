@@ -264,6 +264,7 @@ async function openDiag() {
 let jobHideTimer;
 const jobLogs = { import: [], simulate: [], importsim: [] };
 let currentJobName = null;
+let jobRunning = false; // 是否有后台任务在跑——控制「Hủy tác vụ」按钮可用性
 const JOB_LOG_CAP = 200;
 function jobLabel(name) {
   return name === 'import' ? 'Nhập truyện'
@@ -295,9 +296,25 @@ function openJobLog() {
   }
   $('#jobLogTitle').textContent = 'Tiến trình: ' + jobLabel(currentJobName);
   $('#jobLogOverlay').hidden = false;
+  syncJobCancelBtn();
   renderJobLog();
 }
 function closeJobLog() { $('#jobLogOverlay').hidden = true; }
+
+// syncJobCancelBtn 让「Hủy tác vụ」按钮只在有任务在跑时可用（jobDone 后禁用）。
+function syncJobCancelBtn() {
+  const btn = $('#jobCancelBtn');
+  if (btn) btn.disabled = !jobRunning;
+}
+
+// cancelCurrentJob 请求后端中止当前后台任务。取消在下一章边界生效，故只提示「已请求」。
+async function cancelCurrentJob() {
+  const btn = $('#jobCancelBtn');
+  if (btn) btn.disabled = true;
+  const r = await post('/api/job/cancel', {});
+  if (r) toast('Đã yêu cầu hủy — tác vụ sẽ dừng ở điểm kiểm tra an toàn kế tiếp', 'ok');
+  else syncJobCancelBtn(); // 失败（如 409 无任务）时按实际状态恢复按钮
+}
 function renderJobLog() {
   const ul = $('#jobLogList');
   const entries = currentJobName ? (jobLogs[currentJobName] || []) : [];
@@ -321,12 +338,20 @@ function renderJobLog() {
 function onJobEvent(j) {
   if (!j) return;
   pushJobLog(j);
+  jobRunning = !j.done;
+  syncJobCancelBtn();
   const bar = $('#jobBar');
   clearTimeout(jobHideTimer);
   if (j.done) {
     bar.hidden = false;
-    bar.dataset.kind = 'ok';
-    bar.textContent = `✓ ${jobLabel(j.name)} hoàn thành`;
+    if (j.error) {
+      // Terminal frame kèm error = job bị hủy hoặc lỗi. Không render "hoàn thành".
+      bar.dataset.kind = 'error';
+      bar.textContent = `⚠ ${jobLabel(j.name)} đã dừng · ${j.error}`;
+    } else {
+      bar.dataset.kind = 'ok';
+      bar.textContent = `✓ ${jobLabel(j.name)} hoàn thành`;
+    }
     jobHideTimer = setTimeout(() => { bar.hidden = true; }, 4000);
     return;
   }
@@ -461,6 +486,7 @@ function bootStudio() {
   $('#helpOverlay').addEventListener('click', (e) => { if (e.target === $('#helpOverlay')) closeHelp(); });
   $('#jobLogClose').addEventListener('click', closeJobLog);
   $('#jobLogOverlay').addEventListener('click', (e) => { if (e.target === $('#jobLogOverlay')) closeJobLog(); });
+  $('#jobCancelBtn').addEventListener('click', cancelCurrentJob);
   $('#jobBar').addEventListener('click', openJobLog);
 }
 

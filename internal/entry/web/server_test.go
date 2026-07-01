@@ -1,6 +1,9 @@
 package web
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestHostAllowedLocksLoopbackBind(t *testing.T) {
 	for _, host := range []string{"localhost:8787", "127.0.0.1:8787", "[::1]:8787"} {
@@ -28,15 +31,28 @@ func TestPublicBindRequiresExplicitOptIn(t *testing.T) {
 }
 
 func TestTryStartJobSerializesBackgroundJobs(t *testing.T) {
-	s := &server{}
-	if !s.tryStartJob() {
+	s := &server{ctx: context.Background()}
+	jobCtx, ok := s.tryStartJob()
+	if !ok {
 		t.Fatal("first job should start")
 	}
-	if s.tryStartJob() {
+	if _, ok := s.tryStartJob(); ok {
 		t.Fatal("second concurrent job should be rejected")
 	}
+	if !s.cancelJob() {
+		t.Fatal("running job should be cancellable")
+	}
+	// cancelJob 必须真正取消该任务的 ctx——这是"取消后台任务"的核心保证，锁死回归。
+	select {
+	case <-jobCtx.Done():
+	default:
+		t.Fatal("job ctx should be canceled after cancelJob")
+	}
 	s.endJob()
-	if !s.tryStartJob() {
+	if s.cancelJob() {
+		t.Fatal("no job should be cancellable after endJob")
+	}
+	if _, ok := s.tryStartJob(); !ok {
 		t.Fatal("job should start again after endJob")
 	}
 }

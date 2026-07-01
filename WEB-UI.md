@@ -35,9 +35,15 @@ Web UI là **trình quản lý truyện + điều khiển engine**, không chỉ
 
 Chạy: `ainovel-cli --web` → mở `http://127.0.0.1:8787` (chỉ bind localhost).
 
+> ⚠️ **Cấu hình lần đầu:** chế độ `--web` (và `--headless`) **không** có wizard cấu hình.
+> Máy chưa từng thiết lập config (`~/.ainovel/config.json`) thì chạy TUI một lần cho xong
+> (`ainovel-cli` hoặc `go run ./cmd/ainovel-cli`) — chọn provider / API key / model, mất vài giây.
+> Đã có config rồi thì `--web` chạy thẳng. (Quyết định: không port wizard sang web vì setup qua
+> terminal nhanh gọn hơn nhiều so với chi phí thêm/bảo trì một trang setup riêng.)
+
 - **Xuống** (SSE `GET /api/events`): stream chữ / event / snapshot / ask / done — 1 kênh đa hợp.
 - **Lên** (fetch POST): start / steer / continue / abort / resume / model / thinking /
-  cocreate / export / import / diag.
+  cocreate / export / import / diag / job/cancel.
 
 Frontend = **JS thuần, 0 dependency**, nhúng vào binary bằng `go:embed` → 1 file chạy, không build step.
 

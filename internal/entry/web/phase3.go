@@ -215,11 +215,12 @@ func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
-	if !s.tryStartJob() {
+	jobCtx, ok := s.tryStartJob()
+	if !ok {
 		writeErr(w, http.StatusConflict, fmt.Errorf("已有后台任务在运行，请等待其完成"))
 		return
 	}
-	ch, err := s.eng.ImportFrom(s.ctx, imp.Options{SourcePath: strings.TrimSpace(body.Path), ResumeFrom: body.From})
+	ch, err := s.eng.ImportFrom(jobCtx, imp.Options{SourcePath: strings.TrimSpace(body.Path), ResumeFrom: body.From})
 	if err != nil {
 		s.endJob()
 		writeErr(w, http.StatusConflict, err)
@@ -234,11 +235,12 @@ func (s *server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
-	if !s.tryStartJob() {
+	jobCtx, ok := s.tryStartJob()
+	if !ok {
 		writeErr(w, http.StatusConflict, fmt.Errorf("已有后台任务在运行，请等待其完成"))
 		return
 	}
-	ch, err := s.eng.Simulate(s.ctx)
+	ch, err := s.eng.Simulate(jobCtx)
 	if err != nil {
 		s.endJob()
 		writeErr(w, http.StatusConflict, err)
@@ -264,11 +266,12 @@ func (s *server) handleImportSim(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
-	if !s.tryStartJob() {
+	jobCtx, ok := s.tryStartJob()
+	if !ok {
 		writeErr(w, http.StatusConflict, fmt.Errorf("已有后台任务在运行，请等待其完成"))
 		return
 	}
-	ch, err := s.eng.ImportSimulationProfile(s.ctx, strings.TrimSpace(body.Path))
+	ch, err := s.eng.ImportSimulationProfile(jobCtx, strings.TrimSpace(body.Path))
 	if err != nil {
 		s.endJob()
 		writeErr(w, http.StatusConflict, err)
@@ -281,32 +284,55 @@ func (s *server) handleImportSim(w http.ResponseWriter, r *http.Request) {
 // streamImportJob / streamSimJob 消费各自返回的事件通道（与主 Events 通道无关，独立 goroutine 安全），
 // 逐条经 hub 广播；通道关闭即收尾。imp/sim.Event 字段同构，分两函数仅因类型不同。
 func (s *server) streamImportJob(ch <-chan imp.Event) {
+	var lastErr string
 	for ev := range ch {
 		je := jobEvent{Name: "import", Stage: string(ev.Stage), Current: ev.Current, Total: ev.Total, Message: ev.Message}
 		if ev.Err != nil {
 			je.Error = ev.Err.Error()
+			lastErr = je.Error // 取消/失败会 emit StageError 后 return，故终结帧即最后一个错误
 		}
 		s.hub.broadcast(sseMessage{Type: "job", Data: mustJSON(je)})
 	}
-	s.finishJob("import")
+	s.finishJob("import", lastErr)
 }
 
 func (s *server) streamSimJob(name string, ch <-chan sim.Event) {
+	var lastErr string
 	for ev := range ch {
 		je := jobEvent{Name: name, Stage: string(ev.Stage), Current: ev.Current, Total: ev.Total, Message: ev.Message}
 		if ev.Err != nil {
 			je.Error = ev.Err.Error()
+			lastErr = je.Error
 		}
 		s.hub.broadcast(sseMessage{Type: "job", Data: mustJSON(je)})
 	}
-	s.finishJob(name)
+	s.finishJob(name, lastErr)
 }
 
 // finishJob 收尾：释放后台任务占用，推 done 帧 + 一份新快照（导入会改写 Progress，仪表盘随之刷新）。
-func (s *server) finishJob(name string) {
+// errMsg 非空表示任务被取消或失败（终结帧带 error），前端据此渲染「已停止」而非「已完成」。
+func (s *server) finishJob(name, errMsg string) {
 	s.endJob()
-	s.hub.broadcast(sseMessage{Type: "job", Data: mustJSON(jobEvent{Name: name, Done: true})})
+	done := jobEvent{Name: name, Done: true}
+	if errMsg != "" {
+		done.Error = errMsg
+	}
+	s.hub.broadcast(sseMessage{Type: "job", Data: mustJSON(done)})
 	s.hub.broadcast(sseMessage{Type: "snapshot", Data: mustJSON(s.eng.Snapshot())})
+}
+
+// handleJobCancel 中止当前后台任务（import/simulate/importsim）。各 runner 在安全检查点检查 ctx
+// （import 按章节、simulate 按素材源、importsim 在导入前），故取消会在下一个检查点干净停下并
+// emit「用户取消」，已落盘数据不受影响。无任务在跑 → 409。
+func (s *server) handleJobCancel(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	if !s.cancelJob() {
+		writeErr(w, http.StatusConflict, fmt.Errorf("没有正在运行的后台任务"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ── 诊断 ──
