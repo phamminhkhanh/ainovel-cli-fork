@@ -205,7 +205,11 @@ function renderSnapshot(s) {
     $('#premise').textContent = s.Premise || '';
     const ch = $('#characters');
     ch.innerHTML = '';
-    chars.slice(0, 12).forEach((c) => { const li = document.createElement('li'); li.textContent = c; ch.appendChild(li); });
+    chars.slice(0, 12).forEach((c) => {
+      const li = document.createElement('li');
+      li.textContent = (typeof translateRoleTags === 'function') ? translateRoleTags(c) : c;
+      ch.appendChild(li);
+    });
   } else {
     pc.hidden = true;
   }

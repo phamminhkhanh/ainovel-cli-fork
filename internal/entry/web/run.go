@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -42,6 +43,13 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 
 	if err := checkPublicBind(addr, opts.AllowPublic); err != nil {
 		return err
+	}
+
+	// 提示词覆盖：建目录 + 读 ~/.ainovel/prompts/*.md 整篇替换核心 prompt（在 host.New 消费 bundle 前）。
+	// 全 additive：只调 assets.Bundle.OverridePrompt 这个 upstream 已导出的 seam，不改 assets/prompts。
+	ensurePromptsDir()
+	if applied := applyPromptOverrides(&bundle); len(applied) > 0 {
+		slog.Info("đã áp prompt override", "files", applied)
 	}
 
 	eng, err := host.New(cfg, bundle)

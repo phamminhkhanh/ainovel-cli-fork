@@ -16,13 +16,7 @@
         <span class="badge" id="stateBadge" data-state="idle">idle</span>
       </header>
 
-      <!-- Chapter list with status icons (PRIMARY) -->
-      <section class="card" id="chapterCard">
-        <h3>Chương</h3>
-        <ul class="chapter-list" id="chapterItems"><li class="muted">Chưa có chương</li></ul>
-      </section>
-
-      <!-- Compact progress -->
+      <!-- Compact progress (novel-master) -->
       <section class="card">
         <h3>Tiến độ</h3>
         <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
@@ -37,10 +31,34 @@
         </dl>
       </section>
 
-      <!-- Action buttons (contextual) -->
+      <!-- Tiền đề + nhân vật (ngữ cảnh, thu gọn — không phải thứ cần chú ý khi viết) -->
+      <section class="card" id="premiseCard" hidden>
+        <details class="collapsible" open>
+          <summary>Tiền đề</summary>
+          <p class="premise" id="premise"></p>
+          <ul class="chips" id="characters"></ul>
+        </details>
+      </section>
+
+      <!-- Action buttons (contextual, novel-master controls) -->
       <section class="card" id="actionsCard">
         <h3>Hành động</h3>
         <div class="actions-stack" id="actionsStack"></div>
+      </section>
+
+      <!-- Mở thư mục trên máy (novel output + prompt override) -->
+      <section class="card" id="filesCard">
+        <h3>Thư mục</h3>
+        <div class="actions-stack">
+          <button class="btn" id="openNovelDir" title="Mở thư mục chứa truyện đang viết">📂 Thư mục truyện</button>
+          <button class="btn" id="openPromptsDir" title="Mở ~/.ainovel/prompts để ghi đè prompt (thay hẳn prompt gốc)">🧩 Thư mục prompt</button>
+        </div>
+      </section>
+
+      <!-- Chapter list with status icons (chi tiết cấp chương) -->
+      <section class="card" id="chapterCard">
+        <h3>Chương</h3>
+        <ul class="chapter-list" id="chapterItems"><li class="muted">Chưa có chương</li></ul>
       </section>
 
       <!-- Outline card (hidden — replaced by chapter list, but DOM kept for app-dashboard.js) -->
@@ -78,12 +96,6 @@
       <section class="card" id="cacheCard" hidden>
         <h3>缓存 · Cache</h3>
         <div class="cache-body" id="cacheBody"></div>
-      </section>
-      <section class="card" id="premiseCard" hidden>
-        <h3>Premise</h3>
-        <p class="premise" id="premise"></p>
-        <h3>Nhân vật</h3>
-        <ul class="chips" id="characters"></ul>
       </section>
     </aside>
 

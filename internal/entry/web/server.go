@@ -82,6 +82,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/api/simulate", s.handleSimulate)
 	mux.HandleFunc("/api/importsim", s.handleImportSim)
 	mux.HandleFunc("/api/job/cancel", s.handleJobCancel)
+	mux.HandleFunc("/api/reveal", s.handleReveal)
 	mux.HandleFunc("/api/diag", s.handleDiag)
 
 	return s.guardHost(mux)

@@ -49,3 +49,27 @@ function translateSummary(text) {
   }
   return text;
 }
+
+// ── Character role tags ──
+// Snapshot.Characters là []string dạng "Tên（vai）" với vai là enum tiếng Trung do engine sinh.
+// Dịch enum cố định sang tiếng Việt (additive, không đụng engine). Key dài đặt trước key ngắn
+// để tránh 主角 ăn mất 女主角/男主角 khi replace tuần tự.
+const ROLE_TAG_MAP = {
+  '女主角': 'Nữ chính',
+  '男主角': 'Nam chính',
+  '反派团体': 'Phe phản diện',
+  '主角': 'Chính',
+  '配角': 'Phụ',
+  '反派': 'Phản diện',
+  '导师': 'Cố vấn',
+};
+
+// translateRoleTags thay các enum vai tiếng Trung trong chuỗi bằng tiếng Việt, giữ nguyên phần còn lại.
+function translateRoleTags(s) {
+  if (!s) return s;
+  let out = String(s);
+  for (const zh of Object.keys(ROLE_TAG_MAP)) {
+    if (out.indexOf(zh) !== -1) out = out.split(zh).join(ROLE_TAG_MAP[zh]);
+  }
+  return out;
+}

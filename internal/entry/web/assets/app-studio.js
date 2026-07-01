@@ -496,6 +496,17 @@ function bootStudio() {
   $('#jobLogOverlay').addEventListener('click', (e) => { if (e.target === $('#jobLogOverlay')) closeJobLog(); });
   $('#jobCancelBtn').addEventListener('click', cancelCurrentJob);
   $('#jobBar').addEventListener('click', openJobLog);
+  // Mở thư mục trên máy (server chạy localhost → dùng file manager của OS).
+  const onNovelDir = $('#openNovelDir');
+  if (onNovelDir) onNovelDir.addEventListener('click', () => revealDir('novel'));
+  const onPromptsDir = $('#openPromptsDir');
+  if (onPromptsDir) onPromptsDir.addEventListener('click', () => revealDir('prompts'));
+}
+
+// revealDir yêu cầu server mở thư mục đã biết (novel|prompts) trong file manager.
+async function revealDir(target) {
+  const r = await post('/api/reveal', { target });
+  if (r && r.dir) toast('Đã mở: ' + r.dir, 'ok');
 }
 
 bootStudio();
