@@ -57,6 +57,8 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("GET /api/outline", s.handleOutline)
 	mux.HandleFunc("GET /api/world", s.handleWorld)
 	mux.HandleFunc("GET /api/characters", s.handleCharacters)
+	mux.HandleFunc("GET /api/reviews", s.handleReviews)
+	mux.HandleFunc("GET /api/foreshadow", s.handleForeshadow)
 
 	// 控制
 	mux.HandleFunc("/api/start", s.handleStart)

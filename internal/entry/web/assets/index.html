@@ -78,13 +78,15 @@
         <p class="steer-text" id="steerText"></p>
       </section>
 
-      <!-- Hidden cards — JS still writes, won't crash, but not shown -->
+      <!-- Hidden card — Agents chưa có thiết kế UI riêng, JS vẫn viết vào cho an toàn -->
       <section class="card" hidden>
         <h3>Agents</h3>
         <ul class="agents" id="agents"><li class="muted">—</li></ul>
       </section>
-      <section class="card" hidden>
-        <h3>Context · Usage</h3>
+
+      <!-- Chi phí & bối cảnh — người viết dài hơi cần biết đang tốn bao nhiêu -->
+      <section class="card">
+        <h3>Chi phí · Context</h3>
         <dl class="kv">
           <dt>Context</dt><dd id="ctx">—</dd>
           <dt>Model</dt><dd id="model">—</dd>
@@ -94,7 +96,7 @@
         <div class="usage-breakdown" id="usageBreakdown"></div>
       </section>
       <section class="card" id="cacheCard" hidden>
-        <h3>缓存 · Cache</h3>
+        <h3>Cache</h3>
         <div class="cache-body" id="cacheBody"></div>
       </section>
     </aside>
@@ -118,6 +120,7 @@
               <button class="tab" data-tab="chapter" role="tab" aria-selected="false">Chương</button>
               <button class="tab" data-tab="outline" role="tab" aria-selected="false">Outline</button>
               <button class="tab" data-tab="world" role="tab" aria-selected="false">World</button>
+              <button class="tab" data-tab="review" role="tab" aria-selected="false">Đánh giá</button>
             </div>
             <button class="ghost" id="clearStream" title="Xóa khung xem">⟲</button>
           </div>
@@ -139,7 +142,11 @@
             </div>
             <div class="tab-panel" id="tab-world" role="tabpanel">
               <div class="world-chars" id="worldChars"></div>
+              <div class="world-foreshadow" id="worldForeshadow"></div>
               <div class="world-rules" id="worldRules"></div>
+            </div>
+            <div class="tab-panel" id="tab-review" role="tabpanel">
+              <div class="review-list" id="reviewList"></div>
             </div>
           </div>
         </section>
