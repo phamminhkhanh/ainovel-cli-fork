@@ -198,6 +198,14 @@ async function closeCc(finished) {
   const wasStage = ccStage;
   ccStage = false; ccHistory = []; ccDraft = ''; ccReady = false; ccLiveBubble = null;
   if (wasStage && !finished) await post('/api/cocreate/cancel', {});
+  // Rời cocreate: xoá mọi priming 'steer' cũ (nút "↗ Can thiệp") để input theo đúng trạng thái thật.
+  // Hủy cocreate khi coordinator đã dừng → engine idle-có-truyện → sendModeFor cho 'continue',
+  // khớp thông báo "gõ ở ô nhập để tiếp tục". Nếu để pendingMode='steer' sót lại, gõ sẽ thành
+  // can thiệp (chỉ lưu cho lần khởi động sau) thay vì tiếp tục ngay — đúng lỗi user gặp.
+  pendingMode = null;
+  const inp = $('#input');
+  if (inp) inp.placeholder = 'Gõ để tiếp tục sáng tác… (Ctrl/Cmd + Enter)';
+  if (typeof updateControls === 'function') updateControls(lastSnapshot);
 }
 
 // ── Xuất bản (export) ──

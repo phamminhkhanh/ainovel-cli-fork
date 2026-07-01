@@ -7,6 +7,7 @@ const $ = (sel) => document.querySelector(sel);
 
 const THINKING_SEP = '\x02';
 let currentState = 'idle';
+let hasNovelState = false; // true khi đã có novel (để sendModeFor biết)
 let pendingMode = null; // 'steer' | 'continue' | null — override send() dispatch
 let roundHasContent = false; // round stream hiện tại đã có chữ chưa (để chèn divider khi clear)
 let streamIsThinking = false; // Host uses \x02 to toggle thinking; route it to the thinking pane.
@@ -154,6 +155,7 @@ function renderSnapshot(s) {
   if (!s) return;
   lastSnapshot = s;
   currentState = s.RuntimeState || 'idle';
+  hasNovelState = (s.CompletedCount || 0) > 0 || (s.CurrentChapter || 0) > 0 || (s.TotalChapters || 0) > 0;
 
   $('#novelName').textContent = s.NovelName || 'Chưa có tên';
   const badge = $('#stateBadge');
@@ -215,14 +217,19 @@ function renderSnapshot(s) {
 }
 
 // ── Chế độ input theo trạng thái ──
-function sendModeFor(state) {
+function sendModeFor(state, hasNovel) {
   if (state === 'running' || state === 'pausing') return 'steer';
   if (state === 'paused' || state === 'completed') return 'continue';
-  return 'start'; // idle / unknown
+  if (state === 'idle') {
+    if (hasNovel) return 'continue';
+    return 'start';
+  }
+  return 'start'; // unknown → start
 }
 function updateControls(s) {
-  const st = s.RuntimeState || 'idle';
-  const mode = sendModeFor(st);
+  const st = s ? (s.RuntimeState || 'idle') : currentState;
+  const hasNovel = s ? ((s.CompletedCount || 0) > 0 || (s.CurrentChapter || 0) > 0 || (s.TotalChapters || 0) > 0) : hasNovelState;
+  const mode = sendModeFor(st, hasNovel);
   $('#sendBtn').textContent = mode === 'start' ? 'Bắt đầu' : mode === 'steer' ? 'Can thiệp' : 'Tiếp tục';
   $('#modeHint').textContent = 'Chế độ: ' + (mode === 'start' ? 'Bắt đầu' : mode === 'steer' ? 'Can thiệp (đang chạy)' : 'Tiếp tục');
   $('#abortBtn').hidden = !(st === 'running' || st === 'pausing' || st === 'paused');
@@ -275,7 +282,7 @@ async function startNovel(prompt, force) {
 async function send() {
   const input = $('#input');
   const text = input.value.trim();
-  const mode = pendingMode || sendModeFor(currentState);
+  const mode = pendingMode || sendModeFor(currentState, hasNovelState);
   pendingMode = null; // reset after use
   let res;
   if (mode === 'start') {
