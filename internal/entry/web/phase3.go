@@ -116,40 +116,6 @@ func (s *server) handleCoCreateCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleCoCreateStart 冷启动共创产出的创作指令直接开写：与 TUI BuildPlan→startRuntime 一致
-// （PrepareUserRules(raw) + StartPrepared(BuildStartPrompt(raw))）。引擎在跑时 StartPrepared 报错 → 409。
-func (s *server) handleCoCreateStart(w http.ResponseWriter, r *http.Request) {
-	if !requirePOST(w, r) {
-		return
-	}
-	var body struct {
-		Prompt string `json:"prompt"`
-		Force  bool   `json:"force"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	draft := strings.TrimSpace(body.Prompt)
-	if draft == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("prompt is required"))
-		return
-	}
-	// 与 /api/start 同闸：冷启动共创开新书同样会触发 StartPrepared 清空可恢复进度。
-	if s.blockIfRecoverable(w, body.Force) {
-		return
-	}
-	if err := s.eng.PrepareUserRules(draft); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if err := s.eng.StartPrepared(host.BuildStartPrompt(draft)); err != nil {
-		writeErr(w, http.StatusConflict, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dir": s.eng.Dir()})
-}
-
 // ── 导出 ──
 
 // handleExport 导出已完成章节为 TXT/EPUB。只读操作，写作中途也可随时导出现阶段成品。

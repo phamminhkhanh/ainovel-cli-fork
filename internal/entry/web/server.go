@@ -78,7 +78,6 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/api/cocreate/pause", s.handleCoCreatePause)
 	mux.HandleFunc("/api/cocreate/resume", s.handleCoCreateResume)
 	mux.HandleFunc("/api/cocreate/cancel", s.handleCoCreateCancel)
-	mux.HandleFunc("/api/cocreate/start", s.handleCoCreateStart)
 	mux.HandleFunc("/api/export", s.handleExport)
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/simulate", s.handleSimulate)
