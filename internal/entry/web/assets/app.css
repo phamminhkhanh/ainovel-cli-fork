@@ -741,3 +741,72 @@ select:focus { outline: none; border-color: var(--color-accent); }
 }
 .review-issue-suggestion { font-size: 12px; color: var(--color-accent); }
 .review-affected { font-size: 12px; color: var(--color-text-faint); }
+
+/* ── Guide / Help tab ── */
+.guide-content {
+  max-width: 780px; margin: 0 auto;
+  padding: var(--space-5); line-height: 1.7;
+  color: var(--color-text);
+}
+.guide-content h2 {
+  font-size: 20px; margin: 0 0 var(--space-2) 0;
+  color: var(--color-text); font-weight: 700;
+}
+.guide-content h3 {
+  font-size: 15px; margin: var(--space-5) 0 var(--space-2) 0;
+  color: var(--color-accent); font-weight: 600;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+}
+.guide-intro {
+  font-size: 14px; color: var(--color-text-dim);
+  margin: 0 0 var(--space-3) 0;
+}
+.guide-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 13px; margin: var(--space-2) 0;
+}
+.guide-table th {
+  text-align: left; padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2); color: var(--color-text-dim);
+  font-weight: 600; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--color-border);
+}
+.guide-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+.guide-table tr:last-child td { border-bottom: none; }
+.guide-table tr:hover td { background: var(--color-surface-2); }
+.guide-table code {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--color-surface-2); padding: 1px 5px;
+  border-radius: 3px; color: var(--color-accent);
+}
+.guide-note {
+  font-size: 13px; color: var(--color-text-dim);
+  background: var(--color-surface-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--color-accent);
+  margin: var(--space-2) 0 var(--space-3) 0;
+}
+.guide-tips {
+  padding-left: 1.2em; margin: var(--space-2) 0;
+  font-size: 13px;
+}
+.guide-tips li {
+  margin-bottom: var(--space-2);
+  line-height: 1.6;
+}
+.guide-tips li strong {
+  color: var(--color-text);
+}
+.guide-tips code, .guide-content p code {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--color-surface-2); padding: 1px 5px;
+  border-radius: 3px; color: var(--color-accent);
+}
+

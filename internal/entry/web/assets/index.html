@@ -106,6 +106,7 @@
       <div class="startup-card" id="startupCard" hidden>
         <h2>ainovel · bắt đầu sáng tác</h2>
         <p class="muted">Chọn cách bạn muốn khởi động dự án.</p>
+        <p class="muted" style="font-size:.85rem;margin-top:.25rem">Xem tab <strong>Hỗ trợ</strong> để biết thể loại phù hợp, cách dùng hiệu quả và config.</p>
         <div class="startup-actions">
           <button class="btn primary" id="startupQuick">✍ Bắt đầu nhanh</button>
           <button class="btn" id="startupCoCreate">💬 Đồng sáng tác</button>
@@ -121,6 +122,7 @@
               <button class="tab" data-tab="outline" role="tab" aria-selected="false">Outline</button>
               <button class="tab" data-tab="world" role="tab" aria-selected="false">World</button>
               <button class="tab" data-tab="review" role="tab" aria-selected="false">Đánh giá</button>
+              <button class="tab" data-tab="guide" role="tab" aria-selected="false">Hỗ trợ</button>
             </div>
             <button class="ghost" id="clearStream" title="Xóa khung xem">⟲</button>
           </div>
@@ -147,6 +149,79 @@
             </div>
             <div class="tab-panel" id="tab-review" role="tabpanel">
               <div class="review-list" id="reviewList"></div>
+            </div>
+            <div class="tab-panel" id="tab-guide" role="tabpanel">
+              <div class="guide-content">
+                <h2>📖 Hướng dẫn nhanh</h2>
+                <p class="guide-intro">ainovel-cli là engine sáng tác tiểu thuyết dài bằng AI. Trang này tóm tắt những gì bạn cần biết để sử dụng hiệu quả.</p>
+
+                <h3>🎭 Thể loại hỗ trợ</h3>
+                <table class="guide-table">
+                  <thead><tr><th>Style (config)</th><th>Thể loại chính</th><th>Sub-genre</th></tr></thead>
+                  <tbody>
+                    <tr><td><code>fantasy</code></td><td>Huyền huyễn · Tiên hiệp · Tu tiên · Võ hiệp</td><td>Progression Fantasy, LitRPG, Cultivation, Epic Fantasy, Isekai</td></tr>
+                    <tr><td><code>romance</code></td><td>Ngôn tình · Lãng mạn</td><td>Billionaire, Werewolf, CEO, Romantasy, Office Romance</td></tr>
+                    <tr><td><code>suspense</code></td><td>Trinh thám · Kỳ án · Hồi hộp</td><td>Mystery, Thriller, Noir, Psychological, Crime Fiction</td></tr>
+                    <tr><td><code>default</code></td><td>Chung</td><td>Phiêu lưu, Sci-fi, Historical, Horror, Slice of Life</td></tr>
+                  </tbody>
+                </table>
+                <p class="guide-note">⚡ Hợp nhất với <strong>web-novel dài 200+ chương</strong>, cốt truyện tuyến tính, arc nối arc. Không phù hợp: truyện ngắn (&lt;15 chương), văn học phi tuyến, non-fiction.</p>
+
+                <h3>🚀 Hai chế độ khởi động</h3>
+                <table class="guide-table">
+                  <thead><tr><th>Chế độ</th><th>Khi nào dùng</th><th>Mô tả</th></tr></thead>
+                  <tbody>
+                    <tr><td><strong>✍ Bắt đầu nhanh</strong></td><td>Đã biết rõ mình muốn gì</td><td>Gõ yêu cầu → engine tự quy hoạch + viết luôn. Nhanh nhất.</td></tr>
+                    <tr><td><strong>💬 Đồng sáng tác</strong></td><td>Muốn thảo luận trước</td><td>Chat với AI để chốt bối cảnh, nhân vật, hướng đi → rồi mới viết. Chất lượng cao hơn.</td></tr>
+                  </tbody>
+                </table>
+
+                <h3>⚙ Config quan trọng</h3>
+                <p>File config: <code>~/.ainovel/config.json</code> hoặc <code>./.ainovel/config.json</code></p>
+                <table class="guide-table">
+                  <thead><tr><th>Field</th><th>Ý nghĩa</th><th>Gợi ý</th></tr></thead>
+                  <tbody>
+                    <tr><td><code>style</code></td><td>Template phong cách viết</td><td><code>fantasy</code> / <code>romance</code> / <code>suspense</code> / <code>default</code></td></tr>
+                    <tr><td><code>roles</code></td><td>Model cho từng vai trò agent</td><td>Writer dùng model mạnh nhất, Editor/Coordinator dùng model rẻ hơn</td></tr>
+                    <tr><td><code>reasoning</code></td><td>Mức suy luận (thinking)</td><td>Cao = chất lượng hơn nhưng chậm + tốn token hơn</td></tr>
+                  </tbody>
+                </table>
+
+                <h3>🧠 Model LLM — yếu tố #1</h3>
+                <table class="guide-table">
+                  <thead><tr><th>Vai trò</th><th>Nên dùng</th><th>Lý do</th></tr></thead>
+                  <tbody>
+                    <tr><td><strong>Writer</strong></td><td>Model mạnh nhất (tier cao nhất)</td><td>Viết prose, tâm lý, đối thoại — cần sáng tạo tốt nhất</td></tr>
+                    <tr><td><strong>Architect</strong></td><td>Model trung-mạnh</td><td>Quy hoạch cốt truyện — cần reasoning tốt</td></tr>
+                    <tr><td><strong>Editor</strong></td><td>Model trung-rẻ</td><td>Review, tóm tắt — reasoning đủ, tiết kiệm</td></tr>
+                    <tr><td><strong>Coordinator</strong></td><td>Model trung-rẻ</td><td>Điều phối — logic flow, ít sáng tạo</td></tr>
+                  </tbody>
+                </table>
+                <p class="guide-note">💡 Không cần nhớ tên model cụ thể — chọn theo <strong>tier hiệu suất</strong> tại thời điểm dùng. Bấm ⚙ <strong>Model</strong> ở thanh input để chỉnh.</p>
+
+                <h3>✏️ Mẹo sử dụng hiệu quả</h3>
+                <ol class="guide-tips">
+                  <li><strong>Yêu cầu ban đầu càng rõ càng tốt.</strong> Nêu: bối cảnh, kiểu nhân vật, hướng kết thúc, điều muốn tránh. Mơ hồ = AI tự bịa hướng.</li>
+                  <li><strong>Can thiệp sớm, đừng chờ lệch 50 chương.</strong> Gõ vào ô input bất cứ lúc nào: "nhịp chậm quá", "cần thêm tension", "đổi giọng"...</li>
+                  <li><strong>Viết tiếng Việt:</strong> Tạo file <code>~/.ainovel/rules/lang-vi.md</code> ghi "Viết toàn bộ truyện bằng tiếng Việt tự nhiên". Chỉ áp dụng cho truyện mới.</li>
+                  <li><strong>Crash không mất gì.</strong> Mỗi bước đều ghi checkpoint — chạy lại là khôi phục.</li>
+                  <li><strong>Mỗi truyện = 1 thư mục.</strong> Đừng chạy 2 truyện cùng thư mục. Đừng sửa tay file chương.</li>
+                  <li><strong>Theo dõi chi phí</strong> ở mục "Chi phí · Context" bên sidebar. Truyện dài tốn vài giờ + API cost.</li>
+                </ol>
+
+                <h3>📋 Các tab trong giao diện</h3>
+                <table class="guide-table">
+                  <thead><tr><th>Tab</th><th>Nội dung</th></tr></thead>
+                  <tbody>
+                    <tr><td><strong>Stream</strong></td><td>Xem real-time engine đang viết gì, thinking của model</td></tr>
+                    <tr><td><strong>Chương</strong></td><td>Đọc từng chương đã viết xong</td></tr>
+                    <tr><td><strong>Outline</strong></td><td>Xem đại cương, compass, cấu trúc arc/volume</td></tr>
+                    <tr><td><strong>World</strong></td><td>Tra cứu nhân vật, manh mối (伏笔), quy tắc thế giới</td></tr>
+                    <tr><td><strong>Đánh giá</strong></td><td>Xem review 7 chiều của Editor cho từng arc</td></tr>
+                    <tr><td><strong>Hỗ trợ</strong></td><td>Trang này — hướng dẫn nhanh</td></tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </section>
