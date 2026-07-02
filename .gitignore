@@ -45,3 +45,7 @@ output*
 workspace/
 plans/*
 .claude/*
+
+# MyNovel analyzer output (timestamped, regenerated on each run)
+mynovel_*.json
+mynovel_*.txt
