@@ -209,7 +209,110 @@ assets/
 
 ---
 
-## 8. "Cố tình KHÔNG làm" (ranh giới kiến trúc)
+## 8. Thể loại tiểu thuyết phù hợp
+
+### 8.1 Engine tối ưu cho thể loại nào?
+
+Engine sinh ra để viết **web-novel / light-novel dài** (200–500 chương), cốt truyện tuyến tính tiến về phía trước, arc nối arc — mô hình serialized fiction kiểu Á Đông. Cơ chế quy hoạch cuốn chiếu + compass + review theo arc được thiết kế đúng cho dạng này.
+
+### 8.2 Bốn style dựng sẵn
+
+Config field `style` trong `config.json` chọn template phong cách. Mỗi style có arc-template, style-reference, và hướng dẫn viết riêng (nằm trong `assets/styles/` và `assets/references/genres/`):
+
+| Style | Thể loại chính | Sub-genre phù hợp | Vì sao hợp |
+|-------|----------------|-------------------|------------|
+| `fantasy` | Huyền huyễn · Tiên hiệp · Tu tiên · Võ hiệp | Progression Fantasy, LitRPG, Cultivation, Epic Fantasy, Isekai | Arc-template "đột phá cảnh giới / đấu pháp / thăng cấp", hệ thống năng lực có quy tắc rõ ràng |
+| `romance` | Ngôn tình · Lãng mạn | Billionaire Romance, Werewolf, CEO, Romantasy, Contemporary Romance, Office Romance | Template tuyến tình cảm: tiếp xúc → hảo cảm → xung đột → hòa giải → sâu sắc; quản lý đối thủ tình cảm + hiểu lầm |
+| `suspense` | Trinh thám · Kỳ án · Hồi hộp | Mystery, Thriller, Noir, Psychological Suspense, Crime Fiction, Sci-fi Mystery | Quản lý 伏笔 (manh mối/foreshadow) chặt, hook cuối chương, đa tuyến tự sự, kỹ thuật red herring |
+| `default` | Chung, không chuyên biệt | Slice of Life, Adventure, Military, Historical, Sci-fi (general), Horror | Dùng khi thể loại không nằm trong 3 cái trên, hoặc truyện lai nhiều thể loại |
+
+### 8.3 Thể loại kém hợp
+
+| Dạng truyện | Lý do | Workaround |
+|-------------|-------|------------|
+| **Văn học nghệ thuật** (dòng ý thức, cấu trúc phi tuyến, thẩm mỹ câu chữ cực cao) | Engine giỏi giữ nhất quán chứ không giỏi thẩm mỹ tinh vi | Dùng tính năng 仿写 (simulation profile) nạp mẫu văn, hoặc override prompt |
+| **Truyện ngắn** (< 15–20 chương) | Phí bộ máy multi-agent, viết tay bằng LLM còn nhanh hơn | Viết trực tiếp bằng LLM, không cần engine |
+| **Truyện giọng văn cực kỳ cá nhân** | Engine tạo giọng "nhất quán" nhưng trung tính | Nạp simulation profile hoặc custom prompt trong `assets/prompts/` |
+| **Non-fiction / Self-help / Kỹ thuật** | Engine thiết kế cho fiction, không có cơ chế quản lý luận điểm/chứng cứ | Không phù hợp |
+
+### 8.4 Đối chiếu thể loại × thị trường monetization
+
+> Tham khảo khi chọn thể loại để viết kiếm tiền trên các nền tảng.
+
+| Thể loại | Độ hot thị trường (2026) | Style engine | Platform phù hợp nhất |
+|----------|------------------------|-------------|----------------------|
+| Romance / Romantasy | 🔥🔥🔥🔥🔥 (#1 toàn cầu) | `romance` | Dreame, GoodNovel, KDP |
+| Progression Fantasy / LitRPG | 🔥🔥🔥🔥 (#2, niche lớn) | `fantasy` | Royal Road → Patreon, KDP |
+| Werewolf / Billionaire | 🔥🔥🔥🔥 (hot trên serialized) | `romance` | Dreame, GoodNovel |
+| Thriller / Psychological | 🔥🔥🔥 (đang lên) | `suspense` | KDP, Royal Road |
+| Cultivation / Tiên hiệp | 🔥🔥🔥 (niche Á Đông) | `fantasy` | WebNovel, KDP |
+| Sci-fi Noir / Mystery | 🔥🔥 (niche nhỏ, ít cạnh tranh) | `suspense` | KDP, Royal Road |
+| Cozy Fantasy / Solarpunk | 🔥🔥 (xu hướng mới) | `default` | KDP, Royal Road |
+
+---
+
+## 9. Lưu ý thực tế khi sử dụng
+
+### 9.1 Model LLM — yếu tố quyết định chất lượng
+
+> ⚠️ **Model mạnh = truyện tốt. Không có cách tắt.** Engine chỉ là khung — chất lượng prose, nhân vật, cốt truyện phụ thuộc hoàn toàn vào LLM.
+
+**Nguyên tắc chọn model:**
+
+| Vai trò agent | Nên dùng | Lý do |
+|--------------|---------|-------|
+| **Writer** | Model mạnh nhất có thể (tier cao nhất trong budget) | Viết prose, tâm lý nhân vật, đối thoại — cần sáng tạo tốt nhất |
+| **Architect** | Model trung-mạnh | Quy hoạch cốt truyện, xây dựng thế giới — cần reasoning tốt |
+| **Editor** | Model trung-rẻ | Review 7 chiều, tóm tắt — reasoning đủ, không cần sáng tạo |
+| **Coordinator** | Model trung-rẻ | Điều phối quy trình — logic flow, ít sáng tạo |
+
+**Có thể set model khác nhau theo vai trò** — chỉnh trong modal ⚙ Model hoặc field `roles` trong config. Chiến lược: đầu tư budget vào Writer, tiết kiệm ở Coordinator/Editor.
+
+> 💡 Model ngành LLM tiến hóa cực nhanh — không nên chọn model theo tên cụ thể mà theo **tier hiệu suất tại thời điểm dùng**. Kiểm tra [leaderboard](https://lmarena.ai/) hoặc benchmark mới nhất để chọn model phù hợp budget.
+
+### 9.2 Viết tiếng Việt
+
+Engine gốc là tiếng Trung. Muốn viết tiếng Việt:
+1. Tạo file `~/.ainovel/rules/lang-vi.md` với nội dung đại ý: *"Viết toàn bộ truyện bằng tiếng Việt tự nhiên"*
+2. Engine tự nạp rule khi mở sách mới
+3. ⚠️ Sách cũ đã chạy rồi thì **không đọc lại rule mới** (đã chốt `user_rules` lúc tạo)
+
+### 9.3 Viết yêu cầu ban đầu
+
+**Càng rõ càng ít drift.** Đừng chỉ gõ "viết truyện tu tiên". Nêu:
+- Bối cảnh / thế giới quan
+- Kiểu nhân vật chính (tính cách, động lực, điểm yếu)
+- Hướng kết thúc (happy end? bittersweet? open?)
+- Điều muốn tránh (cliché, trope không thích)
+- Hoặc dùng **Đồng sáng tác** để chat chốt chỉ thị trước
+
+> Yêu cầu mơ hồ → AI tự bịa hướng → 50 chương sau mới phát hiện lệch → tốn token sửa.
+
+### 9.4 Can thiệp sớm
+
+Thấy lệch hướng → gõ can thiệp **ngay** vào ô input. Ví dụ:
+- "nhịp chậm quá, đẩy nhanh"
+- "đừng biến main thành thánh mẫu"
+- "cần thêm tension giữa A và B"
+
+Sửa muộn (50+ chương) → phải viết lại nhiều chương → tốn token + thời gian.
+
+### 9.5 Chi phí & thời gian
+
+- Truyện dài = hàng trăm lượt gọi LLM = **vài giờ đến vài ngày** + chi phí API
+- Theo dõi ô **Chi phí · Context** ở sidebar
+- Chạy nền được, không cần ngồi canh
+- Crash không mất gì — checkpoint theo bước, chạy lại là khôi phục
+
+### 9.6 Quy tắc vệ sinh
+
+- **Mỗi truyện = 1 thư mục** — đừng chạy 2 truyện trong cùng thư mục
+- **Đừng sửa tay file chương** — UI hiện chỉ đọc, engine tin vào Store. Sửa tay `.md` có thể lệch với `progress.json`. Muốn đổi → can thiệp cho AI viết lại
+- **Crash → chạy lại** — `bash start-web.sh` → chọn truyện → Khôi phục
+
+---
+
+## 10. "Cố tình KHÔNG làm" (ranh giới kiến trúc)
 
 Vi phạm = lệch kiến trúc (xem `docs/architecture.md` §10 — 15 điều):
 

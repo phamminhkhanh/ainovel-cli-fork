@@ -24,7 +24,9 @@ cmd/ainovel-cli/main.go   ← only upstream file we touch
 
 | Document | What it covers |
 |---|---|
-| [WEB-UI.md](WEB-UI.md) | **Deep dive**: Web UI architecture, file map, API endpoints, content workspace tabs, i18n strategy, upstream merge workflow |
+| [01-TONG-QUAN-DU-AN.md](01-TONG-QUAN-DU-AN.md) | Tổng quan tiếng Việt: kiến trúc, flow, thể loại hỗ trợ, lưu ý sử dụng |
+| [02-WEB-UI.md](02-WEB-UI.md) | **Deep dive**: Web UI architecture, file map, API endpoints, content workspace tabs, i18n strategy, upstream merge workflow |
+| [03-MYNOVEL-REPORT.md](03-MYNOVEL-REPORT.md) | Phân tích nền tảng MyNovel (mynovel.net/pro): pháp lý, traffic, rủi ro, so sánh platform |
 | [start-web.sh](start-web.sh) | How to run the web UI locally |
 
 ## Rules for This Codebase

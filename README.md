@@ -7,7 +7,7 @@
   <img src="scripts/novel.png" alt="ainovel-cli bg" width="800">
 </p>
 
-> 📘 **Tiếng Việt — Tổng quan nhanh:** nội dung dự án · triết lý thiết kế · flow hoạt động (bản图解 gọn) xem [TONG-QUAN-DU-AN.md](TONG-QUAN-DU-AN.md).
+> 📘 **Tiếng Việt — Tổng quan nhanh:** nội dung dự án · triết lý thiết kế · flow hoạt động (bản图解 gọn) xem [01-TONG-QUAN-DU-AN.md](01-TONG-QUAN-DU-AN.md).
 
 ## 特性
 
