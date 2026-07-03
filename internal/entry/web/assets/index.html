@@ -122,6 +122,7 @@
               <button class="tab" data-tab="outline" role="tab" aria-selected="false">Outline</button>
               <button class="tab" data-tab="world" role="tab" aria-selected="false">World</button>
               <button class="tab" data-tab="review" role="tab" aria-selected="false">Đánh giá</button>
+              <button class="tab" data-tab="production" role="tab" aria-selected="false">Sản xuất</button>
               <button class="tab" data-tab="guide" role="tab" aria-selected="false">Hỗ trợ</button>
             </div>
             <button class="ghost" id="clearStream" title="Xóa khung xem">⟲</button>
@@ -218,11 +219,13 @@
                     <tr><td><strong>Outline</strong></td><td>Xem đại cương, compass, cấu trúc arc/volume</td></tr>
                     <tr><td><strong>World</strong></td><td>Tra cứu nhân vật, manh mối (伏笔), quy tắc thế giới</td></tr>
                     <tr><td><strong>Đánh giá</strong></td><td>Xem review 7 chiều của Editor cho từng arc</td></tr>
+                    <tr><td><strong>Sản xuất</strong></td><td>Chạy headless, giám sát tiến độ/chi phí, xuất TXT</td></tr>
                     <tr><td><strong>Hỗ trợ</strong></td><td>Trang này — hướng dẫn nhanh</td></tr>
                   </tbody>
                 </table>
               </div>
             </div>
+            <div class="tab-panel" id="tab-production" role="tabpanel"></div>
           </div>
         </section>
         <section class="pane log-pane" tabindex="0">
@@ -447,6 +450,7 @@
 
   <script src="/app-i18n.js"></script>
   <script src="/app.js"></script>
+  <script src="/app-production.js"></script>
   <script src="/app-workspace.js"></script>
   <script src="/app-chapters.js"></script>
   <script src="/app-dashboard.js"></script>

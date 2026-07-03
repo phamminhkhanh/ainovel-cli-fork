@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/host"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
@@ -19,7 +20,11 @@ type server struct {
 	hub   *hub
 	ask   *askBridge
 	ctx   context.Context
-	addr  string // 监听地址，用于 Host 头校验（仅回环绑定时加锁）
+	addr  string           // 监听地址，用于 Host 头校验（仅回环绑定时加锁）
+	cfg   bootstrap.Config // web 入口接收的配置，用于构造子运行覆盖配置
+
+	repoRoot       string          // 仓库根目录，用于解析 profiles/ 路径
+	prodRunManager *prodRunManager // Production Cockpit 运行管理器
 
 	jobMu      sync.Mutex         // 串行化后台任务（import/simulate/importsim）
 	jobRunning bool               // 是否有后台任务在跑——guardExclusive 不跟踪它们，故 web 侧自锁
@@ -44,6 +49,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/app-chapters.js", s.handleAsset("assets/app-chapters.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-studio.js", s.handleAsset("assets/app-studio.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-input.js", s.handleAsset("assets/app-input.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("/app-production.js", s.handleAsset("assets/app-production.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app.css", s.handleAsset("assets/app.css", "text/css; charset=utf-8"))
 
 	// 只读
@@ -72,6 +78,17 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/model", s.handleModel)
 	mux.HandleFunc("/api/thinking", s.handleThinking)
+
+	// Production Cockpit（fork 新增；server.go 是已被 fork 修改过的 upstream 文件）
+	mux.HandleFunc("/api/profiles", s.handleProfilesList)
+	mux.HandleFunc("GET /api/prodruns", s.handleProdRunsList)
+	mux.HandleFunc("POST /api/prodruns", s.handleProdRunCreate)
+	mux.HandleFunc("GET /api/prodruns/{id}", s.handleProdRunGet)
+	mux.HandleFunc("POST /api/prodruns/{id}/start", s.handleProdRunStart)
+	mux.HandleFunc("POST /api/prodruns/{id}/stop", s.handleProdRunStop)
+	mux.HandleFunc("GET /api/prodruns/{id}/log", s.handleProdRunLog)
+	mux.HandleFunc("POST /api/prodruns/{id}/export", s.handleProdRunExport)
+	mux.HandleFunc("GET /api/prodruns/{id}/export.txt", s.handleProdRunExportDownload)
 
 	// 共创 / 导出 / 导入 / 仿写 / 诊断（Phase 3）
 	mux.HandleFunc("/api/cocreate/send", s.handleCoCreateSend)

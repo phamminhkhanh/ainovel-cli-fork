@@ -1,0 +1,247 @@
+package web
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Production-run lifecycle statuses.
+const (
+	prodRunQueued    = "queued"
+	prodRunRunning   = "running"
+	prodRunPaused    = "paused"
+	prodRunCompleted = "completed"
+	prodRunFailed    = "failed"
+	prodRunCancelled = "cancelled"
+)
+
+// Stop reasons written to ProdRun.StopReason.
+const (
+	stopReasonCompleted     = "completed"
+	stopReasonTargetReached = "target_reached"
+	stopReasonCancelled     = "cancelled"
+	stopReasonError         = "error"
+	stopReasonUnclean       = "unclean_shutdown"
+)
+
+// defaultProdRunBudgetUSD is the fallback cost cap when the user/global config
+// does not specify one. It is a safety guard, not a product promise.
+const defaultProdRunBudgetUSD = 5.0
+
+// ProdRun is a queued / running / finished headless novel-generation job.
+type ProdRun struct {
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Profile          string    `json:"profile"` // repo-relative profile path, e.g. "profiles/foo.md"
+	Model            string    `json:"model,omitempty"`
+	Provider         string    `json:"provider,omitempty"`
+	TargetChapters   int       `json:"targetChapters"`
+	BudgetUSD        float64   `json:"budgetUsd"`
+	Status           string    `json:"status"`
+	StopReason       string    `json:"stopReason,omitempty"`
+	ChildPID         int       `json:"childPid,omitempty"`
+	CreatedAt        time.Time `json:"createdAt"`
+	StartedAt        time.Time `json:"startedAt,omitempty"`
+	StoppedAt        time.Time `json:"stoppedAt,omitempty"`
+	Chapters         int       `json:"chapters"`
+	Reviews          int       `json:"reviews"`
+	Rewrites         int       `json:"rewrites"`
+	CostUSD          float64   `json:"costUsd"`
+	LogPath          string    `json:"logPath,omitempty"`
+	PossiblyOrphaned bool      `json:"possiblyOrphaned"`
+}
+
+// Runtime returns the elapsed runtime for a started run.
+func (r *ProdRun) Runtime() time.Duration {
+	start := r.StartedAt
+	if start.IsZero() {
+		return 0
+	}
+	stop := r.StoppedAt
+	if stop.IsZero() {
+		stop = time.Now()
+	}
+	return stop.Sub(start)
+}
+
+// prodRunStore persists the production-run list to a single JSON file.
+type prodRunStore struct {
+	mu      sync.Mutex
+	path    string
+	jobsDir string
+	runs    map[string]*ProdRun
+	nextID  int
+}
+
+// newProdRunStore creates or loads the store at jobsDir/jobs.json.
+func newProdRunStore(jobsDir string) (*prodRunStore, error) {
+	ps := &prodRunStore{
+		path:    filepath.Join(jobsDir, "jobs.json"),
+		jobsDir: jobsDir,
+		runs:    make(map[string]*ProdRun),
+		nextID:  1,
+	}
+	if err := ps.load(); err != nil {
+		return nil, err
+	}
+	return ps, nil
+}
+
+// load reads the JSON store and marks any previously-running runs as unclean.
+// It is safe to call repeatedly but is only called once at construction.
+func (ps *prodRunStore) load() error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	data, err := os.ReadFile(ps.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read prodrun store: %w", err)
+	}
+
+	var list []*ProdRun
+	if err := json.Unmarshal(data, &list); err != nil {
+		return fmt.Errorf("parse prodrun store: %w", err)
+	}
+
+	max := 0
+	for _, r := range list {
+		ps.runs[r.ID] = r
+		if n, ok := parseRunSeq(r.ID); ok && n > max {
+			max = n
+		}
+		if r.Status == prodRunRunning || r.Status == prodRunPaused {
+			r.Status = prodRunFailed
+			r.StopReason = stopReasonUnclean
+			r.PossiblyOrphaned = true
+			r.StoppedAt = time.Now()
+		}
+	}
+	ps.nextID = max + 1
+	// Persist the unclean-shutdown recovery so the UI sees it after restart.
+	return ps.saveLocked()
+}
+
+func parseRunSeq(id string) (int, bool) {
+	prefix := "run-"
+	if !strings.HasPrefix(id, prefix) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(id[len(prefix):])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func (ps *prodRunStore) save() error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	return ps.saveLocked()
+}
+
+func (ps *prodRunStore) saveLocked() error {
+	if err := os.MkdirAll(ps.jobsDir, 0o755); err != nil {
+		return fmt.Errorf("create jobs dir: %w", err)
+	}
+	list := ps.listLocked()
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal prodrun store: %w", err)
+	}
+	tmp := ps.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("write prodrun store tmp: %w", err)
+	}
+	return os.Rename(tmp, ps.path)
+}
+
+func (ps *prodRunStore) create(name, profile, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	if targetChapters <= 0 {
+		targetChapters = 30
+	}
+	if budgetUSD <= 0 {
+		budgetUSD = defaultProdRunBudgetUSD
+	}
+
+	r := &ProdRun{
+		ID:             fmt.Sprintf("run-%03d", ps.nextID),
+		Name:           strings.TrimSpace(name),
+		Profile:        profile,
+		Model:          model,
+		Provider:       provider,
+		TargetChapters: targetChapters,
+		BudgetUSD:      budgetUSD,
+		Status:         prodRunQueued,
+		CreatedAt:      time.Now(),
+	}
+	ps.nextID++
+	ps.runs[r.ID] = r
+	if err := ps.saveLocked(); err != nil {
+		return nil, err
+	}
+	cp := *r
+	return &cp, nil
+}
+
+func (ps *prodRunStore) get(id string) *ProdRun {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	r := ps.runs[id]
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	return &cp
+}
+
+func (ps *prodRunStore) list() []*ProdRun {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	return ps.listLocked()
+}
+
+func (ps *prodRunStore) listLocked() []*ProdRun {
+	list := make([]*ProdRun, 0, len(ps.runs))
+	for _, r := range ps.runs {
+		cp := *r
+		list = append(list, &cp)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].CreatedAt.Before(list[j].CreatedAt)
+	})
+	return list
+}
+
+// update calls fn with the run locked, persists the store, and returns a snapshot.
+// The underlying run is mutated even if persistence fails, so the in-memory state
+// does not get stuck.
+func (ps *prodRunStore) update(id string, fn func(*ProdRun)) (*ProdRun, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	r, ok := ps.runs[id]
+	if !ok {
+		return nil, fmt.Errorf("run %q not found", id)
+	}
+	fn(r)
+	cp := *r
+	return &cp, ps.saveLocked()
+}
+
+// runDir returns the per-run working directory.
+func (ps *prodRunStore) runDir(id string) string {
+	return filepath.Join(ps.jobsDir, id)
+}

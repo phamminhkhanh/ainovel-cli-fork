@@ -54,6 +54,7 @@ function switchTab(name) {
   if (name === 'outline') loadOutlineTab();
   if (name === 'world') loadWorldTab();
   if (name === 'review') loadReviewTab();
+  if (name === 'production' && typeof loadProductionTab === 'function') loadProductionTab();
 }
 
 function focusStreamTab() {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"github.com/voocel/ainovel-cli/assets"
@@ -73,7 +74,24 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	ask := newAskBridge(h)
 	eng.AskUser().SetHandler(ask.handle)
 
-	srv := &server{eng: eng, store: store.NewStore(eng.Dir()), hub: h, ask: ask, ctx: ctx, addr: addr}
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	binPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate executable: %w", err)
+	}
+	jobsDir := filepath.Join(filepath.Dir(eng.Dir()), "jobs")
+	prodRunMgr, err := newProdRunManager(jobsDir, binPath, repoRoot, cfg)
+	if err != nil {
+		return fmt.Errorf("init production cockpit: %w", err)
+	}
+
+	srv := &server{
+		eng: eng, store: store.NewStore(eng.Dir()), hub: h, ask: ask, ctx: ctx, addr: addr,
+		cfg: cfg, repoRoot: repoRoot, prodRunManager: prodRunMgr,
+	}
 	httpSrv := &http.Server{Addr: addr, Handler: srv.mux()}
 
 	errc := make(chan error, 1)

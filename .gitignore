@@ -39,6 +39,16 @@ dist/
 release-notes.md
 /ainovel-cli
 
+# Local user-created novel-generation profiles
+profiles/
+
+# Local spike-test artifacts (binary ignored by *.exe)
+spike-test/output/
+spike-test/run-*.txt
+spike-test/spike-measurement.md
+spike-test/spike-verdict.md
+spike-reports/
+
 tasks
 refer/
 output*
@@ -49,3 +59,4 @@ plans/*
 # MyNovel analyzer output (timestamped, regenerated on each run)
 mynovel_*.json
 mynovel_*.txt
+.kimchi/*

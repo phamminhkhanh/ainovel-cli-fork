@@ -228,7 +228,8 @@ func TestEmbeddedHTMLScriptOrderChaptersBeforeDashboard(t *testing.T) {
 	chapIdx := strings.Index(text, "/app-chapters.js")
 	dashIdx := strings.Index(text, "/app-dashboard.js")
 	workIdx := strings.Index(text, "/app-workspace.js")
-	if chapIdx < 0 || dashIdx < 0 || workIdx < 0 {
+	prodIdx := strings.Index(text, "/app-production.js")
+	if chapIdx < 0 || dashIdx < 0 || workIdx < 0 || prodIdx < 0 {
 		t.Fatal("missing script references")
 	}
 	if workIdx >= chapIdx {
@@ -236,6 +237,9 @@ func TestEmbeddedHTMLScriptOrderChaptersBeforeDashboard(t *testing.T) {
 	}
 	if chapIdx >= dashIdx {
 		t.Fatal("app-chapters.js must load before app-dashboard.js (renderChapterList dependency)")
+	}
+	if prodIdx >= workIdx {
+		t.Fatal("app-production.js must load before app-workspace.js (loadProductionTab dependency)")
 	}
 }
 
@@ -254,6 +258,43 @@ func TestEmbeddedHTMLBootCriticalSelectors(t *testing.T) {
 	} {
 		if !strings.Contains(text, `id="`+id+`"`) {
 			t.Fatalf("index.html missing boot-critical selector #%s", id)
+		}
+	}
+}
+
+func TestEmbeddedHTMLHasProductionTabAndScript(t *testing.T) {
+	html, err := assetFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read embedded html: %v", err)
+	}
+	text := string(html)
+	for _, want := range []string{
+		`data-tab="production"`,
+		`id="tab-production"`,
+		`/app-production.js`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("index.html missing production tab element %q", want)
+		}
+	}
+}
+
+func TestEmbeddedJSProductionHooksExist(t *testing.T) {
+	js, err := assetFS.ReadFile("assets/app-production.js")
+	if err != nil {
+		t.Fatalf("read embedded production js: %v", err)
+	}
+	text := string(js)
+	for _, want := range []string{
+		"function renderProductionTab(",
+		"function loadProductionTab(",
+		"/api/profiles",
+		"/api/prodruns",
+		"/api/prodruns/",
+		"export.txt",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("app-production.js missing hook or endpoint %q", want)
 		}
 	}
 }

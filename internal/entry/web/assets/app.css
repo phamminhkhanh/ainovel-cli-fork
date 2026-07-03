@@ -810,3 +810,93 @@ select:focus { outline: none; border-color: var(--color-accent); }
   border-radius: 3px; color: var(--color-accent);
 }
 
+/* ============================================================
+   Production Cockpit (Sản xuất) tab.
+   ============================================================ */
+.production-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: var(--space-3);
+  height: 100%;
+  overflow: hidden;
+}
+.run-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow: hidden;
+  border-right: 1px solid var(--color-border);
+  padding-right: var(--space-3);
+}
+.run-list-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--space-2) var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+}
+.run-list-head h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-dim); }
+.run-list-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-1); }
+.run-item {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.run-item:hover, .run-item.selected { border-color: var(--color-accent); background: var(--color-surface-2); }
+.run-item-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.run-item-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-item-meta { font-size: 12px; color: var(--color-text-faint); margin-top: var(--space-1); }
+
+.run-badge {
+  font-size: 10px; padding: 2px var(--space-2); border-radius: var(--radius-sm);
+  background: var(--color-surface-2); color: var(--color-text-dim);
+  text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
+}
+.run-badge-queued { background: var(--color-text-faint); color: var(--color-bg); }
+.run-badge-running { background: var(--color-running); color: var(--color-bg); }
+.run-badge-paused { background: var(--color-warn); color: var(--color-bg); }
+.run-badge-completed { background: var(--color-success); color: var(--color-bg); }
+.run-badge-failed, .run-badge-cancelled { background: var(--color-danger); color: var(--color-bg); }
+
+.run-detail { overflow-y: auto; }
+.run-detail-card {
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-md); padding: var(--space-4);
+  display: flex; flex-direction: column; gap: var(--space-3);
+}
+.run-detail-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.run-detail-head h2 { margin: 0; font-size: 16px; }
+.run-detail-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--space-2);
+}
+.stat {
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-faint); }
+.stat-value { font-size: 14px; font-variant-numeric: tabular-nums; }
+.run-detail-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.run-log {
+  max-height: 320px; overflow-y: auto;
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: var(--space-3);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+}
+.run-pause-notice {
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+  background: var(--color-surface-2); border: 1px solid var(--color-warn); color: var(--color-warn);
+  font-size: 13px;
+}
+.run-orphan-warning {
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+  background: var(--color-surface-2); border: 1px solid var(--color-danger); color: var(--color-danger);
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .production-layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .run-list { max-height: 240px; border-right: none; padding-right: 0; }
+}
+
+
