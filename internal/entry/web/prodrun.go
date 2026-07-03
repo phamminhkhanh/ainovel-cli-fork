@@ -46,7 +46,7 @@ const defaultProdRunBudgetUSD = 5.0
 type ProdRun struct {
 	ID               string    `json:"id"`
 	Name             string    `json:"name"`
-	Profile          string    `json:"profile"` // repo-relative profile path, e.g. "profiles/foo.md"
+	Profile          string    `json:"profile"` // profile ref, e.g. "project/foo.md", "global/foo.md", or legacy "profiles/foo.md"
 	Model            string    `json:"model,omitempty"`
 	Provider         string    `json:"provider,omitempty"`
 	TargetChapters   int       `json:"targetChapters"`

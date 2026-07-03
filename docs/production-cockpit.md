@@ -41,7 +41,7 @@ Giao diện chia làm hai vùng:
 1. Nhấn **+ Tạo** ở góc trên bên trái.
 2. Điền form:
    - **Tên job**: tên gợi nhớ, ví dụ `Werewolf romantasy 50 chương`.
-   - **Profile**: chọn profile có sẵn trong `~/.ainovel/profiles/`.
+   - **Profile**: chọn profile tạo truyện từ `./.ainovel/profiles/`, `~/.ainovel/profiles/`, hoặc legacy `./profiles/`. Xem mục [Profile là gì](#profile-là-gì) bên dưới.
    - **Model (tùy chọn)**: ghi đè model, ví dụ `gpt-4o`.
    - **Provider (tùy chọn)**: ghi đè provider, ví dụ `openai`.
    - **Số chương mục tiêu**: số chương tối đa muốn chạy.
@@ -127,3 +127,110 @@ Khi job đã có ít nhất một chương hoàn thành:
 - Lưu ý merge upstream: [`04-LUU-Y-MERGE-UPSTREAM.md`](04-LUU-Y-MERGE-UPSTREAM.md)
 - Code backend: `internal/entry/web/prodrun*.go`
 - Code frontend: `internal/entry/web/assets/app-production.js`
+
+---
+
+## Profile là gì
+
+**Profile = file `.md` chứa "công thức" (prompt) để tạo 1 cuốn sách mới.** Về bản chất, nó chính là **prompt** mà bạn truyền vào `--prompt-file` khi chạy headless. Nó là **đầu vào duy nhất** của một job Sản xuất, quyết định thể loại, nội dung, quy mô.
+
+### Nằm ở đâu
+
+Production Cockpit đọc profile theo 3 nguồn:
+
+| Ưu tiên | Nguồn | Dùng khi nào | API value |
+|---|---|---|---|
+| 1 | `./.ainovel/profiles/` | Profile riêng của project hiện tại | `project/foo.md` |
+| 2 | `~/.ainovel/profiles/` | Profile cá nhân dùng lại giữa nhiều project | `global/foo.md` |
+| 3 | `./profiles/` | Legacy/sample cũ, vẫn hỗ trợ nhưng không khuyến nghị | `legacy/foo.md` hoặc old `profiles/foo.md` |
+
+Ghi chú:
+
+- `./.ainovel/` là thư mục bạn chạy `ainovel-cli --web`; giống project config.
+- `~/.ainovel/` là thư mục home của máy (`/Users/.../.ainovel` trên macOS, `C:\Users\...\.ainovel` trên Windows).
+- Có thể đặt profile trong thư mục con, ví dụ `~/.ainovel/profiles/romance/werewolf-50ch.md`.
+- Chỉ nhận file `.md`; path traversal bị chặn.
+
+### Cấu trúc
+
+Profile là file `.md` thuần, **không có YAML frontmatter**. Nội dung là **prompt tự nhiên** (câu yêu cầu). Engine đọc nó và chạy `StartPrepared` — giống hệt bạn gõ prompt vào ô input "Bắt đầu" của Web UI.
+
+### Đặc điểm
+
+- **Override model/provider** (tùy chọn) — `ProdRun.Model`/`ProdRun.Provider` đè lên `config.json` của job.
+- **Override budget** — `BudgetUSD` (default $5, `HardStop: true`).
+- **Copy rules** — `~/.ainovel/rules/*.md` (lang-vi.md...) được copy vào runDir → engine tự nạp rule tiếng Việt.
+- **Không có override** cho `style` (fantasy/romance/suspense) — nó phải nằm trong prompt.
+
+### Ví dụ
+
+Tạo file `~/.ainovel/profiles/werewolf-50ch.md` hoặc `./.ainovel/profiles/werewolf-50ch.md`:
+
+```markdown
+Viết một cuốn truyện werewolf romantasy 50 chương, tiếng Việt.
+Bối cảnh: rừng Alpine, mate bond.
+Nhân vật chính: cô gái con người, có thể biến hình.
+Hướng kết: happy end.
+```
+
+→ Trong Web UI, chọn profile này → tạo job → chạy → sách mới.
+
+---
+
+## Config override
+
+Config cũng dùng mô hình `.ainovel` 2 lớp. Engine đọc theo thứ tự dưới đây; cái sau ghi đè cái trước:
+
+| Ưu tiên | File | Ý nghĩa |
+|---|---|---|
+| 1 | `~/.ainovel/config.json` | Global config mặc định: provider, API key, model |
+| 2 | `./.ainovel/config.json` | Project override cho thư mục đang chạy |
+| 3 | `--config path` | Override cao nhất khi chạy CLI |
+
+`./.ainovel/` là optional; nếu bạn chưa tạo thì engine chỉ dùng global config.
+
+---
+
+## Sản xuất vs TUI/Web UI
+
+Sản xuất = cùng engine, không có gì bị skip. Sản xuất chỉ thiếu **Steer** (can thiệp) và **Cocreate** (chat) vì headless không có ô input.
+
+| Tính năng | Sản xuất | TUI | Web UI |
+|---|:---:|:---:|:---:|
+| Tạo nhân vật | ✅ | ✅ | ✅ |
+| Xây thế giới | ✅ | ✅ | ✅ |
+| Review 7 chiều | ✅ | ✅ | ✅ |
+| Quy hoạch cuốn chiếu | ✅ | ✅ | ✅ |
+| Khôi phục checkpoint | ✅ | ✅ | ✅ |
+| Can thiệp realtime (Steer) | ❌ | ✅ | ✅ |
+| Cocreate (đồng sáng tác) | ❌ | ✅ | ✅ |
+| Xuất TXT | ✅ (server-side) | ✅ (eng.Export) | ✅ |
+| Xuất EPUB | ❌ | ✅ | ✅ |
+| Đọc chương | ✅ (log) | ✅ (stream) | ✅ (stream + tabs) |
+
+### Cấu trúc thư mục — 2 thư mục tách biệt
+
+```
+output/
+├── novel/                          ← SÁCH THỦ CÔNG (workspace chính, eng.Dir())
+│   ├── chapters/01.md, 02.md ...    ← bạn đã viết bằng mode thủ công
+│   └── meta/progress.json
+│
+└── jobs/                           ← SẢN XUẤT (jobsDir)
+    ├── jobs.json                   ← danh sách ProdRun
+    └── run-001/                    ← runDir của job
+        ├── profile.md              ← copy từ project/global/legacy profile
+        ├── .ainovel/config.json    ← override config
+        ├── .ainovel/rules/         ← copy từ ~/.ainovel/rules/
+        ├── run.log
+        └── output/novel/           ← SÁCH MỚI CỦA JOB (tách biệt)
+            ├── chapters/01.md ...  ← chương mới, không liên quan sách thủ công
+            └── meta/progress.json
+```
+
+### Lưu ý quan trọng
+
+- **Mỗi job = 1 cuốn sách mới** — vì `--prompt-file` luôn truyền prompt → engine luôn `StartPrepared` (sách mới), không bao giờ `Resume` (tiếp tục dở).
+- **Sách thủ công không bị đụng** — vì job chạy ở `output/jobs/run-XXX/`, tách biệt với workspace chính `output/novel/`.
+- **Sync ngược về workspace** — nếu workspace đã có chương, sync bị chặn (409). Cần `force: true` → **xóa sạch** chương thủ công + toàn bộ meta, rồi copy sách của job vào. **Không có merge** — đây là overwrite.
+- **Crash Web UI** → run đang `running` bị `failed` + `PossiblyOrphaned` → kiểm tra PID cũ và kill tay nếu cần.

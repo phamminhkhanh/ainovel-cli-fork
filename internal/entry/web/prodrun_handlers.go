@@ -10,7 +10,8 @@ import (
 	"strings"
 )
 
-// handleProfilesList returns the markdown profile files under {repoRoot}/profiles.
+// handleProfilesList returns markdown production profiles from project, global,
+// and legacy locations.
 func (s *server) handleProfilesList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
@@ -25,49 +26,21 @@ func (s *server) handleProfilesList(w http.ResponseWriter, r *http.Request) {
 }
 
 type profileItem struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Source string `json:"source"`
 }
 
 func (s *server) listProfiles() ([]profileItem, error) {
-	dir := filepath.Join(s.repoRoot, "profiles")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []profileItem{}, nil
-		}
-		return nil, err
-	}
-	out := make([]profileItem, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".md") {
-			continue
-		}
-		out = append(out, profileItem{Name: name, Path: filepath.Join("profiles", name)})
-	}
-	return out, nil
+	return listProfileItems(s.repoRoot)
 }
 
 func (s *server) validateProfilePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("profile is required")
 	}
-	abs := filepath.Join(s.repoRoot, path)
-	clean := filepath.Clean(abs)
-	base := filepath.Clean(filepath.Join(s.repoRoot, "profiles"))
-	cleanLower := strings.ToLower(clean)
-	baseLower := strings.ToLower(base)
-	if !strings.HasPrefix(cleanLower, baseLower+string(filepath.Separator)) && cleanLower != baseLower {
-		return fmt.Errorf("profile path outside profiles directory")
-	}
-	if _, err := os.Stat(clean); err != nil {
-		return fmt.Errorf("profile not found: %w", err)
-	}
-	return nil
+	_, err := resolveExistingProfilePath(path, s.repoRoot)
+	return err
 }
 
 // handleProdRunsList returns all production runs.

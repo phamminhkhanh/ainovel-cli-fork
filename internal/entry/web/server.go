@@ -23,7 +23,7 @@ type server struct {
 	addr  string           // 监听地址，用于 Host 头校验（仅回环绑定时加锁）
 	cfg   bootstrap.Config // web 入口接收的配置，用于构造子运行覆盖配置
 
-	repoRoot       string          // 仓库根目录，用于解析 profiles/ 路径
+	repoRoot       string          // 当前工作目录，用于解析 project/legacy production profiles
 	prodRunManager *prodRunManager // Production Cockpit 运行管理器
 
 	jobMu      sync.Mutex         // 串行化后台任务（import/simulate/importsim）

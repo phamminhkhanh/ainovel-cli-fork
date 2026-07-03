@@ -311,7 +311,10 @@ func prepareRunDir(runDir, repoRoot string, r *ProdRun, baseCfg bootstrap.Config
 		return err
 	}
 
-	srcProfile := filepath.Join(repoRoot, r.Profile)
+	srcProfile, err := resolveExistingProfilePath(r.Profile, repoRoot)
+	if err != nil {
+		return fmt.Errorf("resolve profile: %w", err)
+	}
 	dstProfile := filepath.Join(runDir, "profile.md")
 	if err := copyFile(dstProfile, srcProfile); err != nil {
 		return fmt.Errorf("copy profile: %w", err)

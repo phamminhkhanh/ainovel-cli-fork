@@ -15,14 +15,21 @@ import (
 
 func newTestServerForProdruns(t *testing.T) (*server, string) {
 	t.Helper()
+	homeDir := t.TempDir()
+	setTestHome(t, homeDir)
 	repoRoot := t.TempDir()
 	jobsDir := t.TempDir()
-	profileDir := filepath.Join(repoRoot, "profiles")
-	if err := os.MkdirAll(profileDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(profileDir, "spike.md"), []byte("# prompt"), 0o644); err != nil {
-		t.Fatal(err)
+	for _, dir := range []string{
+		filepath.Join(repoRoot, ".ainovel", "profiles"),
+		filepath.Join(homeDir, ".ainovel", "profiles"),
+		filepath.Join(repoRoot, "profiles"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "spike.md"), []byte("# prompt"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	mgr, err := newProdRunManager(jobsDir, os.Args[0], repoRoot, t.TempDir(), bootstrap.Config{})
@@ -46,8 +53,18 @@ func TestHandleProfilesList(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &profiles); err != nil {
 		t.Fatal(err)
 	}
-	if len(profiles) != 1 || profiles[0].Name != "spike.md" {
+	if len(profiles) != 3 {
 		t.Fatalf("unexpected profiles: %+v", profiles)
+	}
+	want := []profileItem{
+		{Name: "spike.md", Path: "project/spike.md", Source: "project"},
+		{Name: "spike.md", Path: "global/spike.md", Source: "global"},
+		{Name: "spike.md", Path: "legacy/spike.md", Source: "legacy"},
+	}
+	for i := range want {
+		if profiles[i] != want[i] {
+			t.Fatalf("profile[%d] = %+v, want %+v", i, profiles[i], want[i])
+		}
 	}
 }
 
@@ -62,8 +79,12 @@ func TestHandleProdRunCreateValidation(t *testing.T) {
 		{"missing name", `{"profile":"profiles/spike.md"}`, http.StatusBadRequest},
 		{"missing profile", `{"name":"x"}`, http.StatusBadRequest},
 		{"path traversal", `{"name":"x","profile":"../etc/passwd"}`, http.StatusBadRequest},
+		{"project traversal", `{"name":"x","profile":"project/../etc/passwd"}`, http.StatusBadRequest},
 		{"outside profiles", `{"name":"x","profile":"other/file.md"}`, http.StatusBadRequest},
-		{"valid", `{"name":"x","profile":"profiles/spike.md","targetChapters":2}`, http.StatusCreated},
+		{"valid project", `{"name":"x","profile":"project/spike.md","targetChapters":2}`, http.StatusCreated},
+		{"valid global", `{"name":"x","profile":"global/spike.md","targetChapters":2}`, http.StatusCreated},
+		{"valid legacy", `{"name":"x","profile":"legacy/spike.md","targetChapters":2}`, http.StatusCreated},
+		{"valid old legacy", `{"name":"x","profile":"profiles/spike.md","targetChapters":2}`, http.StatusCreated},
 	}
 
 	for _, tc := range cases {

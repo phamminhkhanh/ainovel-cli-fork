@@ -29,7 +29,7 @@ function renderProductionTab() {
           <header class="modal-head"><h2 id="newRunTitle">Tạo job sản xuất</h2></header>
           <div class="modal-body">
             <div class="field"><label for="newRunName">Tên job</label><input type="text" id="newRunName" placeholder="vd: Werewolf romantasy 50 chương"></div>
-            <div class="field"><label for="newRunProfile">Profile</label><select id="newRunProfile"><option value="">Đang tải…</option></select></div>
+            <div class="field"><label for="newRunProfile">Profile tạo truyện</label><select id="newRunProfile"><option value="">Đang tải…</option></select><small class="muted">File .md trong ./.ainovel/profiles/ hoặc ~/.ainovel/profiles/.</small></div>
             <div class="field-row">
               <div class="field"><label for="newRunModel">Model (tùy chọn)</label><input type="text" id="newRunModel" placeholder="vd: gpt-4o"></div>
               <div class="field"><label for="newRunProvider">Provider (tùy chọn)</label><input type="text" id="newRunProvider" placeholder="vd: openai"></div>
@@ -84,11 +84,23 @@ function openNewRunModal() {
 }
 function closeNewRunModal() { $('#newRunOverlay').hidden = true; }
 
+function productionProfileLabel(profile) {
+  const source = profile.source === 'project' ? 'Dự án' : profile.source === 'global' ? 'Global' : profile.source === 'legacy' ? 'Legacy' : 'Profile';
+  return `${source} · ${profile.name || profile.path || ''}`;
+}
+
+function renderProductionProfileOptions(profiles) {
+  if (!profiles.length) {
+    return '<option value="">Chưa có profile (.md)</option>';
+  }
+  return profiles.map((p) => `<option value="${escapeHtml(p.path)}">${escapeHtml(productionProfileLabel(p))}</option>`).join('');
+}
+
 async function populateProfileSelect() {
   const sel = $('#newRunProfile');
   if (!sel || productionProfilesCache.length) {
     if (sel) {
-      sel.innerHTML = productionProfilesCache.map((p) => `<option value="${escapeHtml(p.path)}">${escapeHtml(p.name)}</option>`).join('');
+      sel.innerHTML = renderProductionProfileOptions(productionProfilesCache);
     }
     return;
   }
@@ -96,7 +108,7 @@ async function populateProfileSelect() {
     const res = await fetch('/api/profiles');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     productionProfilesCache = await res.json();
-    sel.innerHTML = productionProfilesCache.map((p) => `<option value="${escapeHtml(p.path)}">${escapeHtml(p.name)}</option>`).join('');
+    sel.innerHTML = renderProductionProfileOptions(productionProfilesCache);
   } catch (e) {
     sel.innerHTML = '<option value="">Lỗi tải profile</option>';
     toast('Lỗi tải profile: ' + e, 'error');

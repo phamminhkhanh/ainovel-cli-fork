@@ -65,7 +65,7 @@ go test ./internal/entry/web/...
 
 **Ngày thêm:** 2026-07-03  
 **Files mới toàn bộ trong `internal/entry/web/`:**
-- `prodrun.go`, `prodrun_runner.go`, `prodrun_handlers.go`, `prodrun_export.go`
+- `prodrun.go`, `prodrun_runner.go`, `prodrun_handlers.go`, `prodrun_profiles.go`, `prodrun_export.go`
 - `prodrun*_test.go`
 - `assets/app-production.js`
 - Cập nhật `assets/index.html`, `assets/app-workspace.js`, `assets/app-i18n.js`, `assets/app.css`, `embed.go`, `assets_test.go`
@@ -82,8 +82,28 @@ go test ./internal/entry/web/...
 | **`meta/progress.json` schema** | Runner đọc field `completed_chapters` để biết khi nào đạt `targetChapters`. Nếu upstream đổi tên field hoặc format, cần cập nhật `readCompletedChapters`. |
 | **`reviews/*.json` shape** | Runner đếm rewrites qua `verdict == "rewrite"`. Nếu upstream đổi cấu trúc review JSON, cần cập nhật `countReviewsAndRewrites`. |
 | **Engine output path** | Cockpit dựa vào cwd-based output: mỗi run spawn `ainovel-cli --headless` với `Cmd.Dir = {runDir}`, nên output rơi vào `{runDir}/output/novel`. Nếu upstream thay đổi `bootstrap.Config.OutputDir` / `FillDefaults()` behavior, phải kiểm tra lại đường dẫn chapter/log/meta. |
+| **Profile resolver** | Cockpit không còn chỉ đọc `./profiles/`. Nguồn chuẩn: `./.ainovel/profiles/` (`project/foo.md`) → `~/.ainovel/profiles/` (`global/foo.md`) → legacy `./profiles/` (`legacy/foo.md` / old `profiles/foo.md`). Sau merge phải giữ resolver chung trong `prodrun_profiles.go`; không quay lại `filepath.Join(repoRoot, profile)`. |
 | **Pause point v0.6.1** | Cockpit chỉ đọc pause marker từ `run.log` (read-only). Nếu upstream cung cấp API pause tốt hơn (ví dụ snapshot pause state hoặc RPC), có thể thay thế polling log. |
 | **Windows file lock** | Export TXT của Cockpit là server-side concat, không dùng `os.Rename` nên không gặp lock của IDE/file watcher. Giữ behavior này; đừng chuyển sang gọi `s.eng.Export()` vì sẽ re-introduce Windows lock. |
+
+### Production profile path contract
+
+API `/api/profiles` trả:
+
+```json
+{ "name": "foo.md", "path": "project/foo.md", "source": "project" }
+```
+
+`ProdRun.Profile` lưu nguyên `path` này. Runner resolve lúc start, không resolve/copy tại create. Contract cần giữ:
+
+| Ref | Resolve tới | Ghi chú |
+|---|---|---|
+| `project/foo.md` | `./.ainovel/profiles/foo.md` | profile riêng project hiện tại |
+| `global/foo.md` | `~/.ainovel/profiles/foo.md` | profile dùng lại giữa project |
+| `legacy/foo.md` | `./profiles/foo.md` | legacy/sample |
+| `profiles/foo.md` | `./profiles/foo.md` | backward compat cho job cũ |
+
+Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, traversal, và symlink escape khỏi profile root.
 
 ---
 
@@ -99,6 +119,7 @@ go test ./internal/entry/web/...
 - [ ] Kiểm tra `assets/prompts/` có thay đổi gì không.
 - [ ] Rebuild binary nếu prompts/assets thay đổi.
 - [ ] Chạy smoke test 1 chapter nếu prompts thay đổi nhiều.
+- [ ] Với Production Cockpit: kiểm tra `/api/profiles` vẫn list `project/global/legacy`, tạo job từ ít nhất một profile và start được.
 
 ---
 
@@ -108,6 +129,7 @@ go test ./internal/entry/web/...
 |---------|------|------------|-----------------|
 | v0.6.1 | 2026-07-03 | Pause points + completion convergence | Rebuild binary; rerun spike test; update Web UI pause handling |
 | post-v0.6.1 (fork) | 2026-07-03 | Production Cockpit MVP (tab Sản xuất) | Rebuild binary; check `server.go`/`run.go` after upstream merge; verify `progress.json`/`reviews/*.json` schema |
+| post-v0.6.1 (fork) | 2026-07-04 | Production profile resolver standardized to `.ainovel` 2-layer model + legacy fallback | Verify `/api/profiles`, profile path validation, and `prepareRunDir` resolver after upstream merge |
 ---
 
 ## 6. Link
