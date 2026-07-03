@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+// Sentinel errors for production-run operations.
+var (
+	errDeleteRunNotFound = errors.New("run not found")
+	errDeleteRunActive   = errors.New("cannot delete an active run")
 )
 
 // Production-run lifecycle statuses.
@@ -241,7 +248,35 @@ func (ps *prodRunStore) update(id string, fn func(*ProdRun)) (*ProdRun, error) {
 	return &cp, ps.saveLocked()
 }
 
+// delete removes a terminal run from the store and optionally its run directory.
+func (ps *prodRunStore) delete(id string) error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if id == "" {
+		return fmt.Errorf("run id is empty")
+	}
+	if _, ok := ps.runs[id]; !ok {
+		return errDeleteRunNotFound
+	}
+	delete(ps.runs, id)
+	if err := ps.saveLocked(); err != nil {
+		return err
+	}
+	runDir := ps.runDirLocked(id)
+	if runDir == "" || runDir == ps.jobsDir || runDir == filepath.Dir(ps.jobsDir) {
+		return fmt.Errorf("invalid run directory %q", runDir)
+	}
+	return os.RemoveAll(runDir)
+}
+
+// runDirLocked returns the per-run working directory; caller must hold ps.mu.
+func (ps *prodRunStore) runDirLocked(id string) string {
+	return filepath.Join(ps.jobsDir, id)
+}
+
 // runDir returns the per-run working directory.
 func (ps *prodRunStore) runDir(id string) string {
-	return filepath.Join(ps.jobsDir, id)
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	return ps.runDirLocked(id)
 }

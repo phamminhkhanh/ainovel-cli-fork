@@ -154,6 +154,60 @@ func (s *server) handleProdRunStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.prodRunManager.Get(id))
 }
 
+// handleProdRunDelete removes a finished run and its run directory.
+func (s *server) handleProdRunDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.prodRunManager.Delete(id); err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, errDeleteRunNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, errDeleteRunActive):
+			status = http.StatusConflict
+		}
+		writeErr(w, status, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleProdRunSync copies a finished production run's output into the main
+// host workspace so the interactive UI can see it.
+func (s *server) handleProdRunSync(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	if s.eng.Snapshot().IsRunning {
+		writeErr(w, http.StatusConflict, fmt.Errorf("host is running; stop before syncing"))
+		return
+	}
+	id := r.PathValue("id")
+	var body struct {
+		Force bool `json:"force"`
+	}
+	// Body is optional; ignore parse errors and treat as no-force.
+	_ = decodeJSON(r, &body)
+	res, err := s.prodRunManager.Sync(id, syncOptions{Force: body.Force})
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, errSyncRunNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, errSyncRunActive), errors.Is(err, errSyncHostHasProgress):
+			status = http.StatusConflict
+		case errors.Is(err, errSyncRunNoOutput):
+			status = http.StatusBadRequest
+		}
+		writeErr(w, status, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 // handleProdRunLog returns the tail of the run log as text/plain.
 func (s *server) handleProdRunLog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

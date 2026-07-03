@@ -71,7 +71,9 @@ function bindProductionEvents() {
     if (!id) return;
     if (btn.dataset.action === 'start') startProductionRun(id);
     else if (btn.dataset.action === 'stop') stopProductionRun(id);
+    else if (btn.dataset.action === 'delete') deleteProductionRun(id);
     else if (btn.dataset.action === 'export') exportProductionRun(id);
+    else if (btn.dataset.action === 'sync') syncProductionRun(id);
   });
 }
 
@@ -173,6 +175,23 @@ async function stopProductionRun(id) {
   }
 }
 
+async function deleteProductionRun(id) {
+  if (!confirm('Xóa job này? Thư mục run và log sẽ bị xóa.')) return;
+  try {
+    const r = await fetch(`/api/prodruns/${id}`, { method: 'DELETE' });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      toast(data.error || ('HTTP ' + r.status), 'error');
+      return;
+    }
+    if (productionSelectedRunId === id) productionSelectedRunId = null;
+    toast('Đã xóa job', 'ok');
+    await loadProductionData();
+  } catch (e) {
+    toast('Lỗi xóa job: ' + e, 'error');
+  }
+}
+
 async function exportProductionRun(id) {
   const res = await post(`/api/prodruns/${id}/export`, { format: 'txt' });
   if (!res) return;
@@ -184,6 +203,41 @@ async function exportProductionRun(id) {
   a.click();
   a.remove();
   toast('Đã xuất TXT', 'ok');
+}
+
+async function syncProductionRun(id, force) {
+  const msg = force
+    ? 'Workspace chính đã có dữ liệu. Ghi đè toàn bộ bằng kết quả job này?'
+    : 'Đồng bộ kết quả job vào workspace chính? Dữ liệu workspace hiện tại phải trống.';
+  if (!confirm(msg)) return;
+  try {
+    const r = await fetch(`/api/prodruns/${id}/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: !!force }),
+    });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 409 && data.error && data.error.includes('already has progress') && !force) {
+        syncProductionRun(id, true);
+        return;
+      }
+      toast(data.error || ('HTTP ' + r.status), 'error');
+      return;
+    }
+    const data = await r.json().catch(() => ({}));
+    toast('Đã đồng bộ ' + (data.copiedFiles || 0) + ' tệp vào workspace', 'ok');
+    await loadProductionData();
+    // Refresh the main workspace sidebar/tabs immediately.
+    try {
+      const snap = await fetch('/api/snapshot').then((r) => r.json());
+      if (typeof renderSnapshot === 'function') renderSnapshot(snap);
+    } catch (e) {
+      // Ignore refresh errors; the SSE poll will catch up.
+    }
+  } catch (e) {
+    toast('Lỗi đồng bộ: ' + e, 'error');
+  }
 }
 
 function renderProductionRuns() {
@@ -231,6 +285,8 @@ async function renderProductionDetail(run) {
   const canStart = run.status === 'queued';
   const canStop = run.status === 'running' || run.status === 'paused';
   const canExport = run.chapters > 0;
+  const canDelete = run.status !== 'running' && run.status !== 'paused';
+  const canSync = run.chapters > 0 && run.status !== 'running' && run.status !== 'paused';
 
   detail.innerHTML = `
     <div class="run-detail-card">
@@ -252,6 +308,8 @@ async function renderProductionDetail(run) {
         <button class="btn primary" data-action="start" data-run-id="${escapeHtml(run.id)}" ${!canStart ? 'disabled' : ''}>▶ Bắt đầu</button>
         <button class="btn danger" data-action="stop" data-run-id="${escapeHtml(run.id)}" ${!canStop ? 'disabled' : ''}>■ Dừng</button>
         <button class="btn" data-action="export" data-run-id="${escapeHtml(run.id)}" ${!canExport ? 'disabled' : ''}>⬇ Xuất TXT</button>
+        <button class="btn" data-action="sync" data-run-id="${escapeHtml(run.id)}" ${!canSync ? 'disabled' : ''}>🔄 Đồng bộ</button>
+        <button class="btn danger" data-action="delete" data-run-id="${escapeHtml(run.id)}" ${!canDelete ? 'disabled' : ''}>🗑 Xóa</button>
       </div>
       ${run.possiblyOrphaned ? '<div class="run-orphan-warning">⚠ Job này có thể còn tiến trình con mồ côi. Kiểm tra PID ' + (run.childPid || '—') + '.</div>' : ''}
       <h4>Nhật ký</h4>

@@ -488,17 +488,18 @@ func copyDirFiles(dstDir, srcDir, suffix string) error {
 // ── prodRunManager wires store + runner for handlers ──
 
 type prodRunManager struct {
-	store  *prodRunStore
-	runner *prodRunRunner
+	store   *prodRunStore
+	runner  *prodRunRunner
+	hostDir string // main workspace dir to sync production runs into
 }
 
-func newProdRunManager(jobsDir, binPath, repoRoot string, baseCfg bootstrap.Config) (*prodRunManager, error) {
+func newProdRunManager(jobsDir, binPath, repoRoot, hostDir string, baseCfg bootstrap.Config) (*prodRunManager, error) {
 	store, err := newProdRunStore(jobsDir)
 	if err != nil {
 		return nil, err
 	}
 	runner := newProdRunRunner(store, binPath, repoRoot, baseCfg)
-	return &prodRunManager{store: store, runner: runner}, nil
+	return &prodRunManager{store: store, runner: runner, hostDir: hostDir}, nil
 }
 
 func (pm *prodRunManager) Create(name, profile, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
@@ -510,6 +511,30 @@ func (pm *prodRunManager) List() []*ProdRun        { return pm.store.list() }
 func (pm *prodRunManager) Start(id string) error   { return pm.runner.start(id) }
 func (pm *prodRunManager) Stop(id string) error    { return pm.runner.stop(id) }
 func (pm *prodRunManager) RunDir(id string) string { return pm.store.runDir(id) }
+
+func (pm *prodRunManager) Delete(id string) error {
+	r := pm.store.get(id)
+	if r == nil {
+		return errDeleteRunNotFound
+	}
+	if r.Status == prodRunRunning || r.Status == prodRunPaused {
+		return fmt.Errorf("%w (status=%s)", errDeleteRunActive, r.Status)
+	}
+	return pm.store.delete(id)
+}
+
+// Sync copies a finished production run's output into the main host workspace.
+func (pm *prodRunManager) Sync(id string, opts syncOptions) (*syncResult, error) {
+	r := pm.store.get(id)
+	if r == nil {
+		return nil, errSyncRunNotFound
+	}
+	if r.Status == prodRunRunning || r.Status == prodRunPaused {
+		return nil, fmt.Errorf("%w (status=%s)", errSyncRunActive, r.Status)
+	}
+	runOutDir := filepath.Join(pm.store.runDir(id), "output", "novel")
+	return syncRunOutputIntoHost(runOutDir, pm.hostDir, opts)
+}
 
 // ExportTXT concatenates the run's chapter files into a single TXT file.
 func (pm *prodRunManager) ExportTXT(id string) (string, error) {

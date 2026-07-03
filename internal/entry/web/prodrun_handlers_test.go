@@ -25,7 +25,7 @@ func newTestServerForProdruns(t *testing.T) (*server, string) {
 		t.Fatal(err)
 	}
 
-	mgr, err := newProdRunManager(jobsDir, os.Args[0], repoRoot, bootstrap.Config{})
+	mgr, err := newProdRunManager(jobsDir, os.Args[0], repoRoot, t.TempDir(), bootstrap.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

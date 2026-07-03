@@ -83,7 +83,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 		return fmt.Errorf("locate executable: %w", err)
 	}
 	jobsDir := filepath.Join(filepath.Dir(eng.Dir()), "jobs")
-	prodRunMgr, err := newProdRunManager(jobsDir, binPath, repoRoot, cfg)
+	prodRunMgr, err := newProdRunManager(jobsDir, binPath, repoRoot, eng.Dir(), cfg)
 	if err != nil {
 		return fmt.Errorf("init production cockpit: %w", err)
 	}
