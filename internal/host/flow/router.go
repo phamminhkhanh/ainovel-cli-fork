@@ -50,7 +50,7 @@ type State struct {
 //  1. Phase=Complete        → nil（LLM 输出总结）
 //  2. Phase!=Writing        → nil（LLM 裁定规划师选型 / 规划补齐）
 //  3. PendingRewrites 非空  → writer 按队列重写/打磨
-//  4. Flow=Reviewing        → nil（editor 刚保存 review，verdict 分叉由工具层处理）
+//  4. Flow=Reviewing        → nil（dormant：当前无写入者，评审期 Flow 实为 writing）
 //  5. Flow=Steering         → nil（用户干预处理中）
 //  6. 弧末评审缺失           → editor(arc review)
 //  7. 弧末评审有但弧摘要缺失  → editor(arc summary)
@@ -90,7 +90,10 @@ func Route(s State) *Instruction {
 		}
 	}
 
-	// 4. 审阅中：save_review 刚落盘，verdict 升级/降级由工具层处理，路由不介入
+	// 4. 审阅中 → 交回 LLM。当前为 dormant 分支：save_review 只把 Flow 置为
+	//    writing/rewriting/polishing，无任何生产路径置 reviewing（评审期 Flow 实为 writing，
+	//    "评审先于续写"由 agentcore steering 优先级保证，不靠此分支）。保留以与 Steering
+	//    对称，并在未来 editor 评审期显式置 reviewing 时使路由让位于 LLM。
 	if p.Flow == domain.FlowReviewing {
 		return nil
 	}
@@ -131,8 +134,8 @@ func Route(s State) *Instruction {
 		case b.NeedsNewVolume:
 			return &Instruction{
 				Agent:  "architect_long",
-				Task:   "评估后调用 save_foundation type=append_volume（继续写）或 type=complete_book（全书结束）",
-				Reason: "卷末需决定追加新卷或结束全书",
+				Task:   "创建下一卷：按完结判定清单评估后调用 save_foundation——故事继续 → type=append_volume；故事接近终点 → type=append_volume 且卷 JSON 顶层带 \"final\": true（收官卷，整卷收线，写完自动完结）；全部完结条件当下已满足 → type=complete_book",
+				Reason: "卷末需决定追加新卷、收官卷或结束全书",
 			}
 		}
 	}

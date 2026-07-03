@@ -134,7 +134,7 @@ func renderOutlineCell(e host.OutlineSnapshot, snap host.UISnapshot, chNumW, tit
 }
 
 // truncateWidth 按"视觉宽度"截断（中文字符算 2 列），与 lipgloss.Width 同源。
-// 普通 truncate 按 rune 数算，对中文会截到双倍宽度，这里需要列对齐时不能用。
+// 不加省略号，供网格 cell 列对齐和 truncate 共用。
 func truncateWidth(s string, maxW int) string {
 	if lipgloss.Width(s) <= maxW {
 		return s
@@ -192,8 +192,7 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 		b.WriteString(panelTitleStyle.Render(":: 角色"))
 		b.WriteString("\n")
 		for _, c := range snap.Characters {
-			b.WriteString(cardContentStyle.Render("· " + truncate(c, contentW-2)))
-			b.WriteString("\n")
+			writeBulletWrapped(&b, c, contentW, cardContentStyle)
 		}
 		b.WriteString("\n")
 	}
@@ -205,8 +204,7 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 		b.WriteString(cardContentStyle.Render(truncate(fmt.Sprintf("已出场：%d 位", snap.SupportingCount), contentW)))
 		b.WriteString("\n")
 		for _, name := range snap.RecentSupporting {
-			b.WriteString(cardContentStyle.Render("· " + truncate(name, contentW-2)))
-			b.WriteString("\n")
+			writeBulletWrapped(&b, name, contentW, cardContentStyle)
 		}
 		b.WriteString("\n")
 	}
@@ -225,25 +223,44 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 	if snap.LastCommitSummary != "" {
 		b.WriteString(cardTitleStyle.Render("~ 最近提交 ~"))
 		b.WriteString("\n")
-		b.WriteString(cardContentStyle.Render(snap.LastCommitSummary))
-		b.WriteString("\n\n")
+		writeWrapped(&b, snap.LastCommitSummary, contentW, cardContentStyle)
+		b.WriteString("\n")
 	}
 
 	if snap.LastReviewSummary != "" {
 		b.WriteString(cardTitleStyle.Render("~ 最近审阅 ~"))
 		b.WriteString("\n")
-		b.WriteString(cardContentStyle.Render(snap.LastReviewSummary))
-		b.WriteString("\n\n")
+		writeWrapped(&b, snap.LastReviewSummary, contentW, cardContentStyle)
+		b.WriteString("\n")
 	}
 
 	if len(snap.RecentSummaries) > 0 {
 		b.WriteString(cardTitleStyle.Render("~ 摘要 ~"))
 		b.WriteString("\n")
 		for _, s := range snap.RecentSummaries {
-			b.WriteString(cardContentStyle.Render(truncate(s, contentW)))
-			b.WriteString("\n")
+			writeWrapped(&b, s, contentW, cardContentStyle)
 		}
 	}
 
 	return b.String()
+}
+
+// writeWrapped 按视觉宽度折行写入一段文本，每行独立渲染样式。
+func writeWrapped(b *strings.Builder, text string, contentW int, style lipgloss.Style) {
+	for _, line := range wrapStreamText(text, max(8, contentW)) {
+		b.WriteString(style.Render(line))
+		b.WriteString("\n")
+	}
+}
+
+// writeBulletWrapped 写入一个"· "条目：按视觉宽度折行，续行以两列空格悬挂缩进。
+func writeBulletWrapped(b *strings.Builder, text string, contentW int, style lipgloss.Style) {
+	for i, line := range wrapStreamText(text, max(8, contentW-2)) {
+		prefix := "· "
+		if i > 0 {
+			prefix = "  "
+		}
+		b.WriteString(style.Render(prefix + line))
+		b.WriteString("\n")
+	}
 }

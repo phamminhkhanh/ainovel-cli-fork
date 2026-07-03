@@ -143,6 +143,17 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 
 Signals：`PendingCommit`（commit 中断恢复）/ `PendingSteer`（停机期间用户干预）。启动/恢复时读，运行时不读。
 
+### 4.4 分层大纲与完本收敛（收官卷）
+
+滚动规划（compass 锚点 + 卷骨架 + 弧按需展开）解决"开与滚"，但让"何时结束"从一个数字变成每卷末的开放裁定——完本收敛必须显式设计，否则出现两类僵局：账面写完收不了尾（越界续写死循环，已由结构兜底修复）与叙事写完账面不让停（estimated_scale 高估 + 完结门槛硬否决 → 注水或熔断）。
+
+**收官卷是收敛的一等概念**，完本 = 一次方向裁定 + 一段确定性滑行：
+
+- **宣告（LLM 语义裁定）**：架构师在卷末三选一——append_volume（继续）/ append_volume 带 `"final": true`（收官卷：整卷以收线为目标，open_threads 与活跃伏笔全部分配进各弧）/ complete_book（条件当下全满足）。estimated_scale 在完结判定里是**证据不是否决权**：语义条件已满足而规模未达 → 宣布收官卷提前收束并下调 scale，禁止注水。
+- **执行（代码事实查表）**：收官事实 = `domain.FinaleVolume`（最后一卷带 Final）。宣告后 `completion_signals.final_volume` 与 writer 信封 `finale` 纪律（禁开新线）随事实曝光；终卷结构写完（`layeredStructurallyComplete`）**且卷末收尾三连齐备（弧评审/弧摘要/卷摘要，`finaleWrapped`）**即自动 MarkComplete，**不再要求伏笔/长线归零**——但完结不抢在 editor 质量闸之前，结局必须过末弧评审。完结检查发生在"最后一块事实落地"的工具里：正向主路径为 `save_volume_summary`（卷摘要是三连最后一块），返工 drain 后三连已齐时为 `commit_chapter`。未宣告的书仍走质量级 `layeredBookComplete`（伏笔+长线归零），防大纲耗尽处过早收尾。
+- **解除（数据推导，无撤销工具）**：宣告后又追加未标记新卷 → 新卷成为最后一卷，收束态自然解除。状态永远可从 layered_outline 推导，无跨层状态。
+- **分歧出口**：Coordinator 认为故事已到终点而 Host 仍派单时，路由到 architect 走完结裁定（coordinator.md"完结分歧"），不允许以 end_turn 表达立场（StopGuard 会拦截至熔断）。
+
 ---
 
 ## 5. 工具规约
@@ -305,7 +316,8 @@ type Host struct {
     usage        *UsageTracker
     usageCancel  context.CancelFunc
     budget       *BudgetSentinel   // Host 政策组件：执行用户预算声明（等同代为 Abort），同步边界先于 Dispatcher
-    notifier     *notify.Notifier  // 观察层：run_end/repeat/budget 三类告警的离屏副本，永不介入控制流
+    pauser       *PausePointSentinel // Host 政策组件：执行用户验收停靠点（§8.4），边界顺序 budget → pauser → Dispatch
+    notifier     *notify.Notifier  // 观察层：run_end/repeat/budget/pause_point 告警的离屏副本，永不介入控制流
 
     events, streamCh, done chan ...
 
@@ -388,6 +400,19 @@ Resume 用 `Prompt` 启新 Run（turn 计数重置、context 清洁），不是 
 
 > 历史：早期"风格类长效要求"走独立的 `save_directive` → `meta/user_directives.json`（带 at_chapter 进度锚点）。2026-06-28 与 `save_user_rules` 合并——两者在自由文本偏好上重叠、"带不带锚点"是道模糊分类题，故砍掉 `save_directive`，长期写作要求统一归 user_rules；旧 `meta/user_directives.json` 不再读取或迁移。真正绑定剧情进度/结构的需求归 architect，不再用文本指令承载。
 
+### 8.4 用户停靠点
+
+用户干预"重写某几章"通常意味着正在交互精修：改完立刻续写会建立在未验收的状态上（改不满意则新章连带返工）。停靠点让这类**有边界的干预**在完成后自动暂停等验收：
+
+| 环节 | 归属 | 实现 |
+|---|---|---|
+| 意图裁定（"纯重写"还是"改完继续写"） | Coordinator LLM | `coordinator.md` 干预分类；歧义默认设（宁停勿跑） |
+| 意图落盘 | 工具 | `save_pause_point(after=rewrites_drained, reason)` → `RunMeta.PausePoint`（用户运行意图层，非创作事实层；`cancel=true` 取消） |
+| 条件裁定 | 纯函数 | `flow.ResolvePausePoint`：队列未排空→保留；排空且写作中→消费并停机；排空但 phase=complete→只消费（完本收尾优先，run 自然结束即验收点，防残留） |
+| 执行 | Host 政策组件 | `PausePointSentinel.HandleBoundary` 在子代理边界（预算之后、Dispatch 之前）消费并 `abortWithEvent`，事件+notify（kind=pause_point）成对 |
+
+停靠点**一次性**：命中即消费，Continue 恢复后不再触发。停机窗口里条件已满足但未及消费时（崩溃恰在排空后、预算/Esc 停机抢在边界前），由 Resume/Continue 恢复路径 `ReconcileOnResume` 对账解除（用户显式恢复=放行，解除时事件+通知成对）。已知窗口：设点后 editor 未及入队即停机，磁盘状态与"真排空"无法区分，对账连同解除——报告带诉求摘要，用户重新下达即可，不为极端窗口引入跨层状态。合宪定位与 BudgetSentinel 相同（§10.15）：不评估模型行为，只代为执行用户预先签署的暂停指令；StopGuard 不受影响——它拦的是 LLM 自行 end_turn，Host abort 不经过它。未来"写到第 N 章停/每卷停"只需扩展 `After` 枚举。
+
 ---
 
 ## 9. 目录结构
@@ -454,7 +479,7 @@ assets/
 12. **不写 Host 端的 Flow 状态机**。Flow 标签只由工具更新，Router 只读不写。
 13. **不为"LLM 幻觉"写兜底硬编码**。优化 prompt、改进工具返回值结构、让 `novel_context` 更清楚地呈现事实——而不是 Host 强制改流程。
 14. **不让 diag / 观察层介入控制流**。诊断只读、只产 Finding 与脱敏导出；自动修复 / 续跑 / 改流程一律不做（见 §2.3 观察者纪律）。
-15. **预算与告警不进 Route/工具层，告警不进控制流**。`BudgetSentinel` 是 Host 政策组件（执行用户预先签署的 Abort，不评估模型行为）；`notify` 是纯观察（不重试、不改派、不停机）。`flow.Route` 保持纯函数，对两者无感知。
+15. **预算与告警不进 Route/工具层，告警不进控制流**。`BudgetSentinel` / `PausePointSentinel` 是 Host 政策组件（执行用户预先签署的 Abort/暂停，不评估模型行为）；`notify` 是纯观察（不重试、不改派、不停机）。`flow.Route` 保持纯函数，对两者无感知。
 
 ---
 

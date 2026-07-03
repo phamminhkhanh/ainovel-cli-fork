@@ -12,7 +12,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
-const maxPromptEventRunes = 160
+const maxPromptEventCols = 160
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -683,7 +683,7 @@ func (m *Model) applyStartupPromptEvent(rawPrompt string) {
 	m.applyEvent(host.Event{
 		Time:     time.Now(),
 		Category: "USER",
-		Summary:  "创作需求: " + truncate(text, maxPromptEventRunes),
+		Summary:  "创作需求: " + truncate(text, maxPromptEventCols),
 		Detail:   text,
 		Level:    "info",
 	})

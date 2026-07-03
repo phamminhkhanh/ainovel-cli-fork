@@ -36,7 +36,7 @@ func TestEnterStartingSwitchesToWorkbenchImmediately(t *testing.T) {
 
 func TestApplyStartupPromptEventTruncatesSummaryButKeepsDetail(t *testing.T) {
 	m := NewModel(nil, nil, "")
-	prompt := strings.Repeat("设", maxPromptEventRunes+50)
+	prompt := strings.Repeat("设", maxPromptEventCols+50)
 
 	m.applyStartupPromptEvent(prompt)
 
@@ -47,7 +47,7 @@ func TestApplyStartupPromptEventTruncatesSummaryButKeepsDetail(t *testing.T) {
 	if ev.Detail != prompt {
 		t.Fatalf("detail should keep full prompt, got len=%d want=%d", len([]rune(ev.Detail)), len([]rune(prompt)))
 	}
-	maxSummaryRunes := len([]rune("创作需求: ")) + maxPromptEventRunes
+	maxSummaryRunes := len([]rune("创作需求: ")) + maxPromptEventCols
 	if got := len([]rune(ev.Summary)); got > maxSummaryRunes {
 		t.Fatalf("summary runes = %d, want <= %d", got, maxSummaryRunes)
 	}

@@ -49,7 +49,8 @@ type Host struct {
 	usageCancel       context.CancelFunc // 停掉 autoSaveLoop 并触发最后一次 flush
 	budget            *BudgetSentinel    // 预算政策；未启用为 nil（方法 nil 安全）
 	budgetDetach      func()
-	notifier          *notify.Notifier // 无人值守告警；未启用为 nil（Send nil 安全）
+	pauser            *PausePointSentinel // 用户停靠点政策（方法 nil 安全）
+	notifier          *notify.Notifier    // 无人值守告警；未启用为 nil（Send nil 安全）
 
 	events   chan Event
 	streamCh chan string
@@ -117,8 +118,13 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 
 	var router *flow.Dispatcher
 	var budget *BudgetSentinel
+	var pauser *PausePointSentinel
 	coordinator, askUser, restore, coordinatorCtxMgr, applyThinking := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record, func(string) {
 		if budget != nil && budget.HandleBoundary() {
+			return
+		}
+		// 预算止损优先于验收暂停；停靠点命中则短路本轮派发
+		if pauser.HandleBoundary() {
 			return
 		}
 		if router != nil {
@@ -169,6 +175,21 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 			h.notifier.Send(notify.Notification{Kind: "budget", Level: "warn", Title: "ainovel: 预算", Body: blind})
 		})
 	}
+	// 停靠点哨兵：执行用户预约的"重写完暂停"指令，事件+notify 成对（架构 §2.3）。
+	// abort 注入必须自带 notify：暂停把 lifecycle 置 paused，waitDone 的 run_end
+	// 通知会因 wasRunning=false 跳过——不在这里发，挂机用户在最该被叫回来的
+	// 时刻收不到任何推送（abortWithEvent 本身只发屏内事件）。
+	h.pauser = NewPausePointSentinel(store,
+		func(reason string) {
+			h.abortWithEvent(reason, "info")
+			h.notifier.Send(notify.Notification{Kind: "pause_point", Level: "info", Title: "ainovel: 验收停靠点", Body: reason})
+		},
+		func(level, summary string) {
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
+			h.notifier.Send(notify.Notification{Kind: "pause_point", Level: level, Title: "ainovel: 验收停靠点", Body: summary})
+		},
+	)
+	pauser = h.pauser
 	h.router = flow.NewDispatcher(coordinator, store)
 	router = h.router
 	// 重复指令告警：纯 telemetry，挂机时"模型可能在原地打转"值得喊人看一眼。
@@ -326,6 +347,13 @@ func (h *Host) Resume() (string, error) {
 	if err := h.coordinator.Prompt(context.Background(), prompt); err != nil {
 		return "", fmt.Errorf("resume prompt: %w", err)
 	}
+	// PendingSteer 已随恢复 prompt 交付给 Coordinator，清除以免下次 Resume 重复注入同一条旧干预。
+	// ClearHandledSteer 幂等：PendingSteer 为空 / Flow 非 steering 时均为 no-op。
+	if err := h.store.ClearHandledSteer(); err != nil {
+		slog.Warn("清除已处理的 PendingSteer 失败", "module", "host", "err", err)
+	}
+	// 停靠点对账：崩溃恰在"排空后、消费前"时，用户手动 Resume 即视为放行。
+	h.pauser.ReconcileOnResume()
 	// 主动派发一次首条指令，避免 Coordinator 对恢复 prompt 只回文字而 StopGuard 反复拦截。
 	h.router.Dispatch()
 
@@ -368,12 +396,22 @@ func (h *Host) Continue(text string) error {
 	if err := h.budget.Refuse(); err != nil {
 		return err
 	}
+	// 与 Resume 对称：若停机由预算/Esc 抢在停靠点消费之前，用户显式继续=放行，
+	// 对账解除已满足的停靠点，避免恢复后首个边界立即再暂停。
+	h.pauser.ReconcileOnResume()
 	h.refreshWriterRestore()
 	h.observer.setAborting(false)
+	h.router.ResetRepeat()
+	h.router.Enable()
 	_, err := h.coordinator.Inject(interventionMsg(text))
 	if err != nil {
 		return fmt.Errorf("inject: %w", err)
 	}
+	// 与 Resume 对称：干预注入后主动派发一次当前路由指令。否则 Coordinator 只有
+	// 用户文本没有 Host 指令，若它对干预只回文字，StopGuard 的拦截又要求执行
+	// Host 指令，会陷入"无指令可执行"的僵局（继续后连续拦截直至熔断）。
+	// 派发晚于 Inject：用户干预先入上下文，指令后到，干预优先级不受影响。
+	h.router.Dispatch()
 	h.mu.Lock()
 	h.lifecycle = lifecycleRunning
 	h.mu.Unlock()
@@ -462,6 +500,9 @@ func (h *Host) Close() {
 // 用户要继续创作只有两条路径：手动 Continue（停机注入）或重启进程走 Resume。
 // 见 docs/architecture.md §13.3、§8.3。
 func (h *Host) waitDone() {
+	// 运行中退出时 Close() 可能已 close(h.done)（AbortSilent 只 cancel 不 join 本 goroutine），
+	// 末尾向 h.done 的发送会 panic；与 emitEvent 一致用 recover 兜住这段退出期竞态。
+	defer func() { recover() }()
 	h.coordinator.WaitForIdle()
 	h.observer.finalize()
 

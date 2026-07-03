@@ -126,11 +126,14 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 		if finalVerdict == "polish" {
 			flow = domain.FlowPolishing
 		}
-		if err := t.store.Progress.SetPendingRewrites(affected, r.Summary); err != nil {
-			return nil, fmt.Errorf("set pending rewrites: %w", err)
-		}
+		// 先切 Flow 再写队列：若目标 Flow 与当前 Flow 构成非法迁移
+		// （如返工排空中途 rewriting↔polishing 互斥），提前返回，
+		// 避免脏写 PendingRewrites 留下"队列已改、Flow 未改"的部分状态。
 		if err := t.store.Progress.SetFlow(flow); err != nil {
 			return nil, fmt.Errorf("set flow %s: %w", flow, err)
+		}
+		if err := t.store.Progress.SetPendingRewrites(affected, r.Summary); err != nil {
+			return nil, fmt.Errorf("set pending rewrites: %w", err)
 		}
 	} else {
 		if err := t.store.Progress.SetFlow(domain.FlowWriting); err != nil {
