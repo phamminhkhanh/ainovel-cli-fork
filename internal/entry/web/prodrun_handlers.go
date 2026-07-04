@@ -58,6 +58,7 @@ func (s *server) handleProdRunCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		Kind           string  `json:"kind"`
 		Name           string  `json:"name"`
 		Profile        string  `json:"profile"`
 		Model          string  `json:"model"`
@@ -74,13 +75,35 @@ func (s *server) handleProdRunCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("name is required"))
 		return
 	}
-	if err := s.validateProfilePath(body.Profile); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+	kind := strings.TrimSpace(body.Kind)
+	if kind == "" {
+		kind = prodRunKindFreshProfile
+	}
+	var run *ProdRun
+	var err error
+	switch kind {
+	case prodRunKindFreshProfile:
+		if err := s.validateProfilePath(body.Profile); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		run, err = s.prodRunManager.Create(body.Name, body.Profile, body.Model, body.Provider, body.TargetChapters, body.BudgetUSD)
+	case prodRunKindContinueWorkspace:
+		if s.hostIsRunning() {
+			writeErr(w, http.StatusConflict, errSeedHostRunning)
+			return
+		}
+		run, err = s.prodRunManager.CreateContinue(body.Name, body.Model, body.Provider, body.TargetChapters, body.BudgetUSD)
+	default:
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("unsupported run kind %q", kind))
 		return
 	}
-	run, err := s.prodRunManager.Create(body.Name, body.Profile, body.Model, body.Provider, body.TargetChapters, body.BudgetUSD)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		status := http.StatusInternalServerError
+		if errors.Is(err, errSeedNoWorkspace) || errors.Is(err, errSeedWorkspaceComplete) || strings.Contains(err.Error(), "target chapters") {
+			status = http.StatusConflict
+		}
+		writeErr(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, run)
@@ -107,6 +130,11 @@ func (s *server) handleProdRunStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	run := s.prodRunManager.Get(id)
+	if run != nil && run.kind() == prodRunKindContinueWorkspace && s.hostIsRunning() {
+		writeErr(w, http.StatusConflict, errSeedHostRunning)
+		return
+	}
 	if err := s.prodRunManager.Start(id); err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
@@ -154,7 +182,7 @@ func (s *server) handleProdRunSync(w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
-	if s.eng.Snapshot().IsRunning {
+	if s.hostIsRunning() {
 		writeErr(w, http.StatusConflict, fmt.Errorf("host is running; stop before syncing"))
 		return
 	}
@@ -170,7 +198,7 @@ func (s *server) handleProdRunSync(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, errSyncRunNotFound):
 			status = http.StatusNotFound
-		case errors.Is(err, errSyncRunActive), errors.Is(err, errSyncHostHasProgress):
+		case errors.Is(err, errSyncRunActive), errors.Is(err, errSyncHostHasProgress), errors.Is(err, errSyncWorkspaceDiverged):
 			status = http.StatusConflict
 		case errors.Is(err, errSyncRunNoOutput):
 			status = http.StatusBadRequest
@@ -267,4 +295,11 @@ func (s *server) handleProdRunExportDownload(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+func (s *server) hostIsRunning() bool {
+	if s == nil || s.eng == nil {
+		return false
+	}
+	return s.eng.Snapshot().IsRunning
 }

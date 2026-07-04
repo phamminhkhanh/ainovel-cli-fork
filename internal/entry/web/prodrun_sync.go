@@ -7,15 +7,19 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
 var (
-	errSyncRunNotFound     = errors.New("run not found")
-	errSyncRunActive       = errors.New("cannot sync an active run")
-	errSyncRunNoOutput     = errors.New("run has no output to sync")
-	errSyncHostHasProgress = errors.New("workspace already has progress")
+	errSyncRunNotFound       = errors.New("run not found")
+	errSyncRunActive         = errors.New("cannot sync an active run")
+	errSyncRunNoOutput       = errors.New("run has no output to sync")
+	errSyncHostHasProgress   = errors.New("workspace already has progress")
+	errSyncWorkspaceDiverged = errors.New("workspace changed since this continue run was seeded")
 )
 
 // syncOptions controls whether the sync may overwrite an existing workspace.
@@ -25,7 +29,9 @@ type syncOptions struct {
 
 // syncResult reports what was copied into the host workspace.
 type syncResult struct {
-	CopiedFiles int `json:"copiedFiles"`
+	CopiedFiles int    `json:"copiedFiles"`
+	Mode        string `json:"mode"`
+	FastForward bool   `json:"fastForward"`
 }
 
 // hostHasProgress reports whether the host workspace already contains completed
@@ -91,7 +97,7 @@ func syncRunOutputIntoHost(runOutDir, hostDir string, opts syncOptions) (*syncRe
 		}
 	}
 
-	result := &syncResult{}
+	result := &syncResult{Mode: prodRunKindFreshProfile}
 
 	// Foundation root files.
 	foundationFiles := []string{
@@ -158,6 +164,118 @@ func syncRunOutputIntoHost(runOutDir, hostDir string, opts syncOptions) (*syncRe
 	result.CopiedFiles += n
 
 	return result, nil
+}
+
+func syncContinueRunOutputIntoHost(runOutDir, hostDir string, seed *SeedMeta, opts syncOptions) (*syncResult, error) {
+	if _, err := os.Stat(runOutDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, errSyncRunNoOutput
+		}
+		return nil, fmt.Errorf("stat run output dir: %w", err)
+	}
+	if seed == nil || seed.Fingerprint == "" {
+		return nil, fmt.Errorf("continue run is missing seed metadata")
+	}
+
+	fastForward := false
+	current, err := fingerprintHostWorkspace(hostDir)
+	if err != nil {
+		return nil, err
+	}
+	if current == seed.Fingerprint {
+		fastForward = true
+	} else if !opts.Force {
+		return nil, errSyncWorkspaceDiverged
+	}
+
+	if opts.Force {
+		if err := backupHostWorkspace(hostDir); err != nil {
+			return nil, fmt.Errorf("backup host workspace: %w", err)
+		}
+	}
+
+	copied, err := copyTreeFileByFile(hostDir, runOutDir)
+	if err != nil {
+		return nil, err
+	}
+	return &syncResult{
+		CopiedFiles: copied,
+		Mode:        prodRunKindContinueWorkspace,
+		FastForward: fastForward,
+	}, nil
+}
+
+func backupHostWorkspace(hostDir string) error {
+	if _, err := os.Stat(hostDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	parent := filepath.Dir(hostDir)
+	backupRoot := filepath.Join(parent, "backups")
+	name := "pre-sync-" + time.Now().Format("20060102-150405")
+	_, err := copyWorkspaceSeed(filepath.Join(backupRoot, name), hostDir)
+	return err
+}
+
+func copyTreeFileByFile(dstDir, srcDir string) (int, error) {
+	var files []string
+	if err := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		relSlash := filepath.ToSlash(rel)
+		if shouldExcludeWorkspaceSeed(relSlash, d) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		dstPath := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			if err := os.MkdirAll(dstPath, 0o755); err != nil {
+				return fmt.Errorf("create dir %s: %w", dstPath, err)
+			}
+			return nil
+		}
+		files = append(files, relSlash)
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	sort.SliceStable(files, func(i, j int) bool {
+		return copyPriority(files[i]) < copyPriority(files[j])
+	})
+	copied := 0
+	for _, relSlash := range files {
+		srcPath := filepath.Join(srcDir, filepath.FromSlash(relSlash))
+		dstPath := filepath.Join(dstDir, filepath.FromSlash(relSlash))
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return copied, fmt.Errorf("read %s: %w", relSlash, err)
+		}
+		if err := safeWriteFile(dstPath, data); err != nil {
+			return copied, fmt.Errorf("write %s: %w", relSlash, err)
+		}
+		copied++
+	}
+	return copied, nil
+}
+
+func copyPriority(relSlash string) int {
+	relSlash = strings.ToLower(relSlash)
+	if relSlash == "meta/progress.json" {
+		return 2
+	}
+	return 1
 }
 
 // ensureHostDirs creates the standard subdirectories inside the host workspace.

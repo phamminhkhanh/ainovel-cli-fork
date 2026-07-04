@@ -65,7 +65,7 @@ go test ./internal/entry/web/...
 
 **Ngày thêm:** 2026-07-03  
 **Files mới toàn bộ trong `internal/entry/web/`:**
-- `prodrun.go`, `prodrun_runner.go`, `prodrun_handlers.go`, `prodrun_profiles.go`, `prodrun_export.go`
+- `prodrun.go`, `prodrun_runner.go`, `prodrun_handlers.go`, `prodrun_profiles.go`, `prodrun_workspace.go`, `prodrun_export.go`
 - `prodrun*_test.go`
 - `assets/app-production.js`
 - Cập nhật `assets/index.html`, `assets/app-workspace.js`, `assets/app-i18n.js`, `assets/app.css`, `embed.go`, `assets_test.go`
@@ -83,8 +83,12 @@ go test ./internal/entry/web/...
 | **`reviews/*.json` shape** | Runner đếm rewrites qua `verdict == "rewrite"`. Nếu upstream đổi cấu trúc review JSON, cần cập nhật `countReviewsAndRewrites`. |
 | **Engine output path** | Cockpit dựa vào cwd-based output: mỗi run spawn `ainovel-cli --headless` với `Cmd.Dir = {runDir}`, nên output rơi vào `{runDir}/output/novel`. Nếu upstream thay đổi `bootstrap.Config.OutputDir` / `FillDefaults()` behavior, phải kiểm tra lại đường dẫn chapter/log/meta. |
 | **Profile resolver** | Cockpit không còn chỉ đọc `./profiles/`. Nguồn chuẩn: `./.ainovel/profiles/` (`project/foo.md`) → `~/.ainovel/profiles/` (`global/foo.md`) → legacy `./profiles/` (`legacy/foo.md` / old `profiles/foo.md`). Sau merge phải giữ resolver chung trong `prodrun_profiles.go`; không quay lại `filepath.Join(repoRoot, profile)`. |
+| **Resume mode** | `continue_workspace` seed workspace hiện tại sang sandbox rồi spawn `ainovel-cli --headless` **không `--prompt-file`** để engine native `Resume()` chạy tiếp. Không thêm logic resume vào `internal/host/` hay prompts. |
+| **Target chapters** | Với `continue_workspace`, `targetChapters` là tổng số chương tuyệt đối cuối cùng, không phải delta. Sau merge phải test case đang có N chương và target > N. |
+| **Fast-forward sync** | Continue sync mặc định là fast-forward: fingerprint host phải khớp seed fingerprint; diverge trả 409 và chỉ ghi khi user chọn `force`. Force phải backup `output/backups/pre-sync-*` trước khi ghi. |
+| **Workspace noise exclude** | Fingerprint/seed/sync-back phải dùng cùng exclude list: bỏ `logs/`, `*.log`, `diag/`, `diagnostics/`, `exports/`, temp/lock files. Nếu upstream thêm log/diagnostic path mới, cập nhật `shouldExcludeWorkspaceSeed`. |
 | **Pause point v0.6.1** | Cockpit chỉ đọc pause marker từ `run.log` (read-only). Nếu upstream cung cấp API pause tốt hơn (ví dụ snapshot pause state hoặc RPC), có thể thay thế polling log. |
-| **Windows file lock** | Export TXT của Cockpit là server-side concat, không dùng `os.Rename` nên không gặp lock của IDE/file watcher. Giữ behavior này; đừng chuyển sang gọi `s.eng.Export()` vì sẽ re-introduce Windows lock. |
+| **Windows file lock** | Export TXT của Cockpit là server-side concat, không dùng `os.Rename`. Continue sync-back cũng không clear/rename cả thư mục host; dùng file-by-file `safeWriteFile` retry. Giữ behavior này, đừng chuyển sang `s.eng.Export()` hoặc `os.RemoveAll` full-replace vì sẽ re-introduce Windows lock/data-loss risk. |
 
 ### Production profile path contract
 
@@ -119,7 +123,9 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 - [ ] Kiểm tra `assets/prompts/` có thay đổi gì không.
 - [ ] Rebuild binary nếu prompts/assets thay đổi.
 - [ ] Chạy smoke test 1 chapter nếu prompts thay đổi nhiều.
-- [ ] Với Production Cockpit: kiểm tra `/api/profiles` vẫn list `project/global/legacy`, tạo job từ ít nhất một profile và start được.
+- [ ] Với Production Cockpit fresh: kiểm tra `/api/profiles` vẫn list `project/global/legacy`, tạo/start `fresh_profile` từ profile.
+- [ ] Với Production Cockpit resume: tạo `continue_workspace` từ workspace có progress, start không `--prompt-file`, sync fast-forward được, `logs/*.log` không làm fingerprint diverge.
+- [ ] Với force sync: kiểm tra có backup `output/backups/pre-sync-*` trước khi ghi đè.
 
 ---
 
@@ -129,6 +135,7 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 |---------|------|------------|-----------------|
 | v0.6.1 | 2026-07-03 | Pause points + completion convergence | Rebuild binary; rerun spike test; update Web UI pause handling |
 | post-v0.6.1 (fork) | 2026-07-03 | Production Cockpit MVP (tab Sản xuất) | Rebuild binary; check `server.go`/`run.go` after upstream merge; verify `progress.json`/`reviews/*.json` schema |
+| post-v0.6.1 (fork) | 2026-07-04 | Production Cockpit resume mode (`continue_workspace`) + fast-forward sync | Verify native headless `Resume()`, seed fingerprint, `logs/` exclude, force backup, and Windows-safe file-by-file sync |
 | post-v0.6.1 (fork) | 2026-07-04 | Production profile resolver standardized to `.ainovel` 2-layer model + legacy fallback | Verify `/api/profiles`, profile path validation, and `prepareRunDir` resolver after upstream merge |
 ---
 

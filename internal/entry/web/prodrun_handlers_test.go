@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
 func newTestServerForProdruns(t *testing.T) (*server, string) {
@@ -97,6 +98,48 @@ func TestHandleProdRunCreateValidation(t *testing.T) {
 				t.Fatalf("expected %d, got %d: %s", tc.want, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandleProdRunCreateContinue(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	hostDir := s.prodRunManager.hostDir
+	writeWorkspaceProgress(t, hostDir, []int{1, 2}, domain.PhaseWriting)
+
+	body := `{"kind":"continue_workspace","name":"continue","targetChapters":5}`
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleProdRunCreate(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created ProdRun
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Kind != prodRunKindContinueWorkspace {
+		t.Fatalf("expected continue kind, got %q", created.Kind)
+	}
+	if created.Profile != "" {
+		t.Fatalf("continue run should not require profile, got %q", created.Profile)
+	}
+	if created.SeededFrom == nil || created.SeededFrom.CompletedChapters != 2 {
+		t.Fatalf("unexpected seed metadata: %+v", created.SeededFrom)
+	}
+}
+
+func TestHandleProdRunCreateContinueRejectsCompleteWorkspace(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	writeWorkspaceProgress(t, s.prodRunManager.hostDir, []int{1, 2}, domain.PhaseComplete)
+
+	body := `{"kind":"continue_workspace","name":"continue","targetChapters":5}`
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleProdRunCreate(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

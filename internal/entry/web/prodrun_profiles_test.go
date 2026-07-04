@@ -100,6 +100,60 @@ func TestListProfileItemsListsAllSourcesAndNestedFiles(t *testing.T) {
 	}
 }
 
+func TestResolveExistingProfilePathFallsBackWhenEvalSymlinksDenied(t *testing.T) {
+	homeDir := t.TempDir()
+	setTestHome(t, homeDir)
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, ".ainovel", "profiles")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "spike.md"), []byte("# prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	old := evalProfileSymlinks
+	evalProfileSymlinks = func(string) (string, error) { return "", os.ErrPermission }
+	t.Cleanup(func() { evalProfileSymlinks = old })
+
+	got, err := resolveExistingProfilePath("project/spike.md", repoRoot)
+	if err != nil {
+		t.Fatalf("resolveExistingProfilePath: %v", err)
+	}
+	if got != filepath.Join(profileDir, "spike.md") {
+		t.Fatalf("got %q, want %q", got, filepath.Join(profileDir, "spike.md"))
+	}
+}
+
+func TestResolveExistingProfilePathFallbackRejectsSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on Windows")
+	}
+	homeDir := t.TempDir()
+	setTestHome(t, homeDir)
+	repoRoot := t.TempDir()
+
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profileDir := filepath.Join(repoRoot, ".ainovel", "profiles")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(profileDir, "leak.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	old := evalProfileSymlinks
+	evalProfileSymlinks = func(string) (string, error) { return "", os.ErrPermission }
+	t.Cleanup(func() { evalProfileSymlinks = old })
+
+	if got, err := resolveExistingProfilePath("project/leak.md", repoRoot); err == nil {
+		t.Fatalf("expected symlink escape error, got %q", got)
+	}
+}
+
 func TestResolveExistingProfilePathRejectsSymlinkEscape(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink permissions vary on Windows")

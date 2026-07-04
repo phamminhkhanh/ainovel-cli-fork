@@ -17,6 +17,8 @@ const (
 	profileSourceLegacy  = "legacy"
 )
 
+var evalProfileSymlinks = filepath.EvalSymlinks
+
 type profileRoot struct {
 	source string
 	dir    string
@@ -83,18 +85,79 @@ func resolveExistingProfilePath(profile, repoRoot string) (string, error) {
 	if info.IsDir() {
 		return "", fmt.Errorf("profile must be a file")
 	}
-	realBase, err := filepath.EvalSymlinks(base)
+	realBase, realPath, err := resolveProfileRealPaths(base, resolved)
 	if err != nil {
-		return "", fmt.Errorf("resolve profile base: %w", err)
-	}
-	realPath, err := filepath.EvalSymlinks(resolved)
-	if err != nil {
-		return "", fmt.Errorf("resolve profile symlink: %w", err)
+		return "", err
 	}
 	if !isWithinDir(realPath, realBase) {
 		return "", fmt.Errorf("profile path outside profiles directory")
 	}
 	return resolved, nil
+}
+
+func resolveProfileRealPaths(base, resolved string) (string, string, error) {
+	realBase, baseErr := evalProfileSymlinks(base)
+	realPath, pathErr := evalProfileSymlinks(resolved)
+	if baseErr == nil && pathErr == nil {
+		return realBase, realPath, nil
+	}
+
+	// On some Windows test/runtime environments, filepath.EvalSymlinks returns
+	// Access denied for ordinary directories under the temp root. Fall back to
+	// absolute cleaned paths only after proving the profile path contains no
+	// symlink segment, so a symlink escape cannot bypass the profiles boundary.
+	if err := ensureNoProfileSymlinkSegments(base, resolved); err != nil {
+		return "", "", err
+	}
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve profile base: %w", err)
+	}
+	absPath, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve profile symlink: %w", err)
+	}
+	return filepath.Clean(absBase), filepath.Clean(absPath), nil
+}
+
+func ensureNoProfileSymlinkSegments(base, resolved string) error {
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return fmt.Errorf("resolve profile base: %w", err)
+	}
+	absPath, err := filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("resolve profile symlink: %w", err)
+	}
+	absBase = filepath.Clean(absBase)
+	absPath = filepath.Clean(absPath)
+	if !isWithinDir(absPath, absBase) {
+		return fmt.Errorf("profile path outside profiles directory")
+	}
+
+	parts, err := filepath.Rel(absBase, absPath)
+	if err != nil {
+		return fmt.Errorf("resolve profile symlink: %w", err)
+	}
+	paths := []string{absBase}
+	cur := absBase
+	for _, part := range strings.Split(parts, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		paths = append(paths, cur)
+	}
+	for _, candidate := range paths {
+		info, err := os.Lstat(candidate)
+		if err != nil {
+			return fmt.Errorf("inspect profile symlink: %w", err)
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("profile path outside profiles directory")
+		}
+	}
+	return nil
 }
 
 func resolveProfilePath(profile, repoRoot string) (string, error) {

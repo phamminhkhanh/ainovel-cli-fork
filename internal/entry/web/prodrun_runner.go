@@ -22,6 +22,7 @@ type prodRunRunner struct {
 	store         *prodRunStore
 	binPath       string
 	repoRoot      string
+	hostDir       string
 	baseCfg       bootstrap.Config
 	cmdFactory    func(name string, arg ...string) *exec.Cmd
 	onCmdStarted  func(*exec.Cmd)
@@ -38,11 +39,12 @@ type runningProc struct {
 	done    chan struct{}
 }
 
-func newProdRunRunner(store *prodRunStore, binPath, repoRoot string, baseCfg bootstrap.Config) *prodRunRunner {
+func newProdRunRunner(store *prodRunStore, binPath, repoRoot, hostDir string, baseCfg bootstrap.Config) *prodRunRunner {
 	return &prodRunRunner{
 		store:        store,
 		binPath:      binPath,
 		repoRoot:     repoRoot,
+		hostDir:      hostDir,
 		baseCfg:      baseCfg,
 		cmdFactory:   exec.Command,
 		running:      make(map[string]*runningProc),
@@ -79,9 +81,20 @@ func (rr *prodRunRunner) start(id string) error {
 	}
 
 	runDir := rr.store.runDir(id)
-	if err := prepareRunDir(runDir, rr.repoRoot, r, rr.baseCfg); err != nil {
+	if err := prepareRunDir(runDir, rr.repoRoot, rr.hostDir, r, rr.baseCfg); err != nil {
 		rr.markFailed(id)
 		return fmt.Errorf("prepare run dir: %w", err)
+	}
+	if r.kind() == prodRunKindContinueWorkspace && r.SeededFrom != nil && !r.SeededFrom.SeededAt.IsZero() {
+		seededAt := r.SeededFrom.SeededAt
+		if _, err := rr.store.update(id, func(stored *ProdRun) {
+			if stored.SeededFrom != nil {
+				stored.SeededFrom.SeededAt = seededAt
+			}
+		}); err != nil {
+			rr.markFailed(id)
+			return fmt.Errorf("persist seed metadata: %w", err)
+		}
 	}
 
 	logPath := filepath.Join(runDir, "run.log")
@@ -91,7 +104,11 @@ func (rr *prodRunRunner) start(id string) error {
 		return fmt.Errorf("open run log: %w", err)
 	}
 
-	cmd := rr.cmdFactory(rr.binPath, "--headless", "--prompt-file", "profile.md")
+	args := []string{"--headless"}
+	if r.kind() == prodRunKindFreshProfile {
+		args = append(args, "--prompt-file", "profile.md")
+	}
+	cmd := rr.cmdFactory(rr.binPath, args...)
 	cmd.Dir = runDir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -300,9 +317,10 @@ func (rr *prodRunRunner) killProcess(id string) {
 	_ = proc.cmd.Process.Kill()
 }
 
-// prepareRunDir creates the per-run directory, copies the profile and home rules,
-// and writes the override config so the child engine sees its own output dir.
-func prepareRunDir(runDir, repoRoot string, r *ProdRun, baseCfg bootstrap.Config) error {
+// prepareRunDir creates the per-run sandbox. Fresh runs copy a profile prompt;
+// continue runs seed output/novel from the host workspace and intentionally do
+// not create profile.md so headless enters native Resume().
+func prepareRunDir(runDir, repoRoot, hostDir string, r *ProdRun, baseCfg bootstrap.Config) error {
 	cfgDir := filepath.Join(runDir, ".ainovel")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		return err
@@ -311,13 +329,44 @@ func prepareRunDir(runDir, repoRoot string, r *ProdRun, baseCfg bootstrap.Config
 		return err
 	}
 
-	srcProfile, err := resolveExistingProfilePath(r.Profile, repoRoot)
-	if err != nil {
-		return fmt.Errorf("resolve profile: %w", err)
-	}
-	dstProfile := filepath.Join(runDir, "profile.md")
-	if err := copyFile(dstProfile, srcProfile); err != nil {
-		return fmt.Errorf("copy profile: %w", err)
+	switch r.kind() {
+	case prodRunKindFreshProfile:
+		srcProfile, err := resolveExistingProfilePath(r.Profile, repoRoot)
+		if err != nil {
+			return fmt.Errorf("resolve profile: %w", err)
+		}
+		dstProfile := filepath.Join(runDir, "profile.md")
+		if err := copyFile(dstProfile, srcProfile); err != nil {
+			return fmt.Errorf("copy profile: %w", err)
+		}
+	case prodRunKindContinueWorkspace:
+		if r.SeededFrom == nil || r.SeededFrom.Fingerprint == "" {
+			return fmt.Errorf("continue run is missing seed metadata")
+		}
+		before, err := fingerprintHostWorkspace(hostDir)
+		if err != nil {
+			return err
+		}
+		if before != r.SeededFrom.Fingerprint {
+			return errSeedWorkspaceChanged
+		}
+		runOutDir := filepath.Join(runDir, "output", "novel")
+		if err := os.RemoveAll(runOutDir); err != nil {
+			return fmt.Errorf("clear seed output dir: %w", err)
+		}
+		if _, err := copyWorkspaceSeed(runOutDir, hostDir); err != nil {
+			return fmt.Errorf("seed workspace: %w", err)
+		}
+		after, err := fingerprintHostWorkspace(hostDir)
+		if err != nil {
+			return err
+		}
+		if after != before {
+			return errSeedWorkspaceChanged
+		}
+		r.SeededFrom.SeededAt = time.Now()
+	default:
+		return fmt.Errorf("unsupported production run kind %q", r.Kind)
 	}
 
 	homeRules := filepath.Join(bootstrap.DefaultConfigDir(), "rules")
@@ -501,12 +550,32 @@ func newProdRunManager(jobsDir, binPath, repoRoot, hostDir string, baseCfg boots
 	if err != nil {
 		return nil, err
 	}
-	runner := newProdRunRunner(store, binPath, repoRoot, baseCfg)
+	runner := newProdRunRunner(store, binPath, repoRoot, hostDir, baseCfg)
 	return &prodRunManager{store: store, runner: runner, hostDir: hostDir}, nil
 }
 
 func (pm *prodRunManager) Create(name, profile, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
 	return pm.store.create(name, profile, model, provider, targetChapters, budgetUSD)
+}
+
+func (pm *prodRunManager) CreateContinue(name, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
+	seed, err := seedMetaForWorkspace(pm.hostDir)
+	if err != nil {
+		return nil, err
+	}
+	if targetChapters <= seed.CompletedChapters {
+		return nil, fmt.Errorf("target chapters must be greater than current completed chapters (%d)", seed.CompletedChapters)
+	}
+	return pm.store.createWithOptions(prodRunCreateOptions{
+		Kind:           prodRunKindContinueWorkspace,
+		Name:           name,
+		Model:          model,
+		Provider:       provider,
+		TargetChapters: targetChapters,
+		BudgetUSD:      budgetUSD,
+		SeededFrom:     seed,
+		Chapters:       seed.CompletedChapters,
+	})
 }
 
 func (pm *prodRunManager) Get(id string) *ProdRun  { return pm.store.get(id) }
@@ -536,6 +605,9 @@ func (pm *prodRunManager) Sync(id string, opts syncOptions) (*syncResult, error)
 		return nil, fmt.Errorf("%w (status=%s)", errSyncRunActive, r.Status)
 	}
 	runOutDir := filepath.Join(pm.store.runDir(id), "output", "novel")
+	if r.kind() == prodRunKindContinueWorkspace {
+		return syncContinueRunOutputIntoHost(runOutDir, pm.hostDir, r.SeededFrom, opts)
+	}
 	return syncRunOutputIntoHost(runOutDir, pm.hostDir, opts)
 }
 

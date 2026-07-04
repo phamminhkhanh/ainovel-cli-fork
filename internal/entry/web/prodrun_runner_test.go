@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
 // TestProdrunHelperProcess is invoked by exec.Command in runner tests.
@@ -47,7 +49,7 @@ func TestRunnerStartCreatesRunDirAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, bootstrap.Config{})
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
 	runner.pollInterval = 200 * time.Millisecond
 
 	var capturedArgs []string
@@ -96,6 +98,114 @@ func TestRunnerStartCreatesRunDirAndConfig(t *testing.T) {
 	}
 }
 
+func TestRunnerStartContinueSeedsWorkspaceAndResumes(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	hostDir := t.TempDir()
+	writeWorkspaceProgress(t, hostDir, []int{1, 2}, domain.PhaseWriting)
+	if err := os.MkdirAll(filepath.Join(hostDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "chapters", "01.md"), []byte("chapter 1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, hostDir, bootstrap.Config{})
+	runner.pollInterval = 200 * time.Millisecond
+
+	var capturedArgs []string
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		return helperCommand(200)
+	}
+
+	seed, err := seedMetaForWorkspace(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ps.createWithOptions(prodRunCreateOptions{
+		Kind:           prodRunKindContinueWorkspace,
+		Name:           "continue",
+		TargetChapters: 5,
+		BudgetUSD:      1,
+		SeededFrom:     seed,
+		Chapters:       seed.CompletedChapters,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := runner.start(r.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		if ps.get(r.ID).Status != prodRunRunning {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if len(capturedArgs) != 2 || capturedArgs[1] != "--headless" {
+		t.Fatalf("continue run must start headless without prompt args, got %v", capturedArgs)
+	}
+	runDir := ps.runDir(r.ID)
+	if _, err := os.Stat(filepath.Join(runDir, "profile.md")); !os.IsNotExist(err) {
+		t.Fatalf("continue run must not create profile.md, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "output", "novel", "chapters", "01.md")); err != nil {
+		t.Fatalf("seeded chapter missing: %v", err)
+	}
+	if ps.get(r.ID).SeededFrom == nil || ps.get(r.ID).SeededFrom.SeededAt.IsZero() {
+		t.Fatal("expected SeededAt to be persisted after seed")
+	}
+}
+
+func TestRunnerStartContinueRejectsChangedWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	hostDir := t.TempDir()
+	writeWorkspaceProgress(t, hostDir, []int{1}, domain.PhaseWriting)
+	if err := os.MkdirAll(filepath.Join(hostDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "chapters", "01.md"), []byte("before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, hostDir, bootstrap.Config{})
+	seed, err := seedMetaForWorkspace(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ps.createWithOptions(prodRunCreateOptions{
+		Kind:           prodRunKindContinueWorkspace,
+		Name:           "continue",
+		TargetChapters: 5,
+		BudgetUSD:      1,
+		SeededFrom:     seed,
+		Chapters:       seed.CompletedChapters,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "chapters", "01.md"), []byte("after"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.start(r.ID); !errors.Is(err, errSeedWorkspaceChanged) {
+		t.Fatalf("expected errSeedWorkspaceChanged, got %v", err)
+	}
+	if ps.get(r.ID).Status != prodRunFailed {
+		t.Fatalf("expected failed status, got %s", ps.get(r.ID).Status)
+	}
+}
+
 func TestRunnerStopKillsProcess(t *testing.T) {
 	dir := t.TempDir()
 	repoRoot := t.TempDir()
@@ -107,7 +217,7 @@ func TestRunnerStopKillsProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, bootstrap.Config{})
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
 	runner.pollInterval = 200 * time.Millisecond
 	finished := make(chan struct{})
 	runner.cmdFactory = func(name string, args ...string) *exec.Cmd {
@@ -171,7 +281,7 @@ func TestRunnerTargetChaptersKillsProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, bootstrap.Config{})
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
 	runner.pollInterval = 200 * time.Millisecond
 	finished := make(chan struct{})
 	runner.cmdFactory = func(name string, args ...string) *exec.Cmd {
@@ -233,7 +343,7 @@ func TestRunnerPollReadsProgressAndReviews(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rr := newProdRunRunner(ps, "ainovel-cli", repoRoot, bootstrap.Config{})
+	rr := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
 
 	r, err := ps.create("pollstats", "profiles/x.md", "", "", 10, 1)
 	if err != nil {
@@ -290,7 +400,7 @@ func TestRunnerStartRejectsConcurrentRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, bootstrap.Config{})
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
 	runner.cmdFactory = func(name string, args ...string) *exec.Cmd {
 		return helperCommand(5000)
 	}

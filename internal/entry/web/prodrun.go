@@ -15,8 +15,12 @@ import (
 
 // Sentinel errors for production-run operations.
 var (
-	errDeleteRunNotFound = errors.New("run not found")
-	errDeleteRunActive   = errors.New("cannot delete an active run")
+	errDeleteRunNotFound     = errors.New("run not found")
+	errDeleteRunActive       = errors.New("cannot delete an active run")
+	errSeedNoWorkspace       = errors.New("workspace has no recoverable progress")
+	errSeedHostRunning       = errors.New("host is running; stop before seeding a continue run")
+	errSeedWorkspaceChanged  = errors.New("workspace changed since the continue run was created")
+	errSeedWorkspaceComplete = errors.New("workspace is complete and cannot be resumed")
 )
 
 // Production-run lifecycle statuses.
@@ -27,6 +31,12 @@ const (
 	prodRunCompleted = "completed"
 	prodRunFailed    = "failed"
 	prodRunCancelled = "cancelled"
+)
+
+// Production-run kinds. Empty kind is treated as fresh_profile for legacy jobs.
+const (
+	prodRunKindFreshProfile      = "fresh_profile"
+	prodRunKindContinueWorkspace = "continue_workspace"
 )
 
 // Stop reasons written to ProdRun.StopReason.
@@ -46,6 +56,7 @@ const defaultProdRunBudgetUSD = 5.0
 type ProdRun struct {
 	ID               string    `json:"id"`
 	Name             string    `json:"name"`
+	Kind             string    `json:"kind,omitempty"`
 	Profile          string    `json:"profile"` // profile ref, e.g. "project/foo.md", "global/foo.md", or legacy "profiles/foo.md"
 	Model            string    `json:"model,omitempty"`
 	Provider         string    `json:"provider,omitempty"`
@@ -63,6 +74,23 @@ type ProdRun struct {
 	CostUSD          float64   `json:"costUsd"`
 	LogPath          string    `json:"logPath,omitempty"`
 	PossiblyOrphaned bool      `json:"possiblyOrphaned"`
+	SeededFrom       *SeedMeta `json:"seededFrom,omitempty"`
+}
+
+// SeedMeta captures the source workspace state for a continue_workspace run.
+type SeedMeta struct {
+	HostDir           string    `json:"hostDir"`
+	CompletedChapters int       `json:"completedChapters"`
+	Fingerprint       string    `json:"fingerprint"`
+	CapturedAt        time.Time `json:"capturedAt"`
+	SeededAt          time.Time `json:"seededAt,omitempty"`
+}
+
+func (r *ProdRun) kind() string {
+	if r == nil || r.Kind == "" {
+		return prodRunKindFreshProfile
+	}
+	return r.Kind
 }
 
 // Runtime returns the elapsed runtime for a started run.
@@ -172,27 +200,57 @@ func (ps *prodRunStore) saveLocked() error {
 	return os.Rename(tmp, ps.path)
 }
 
+type prodRunCreateOptions struct {
+	Kind           string
+	Name           string
+	Profile        string
+	Model          string
+	Provider       string
+	TargetChapters int
+	BudgetUSD      float64
+	SeededFrom     *SeedMeta
+	Chapters       int
+}
+
 func (ps *prodRunStore) create(name, profile, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-
-	if targetChapters <= 0 {
-		targetChapters = 30
-	}
-	if budgetUSD <= 0 {
-		budgetUSD = defaultProdRunBudgetUSD
-	}
-
-	r := &ProdRun{
-		ID:             fmt.Sprintf("run-%03d", ps.nextID),
-		Name:           strings.TrimSpace(name),
+	return ps.createWithOptions(prodRunCreateOptions{
+		Kind:           prodRunKindFreshProfile,
+		Name:           name,
 		Profile:        profile,
 		Model:          model,
 		Provider:       provider,
 		TargetChapters: targetChapters,
 		BudgetUSD:      budgetUSD,
+	})
+}
+
+func (ps *prodRunStore) createWithOptions(opts prodRunCreateOptions) (*ProdRun, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	if opts.Kind == "" {
+		opts.Kind = prodRunKindFreshProfile
+	}
+	if opts.TargetChapters <= 0 {
+		opts.TargetChapters = 30
+	}
+	if opts.BudgetUSD <= 0 {
+		opts.BudgetUSD = defaultProdRunBudgetUSD
+	}
+
+	r := &ProdRun{
+		ID:             fmt.Sprintf("run-%03d", ps.nextID),
+		Name:           strings.TrimSpace(opts.Name),
+		Kind:           opts.Kind,
+		Profile:        opts.Profile,
+		Model:          opts.Model,
+		Provider:       opts.Provider,
+		TargetChapters: opts.TargetChapters,
+		BudgetUSD:      opts.BudgetUSD,
 		Status:         prodRunQueued,
 		CreatedAt:      time.Now(),
+		Chapters:       opts.Chapters,
+		SeededFrom:     opts.SeededFrom,
 	}
 	ps.nextID++
 	ps.runs[r.ID] = r

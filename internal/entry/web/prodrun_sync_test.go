@@ -176,6 +176,162 @@ func TestSyncRunOutputIntoHost_ForceOverwrites(t *testing.T) {
 	}
 }
 
+func TestSyncContinueRunOutputIntoHostFastForward(t *testing.T) {
+	runDir := t.TempDir()
+	hostDir := t.TempDir()
+	writeWorkspaceProgress(t, hostDir, []int{1}, domain.PhaseWriting)
+	if err := os.MkdirAll(filepath.Join(hostDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "chapters", "01.md"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := seedMetaForWorkspace(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(runDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "chapters", "02.md"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceProgress(t, runDir, []int{1, 2}, domain.PhaseWriting)
+
+	res, err := syncContinueRunOutputIntoHost(runDir, hostDir, seed, syncOptions{})
+	if err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	if res.Mode != prodRunKindContinueWorkspace || !res.FastForward {
+		t.Fatalf("expected continue fast-forward result, got %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(hostDir, "chapters", "02.md")); err != nil {
+		t.Fatalf("new chapter not copied: %v", err)
+	}
+}
+
+func TestSyncContinueRunOutputIntoHostDivergedRequiresForceAndBacksUp(t *testing.T) {
+	runDir := t.TempDir()
+	hostDir := t.TempDir()
+	writeWorkspaceProgress(t, hostDir, []int{1}, domain.PhaseWriting)
+	if err := os.MkdirAll(filepath.Join(hostDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "chapters", "01.md"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := seedMetaForWorkspace(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "chapters", "01.md"), []byte("user changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(runDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "chapters", "02.md"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceProgress(t, runDir, []int{1, 2}, domain.PhaseWriting)
+
+	if _, err := syncContinueRunOutputIntoHost(runDir, hostDir, seed, syncOptions{}); !errors.Is(err, errSyncWorkspaceDiverged) {
+		t.Fatalf("expected diverged error, got %v", err)
+	}
+	res, err := syncContinueRunOutputIntoHost(runDir, hostDir, seed, syncOptions{Force: true})
+	if err != nil {
+		t.Fatalf("force sync failed: %v", err)
+	}
+	if res.FastForward {
+		t.Fatalf("forced diverged sync must not report fast-forward: %+v", res)
+	}
+	backups, err := filepath.Glob(filepath.Join(filepath.Dir(hostDir), "backups", "pre-sync-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) == 0 {
+		t.Fatal("expected force sync to create a pre-sync backup")
+	}
+}
+
+func TestWorkspaceFingerprintIgnoresLogs(t *testing.T) {
+	hostDir := t.TempDir()
+	writeWorkspaceProgress(t, hostDir, []int{1}, domain.PhaseWriting)
+	if err := os.MkdirAll(filepath.Join(hostDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "chapters", "01.md"), []byte("chapter 1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := fingerprintHostWorkspace(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(hostDir, "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "logs", "web.log"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterCreate, err := fingerprintHostWorkspace(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterCreate != before {
+		t.Fatalf("log file must not affect fingerprint: before=%s after=%s", before, afterCreate)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "logs", "web.log"), []byte("first\nsecond\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterAppend, err := fingerprintHostWorkspace(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterAppend != before {
+		t.Fatalf("log append must not affect fingerprint: before=%s after=%s", before, afterAppend)
+	}
+}
+
+func TestCopyTreeFileByFileExcludesLogs(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(srcDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "chapters", "02.md"), []byte("chapter 2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "logs", "headless.log"), []byte("noise"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "run.log"), []byte("root noise"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	copied, err := copyTreeFileByFile(dstDir, srcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied != 1 {
+		t.Fatalf("expected only chapter file copied, got %d", copied)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "chapters", "02.md")); err != nil {
+		t.Fatalf("expected chapter copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "logs", "headless.log")); !os.IsNotExist(err) {
+		t.Fatalf("logs must not be copied, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "run.log")); !os.IsNotExist(err) {
+		t.Fatalf("root .log files must not be copied, stat err=%v", err)
+	}
+}
+
 func TestProdRunManagerSync_RejectsActiveRun(t *testing.T) {
 	jobsDir := t.TempDir()
 	hostDir := t.TempDir()

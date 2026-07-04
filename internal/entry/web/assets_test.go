@@ -288,6 +288,13 @@ func TestEmbeddedJSProductionHooksExist(t *testing.T) {
 	for _, want := range []string{
 		"function renderProductionTab(",
 		"function loadProductionTab(",
+		"btnNewFreshRun",
+		"btnNewContinueRun",
+		"kind: productionCreateMode",
+		"continue_workspace",
+		"fresh_profile",
+		"continueWorkspaceGuard",
+		"Fast-forward",
 		"/api/profiles",
 		"/api/prodruns",
 		"/api/prodruns/",
