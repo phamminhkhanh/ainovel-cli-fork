@@ -111,6 +111,8 @@ func resolvedRoleThinking(model agentcore.ChatModel, cfg bootstrap.Config, role 
 // SetReserveTokens 联动新模型的窗口（writer/architect/editor 走 ContextManagerFactory
 // 自动重建，不需要 ref；只有常驻的 coordinator 需要），并通过 ApplyThinking 联动各角色
 // 推理强度。Host 层通过 Agent.Subscribe 获取事件流,不再需要 emit 回调。
+// onGuardBlock 可选（nil 安全）：所有 StopGuard（coordinator + 各子代理）的拦截/升级
+// 审计回调，Host 用它把拦截事实浮出到 TUI 事件流，见 reminder.BlockHook。
 func BuildCoordinator(
 	cfg bootstrap.Config,
 	store *store.Store,
@@ -118,6 +120,7 @@ func BuildCoordinator(
 	bundle assets.Bundle,
 	recordUsage UsageRecorder,
 	onFlowBoundary FlowBoundaryHook,
+	onGuardBlock reminder.BlockHook,
 ) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack, *corecontext.ContextEngine, ApplyThinking) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
@@ -204,7 +207,7 @@ func BuildCoordinator(
 	cacheBase := promptCacheBase(store.Dir())
 
 	architectStopGuardFactory := func(_, _ string) agentcore.StopGuard {
-		return reminder.NewArchitectStopGuard(store)
+		return reminder.NewArchitectStopGuard(store, onGuardBlock)
 	}
 	architectThinking, _ := ResolveThinkingForModel(architectModel, roleThinking(cfg, "architect"))
 	architectShort := subagent.Config{
@@ -266,7 +269,7 @@ func BuildCoordinator(
 		CacheLastMessage:   "ephemeral",
 		PromptCacheKey:     cacheBase + "-writer",
 		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
-			return reminder.NewWriterStopGuard(store)
+			return reminder.NewWriterStopGuard(store, onGuardBlock)
 		},
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
 			// 每次 subagent(writer) 调用都会重建，从当前 runModel 读取最新模型名。
@@ -323,7 +326,7 @@ func BuildCoordinator(
 			return toolName == "save_arc_summary" || toolName == "save_volume_summary"
 		},
 		StopGuardFactory: func(_, task string) agentcore.StopGuard {
-			return reminder.NewEditorStopGuard(store, task)
+			return reminder.NewEditorStopGuard(store, task, onGuardBlock)
 		},
 	}
 
@@ -351,7 +354,7 @@ func BuildCoordinator(
 		agentcore.WithCacheLastMessage("ephemeral"),
 		agentcore.WithPromptCacheKey(cacheBase+"-coordinator"),
 		agentcore.WithContextManager(coordinatorEngine),
-		agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
+		agentcore.WithStopGuard(reminder.NewStopGuard(store, onGuardBlock)),
 		agentcore.WithMiddlewares(flowBoundaryMiddleware(onFlowBoundary)),
 		// phase=complete 时硬拦截 subagent 派发，防止 Writer 死循环。
 		agentcore.WithToolGate(combineToolGates(
