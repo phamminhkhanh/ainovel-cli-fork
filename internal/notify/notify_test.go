@@ -3,6 +3,7 @@ package notify
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,7 +33,10 @@ func TestCommandChannelEnvAndStdin(t *testing.T) {
 	envFile := filepath.Join(dir, "env.txt")
 	jsonFile := filepath.Join(dir, "stdin.json")
 
-	n := New(`echo "$NOTIFY_KIND|$NOTIFY_LEVEL|$NOTIFY_TITLE|$NOTIFY_BODY" > `+envFile+` && cat > `+jsonFile, nil)
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("custom notify command test requires sh in PATH")
+	}
+	n := New(`echo "$NOTIFY_KIND|$NOTIFY_LEVEL|$NOTIFY_TITLE|$NOTIFY_BODY" > `+shellPath(envFile)+` && cat > `+shellPath(jsonFile), nil)
 	nt := Notification{Kind: "budget", Level: "warn", Title: "ainovel: 预算", Body: "已花费 $8.00"}
 	n.deliver(nt) // 同步调用以便断言
 
@@ -58,6 +62,9 @@ func TestCommandChannelEnvAndStdin(t *testing.T) {
 }
 
 func TestCommandChannelTimeoutKill(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("custom notify command test requires sh in PATH")
+	}
 	n := New("sleep 30", nil)
 	n.timeout = 200 * time.Millisecond
 
@@ -66,4 +73,9 @@ func TestCommandChannelTimeoutKill(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("超时未强杀, 阻塞 %v", elapsed)
 	}
+}
+
+func shellPath(path string) string {
+	path = filepath.ToSlash(path)
+	return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
 }

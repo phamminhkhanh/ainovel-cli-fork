@@ -3,6 +3,7 @@ package version
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -58,7 +59,10 @@ func TestReplaceExecutable(t *testing.T) {
 	}
 	realDst, err := filepath.EvalSymlinks(dst)
 	if err != nil {
-		t.Fatal(err)
+		if runtime.GOOS != "windows" {
+			t.Fatal(err)
+		}
+		realDst = dst
 	}
 	if got != realDst {
 		t.Fatalf("path = %q, want %q", got, realDst)
@@ -74,7 +78,7 @@ func TestReplaceExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
 		t.Fatalf("mode = %v", info.Mode().Perm())
 	}
 	if _, err := os.Stat(dst + ".old"); !os.IsNotExist(err) {
