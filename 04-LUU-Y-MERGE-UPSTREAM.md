@@ -89,6 +89,10 @@ go test ./internal/entry/web/...
 | **Workspace noise exclude** | Fingerprint/seed/sync-back phải dùng cùng exclude list: bỏ `logs/`, `*.log`, `diag/`, `diagnostics/`, `exports/`, temp/lock files. Nếu upstream thêm log/diagnostic path mới, cập nhật `shouldExcludeWorkspaceSeed`. |
 | **Pause point v0.6.1** | Cockpit chỉ đọc pause marker từ `run.log` (read-only). Nếu upstream cung cấp API pause tốt hơn (ví dụ snapshot pause state hoặc RPC), có thể thay thế polling log. |
 | **Windows file lock** | Export TXT của Cockpit là server-side concat, không dùng `os.Rename`. Continue sync-back cũng không clear/rename cả thư mục host; dùng file-by-file `safeWriteFile` retry. Giữ behavior này, đừng chuyển sang `s.eng.Export()` hoặc `os.RemoveAll` full-replace vì sẽ re-introduce Windows lock/data-loss risk. |
+| **Foundation Gate — detect phase** (2026-07-05) | `poll()` đọc `progress.json` field `phase`; khi `== "writing"` + `completed_chapters==0` + `fresh_profile` + chưa `FoundationApproved` → chuyển `awaiting_review` và kill child. Nếu upstream **đổi tên/giá trị field `phase`** (hiện `"writing"`, hằng `domain.PhaseWriting`) thì phải cập nhật `readWorkspacePhase`. Best-effort (poll 5s) — không phải hard gate; xem journal `260705`. |
+| **Status `awaiting_review`** | Là schema mới của `ProdRun`. `load()` **cố ý KHÔNG** coalesce nó → `failed` như running/paused (child đã chủ động kill, không có process treo). Nếu refactor `load()`, giữ awaiting_review sống sót qua restart. |
+| **Endpoint Gate mới** (fork-exception `server.go`) | `POST /api/prodruns/{id}/{approve,reject,revise,reveal}` + `GET .../foundation`. Approve = restart cùng run dir (native Resume, skip `--prompt-file` nhờ `runDirHasExistingOutput`). Revise = ghép `RevisionNote` vào cuối `profile.md` rồi tạo run mới. Sau merge nếu reconcile `server.go`, giữ đủ 5 route này. |
+| **Reveal loopback-only** | `POST .../reveal` mở `runDir/output/novel` bằng `revealOpen`; tự chặn 403 khi bind non-loopback (giống `handleReveal`). Đừng nới cho public bind. |
 
 ### Production profile path contract
 
@@ -126,6 +130,7 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 - [ ] Với Production Cockpit fresh: kiểm tra `/api/profiles` vẫn list `project/global/legacy`, tạo/start `fresh_profile` từ profile.
 - [ ] Với Production Cockpit resume: tạo `continue_workspace` từ workspace có progress, start không `--prompt-file`, sync fast-forward được, `logs/*.log` không làm fingerprint diverge.
 - [ ] Với force sync: kiểm tra có backup `output/backups/pre-sync-*` trước khi ghi đè.
+- [ ] Với Foundation Gate: tạo `fresh_profile`, start, chờ tới `awaiting_review`; kiểm tra `GET /api/prodruns/{id}/foundation` (+`?section=world|characters`) trả đúng; Approve resume được (không re-gate); Reject xoá; Revise tạo run mới có note trong `profile.md`; Reveal mở đúng `output/novel`.
 
 ---
 
@@ -137,11 +142,13 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 | post-v0.6.1 (fork) | 2026-07-03 | Production Cockpit MVP (tab Sản xuất) | Rebuild binary; check `server.go`/`run.go` after upstream merge; verify `progress.json`/`reviews/*.json` schema |
 | post-v0.6.1 (fork) | 2026-07-04 | Production Cockpit resume mode (`continue_workspace`) + fast-forward sync | Verify native headless `Resume()`, seed fingerprint, `logs/` exclude, force backup, and Windows-safe file-by-file sync |
 | post-v0.6.1 (fork) | 2026-07-04 | Production profile resolver standardized to `.ainovel` 2-layer model + legacy fallback | Verify `/api/profiles`, profile path validation, and `prepareRunDir` resolver after upstream merge |
+| post-v0.6.1 (fork) | 2026-07-05 | Foundation Gate Milestone 1a (`awaiting_review` + approve/reject/revise/reveal, best-effort poll on `progress.json` phase) | Verify `readWorkspacePhase`, `FoundationApproved` chống re-gate, 5 endpoint Gate trong `server.go`, reveal loopback-only |
 ---
 
 ## 6. Link
 
 - Report merge test chi tiết: [`plans/reports/upstream-merge-test-260703-1121-v061-pause-convergence-report.md`](plans/reports/upstream-merge-test-260703-1121-v061-pause-convergence-report.md)
 - Architecture upstream: [`docs/architecture.md`](docs/architecture.md)
-- Journal Production Cockpit MVP (kèm sơ đồ tương tác hệ thống): [`docs/journals/260703-production-cockpit-mvp.md`](docs/journals/260703-production-cockpit-mvp.md)
+- Journal Production Cockpit MVP (kèm sơ đồ tương tác + state machine): [`docs/journals/260703-production-cockpit-mvp.md`](docs/journals/260703-production-cockpit-mvp.md)
+- Journal Foundation Gate (best-effort gate, revise/reveal, race, bug đã fix): [`docs/journals/260705-foundation-gate.md`](docs/journals/260705-foundation-gate.md)
 - Hướng dẫn dùng Production Cockpit: [`docs/production-cockpit.md`](docs/production-cockpit.md)

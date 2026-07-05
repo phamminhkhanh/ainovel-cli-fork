@@ -21,16 +21,29 @@ var (
 	errSeedHostRunning       = errors.New("host is running; stop before seeding a continue run")
 	errSeedWorkspaceChanged  = errors.New("workspace changed since the continue run was created")
 	errSeedWorkspaceComplete = errors.New("workspace is complete and cannot be resumed")
+	// errAnotherRunActive is returned by start() when the single-run limit is
+	// hit. Callers (approve/revise retry) match on this typed error rather than
+	// a fragile substring so behavior does not silently break if the message
+	// wording changes.
+	errAnotherRunActive = errors.New("another production run is already running")
 )
 
 // Production-run lifecycle statuses.
 const (
-	prodRunQueued    = "queued"
-	prodRunRunning   = "running"
-	prodRunPaused    = "paused"
-	prodRunCompleted = "completed"
-	prodRunFailed    = "failed"
-	prodRunCancelled = "cancelled"
+	prodRunQueued  = "queued"
+	prodRunRunning = "running"
+	prodRunPaused  = "paused"
+	// prodRunAwaitingReview: fresh_profile run auto-stopped right after the
+	// foundation (premise/outline/world/characters) was saved and Phase just
+	// flipped to writing, before any chapter draft starts. The child process
+	// has already exited; there is no live Host to resume in-place. Approve
+	// restarts the same run dir (native headless Resume(), see
+	// FoundationApproved); Reject deletes the run. See
+	// docs/de-xuat-cai-tien-chat-luong.md §1 and docs/journals/260705-foundation-gate.md.
+	prodRunAwaitingReview = "awaiting_review"
+	prodRunCompleted      = "completed"
+	prodRunFailed         = "failed"
+	prodRunCancelled      = "cancelled"
 )
 
 // Production-run kinds. Empty kind is treated as fresh_profile for legacy jobs.
@@ -41,11 +54,12 @@ const (
 
 // Stop reasons written to ProdRun.StopReason.
 const (
-	stopReasonCompleted     = "completed"
-	stopReasonTargetReached = "target_reached"
-	stopReasonCancelled     = "cancelled"
-	stopReasonError         = "error"
-	stopReasonUnclean       = "unclean_shutdown"
+	stopReasonCompleted       = "completed"
+	stopReasonTargetReached   = "target_reached"
+	stopReasonCancelled       = "cancelled"
+	stopReasonError           = "error"
+	stopReasonUnclean         = "unclean_shutdown"
+	stopReasonFoundationReady = "foundation_ready"
 )
 
 // defaultProdRunBudgetUSD is the fallback cost cap when the user/global config
@@ -75,6 +89,18 @@ type ProdRun struct {
 	LogPath          string    `json:"logPath,omitempty"`
 	PossiblyOrphaned bool      `json:"possiblyOrphaned"`
 	SeededFrom       *SeedMeta `json:"seededFrom,omitempty"`
+	// FoundationApproved is set once the user approves an awaiting_review run
+	// (Foundation Gate). Without this, poll()'s foundation-ready
+	// check would re-fire on every restart: right after approve-resume,
+	// progress.json still reports phase=writing with 0 completed chapters for
+	// as long as the Writer takes to draft+commit chapter 1 (routinely longer
+	// than one poll tick), so the gate would kill the run again before it ever
+	// gets to write. Confirmed by adversarial probe during code review.
+	FoundationApproved bool `json:"foundationApproved,omitempty"`
+	// RevisionNote is user feedback appended to the profile prompt when a run
+	// is created via "revise" (Foundation Gate). It steers the Architect to
+	// regenerate the foundation differently. Empty for normal runs.
+	RevisionNote string `json:"revisionNote,omitempty"`
 }
 
 // SeedMeta captures the source workspace state for a continue_workspace run.
@@ -210,6 +236,7 @@ type prodRunCreateOptions struct {
 	BudgetUSD      float64
 	SeededFrom     *SeedMeta
 	Chapters       int
+	RevisionNote   string
 }
 
 func (ps *prodRunStore) create(name, profile, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
@@ -251,6 +278,7 @@ func (ps *prodRunStore) createWithOptions(opts prodRunCreateOptions) (*ProdRun, 
 		CreatedAt:      time.Now(),
 		Chapters:       opts.Chapters,
 		SeededFrom:     opts.SeededFrom,
+		RevisionNote:   opts.RevisionNote,
 	}
 	ps.nextID++
 	ps.runs[r.ID] = r

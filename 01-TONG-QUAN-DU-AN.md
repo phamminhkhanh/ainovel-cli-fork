@@ -297,6 +297,15 @@ Thấy lệch hướng → gõ can thiệp **ngay** vào ô input. Ví dụ:
 
 Sửa muộn (50+ chương) → phải viết lại nhiều chương → tốn token + thời gian.
 
+**Can thiệp sớm nhất — Foundation Gate (tab Sản xuất, bản fork):** khi chạy job sinh
+truyện mới, engine tự dừng ngay sau khi lập xong **nền móng** (premise/outline/thế giới/nhân
+vật) — trước khi viết phần lớn truyện — để bạn duyệt. Ở đó có 3 lựa chọn: **Duyệt** (viết
+tiếp), **Sửa tay** (mở thư mục sửa file nền móng rồi Duyệt), hoặc **Sửa & tạo lại** (nhờ AI
+viết lại nền móng theo góp ý — tạo job mới, giữ job cũ làm dự phòng, ~$0.01 sinh nền móng). Đây
+là chốt chặn rẻ nhất chống đúng cái bẫy "50 chương sau mới phát hiện lệch" ở §9.3 (dừng theo
+poll 5s nên là best-effort — tệ nhất mất một phần chương 1, không mất hàng trăm chương). Chi tiết:
+[docs/journals/260705-foundation-gate.md](docs/journals/260705-foundation-gate.md).
+
 ### 9.5 Chi phí & thời gian
 
 - Truyện dài = hàng trăm lượt gọi LLM = **vài giờ đến vài ngày** + chi phí API

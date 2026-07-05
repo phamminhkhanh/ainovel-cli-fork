@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // handleProfilesList returns markdown production profiles from project, global,
@@ -302,4 +304,160 @@ func (s *server) hostIsRunning() bool {
 		return false
 	}
 	return s.eng.Snapshot().IsRunning
+}
+
+// runStoreEngine adapts a run's seeded output/novel dir to the contentEngine
+// interface so the existing outline/world/characters handlers in content.go
+// can be reused as-is for the Foundation Gate preview.
+type runStoreEngine struct{ st *store.Store }
+
+func (e runStoreEngine) Store() *store.Store { return e.st }
+
+func (s *server) runOutputStore(id string) (*store.Store, error) {
+	r := s.prodRunManager.Get(id)
+	if r == nil {
+		return nil, fmt.Errorf("run not found")
+	}
+	dir := filepath.Join(s.prodRunManager.RunDir(id), "output", "novel")
+	if _, err := os.Stat(dir); err != nil {
+		return nil, fmt.Errorf("run has no output yet")
+	}
+	return store.NewStore(dir), nil
+}
+
+// handleProdRunFoundation returns premise/outline/world/characters/compass
+// for a run awaiting foundation review (Foundation Gate). It
+// reuses the read-only content handlers against the run's own sandboxed
+// output/novel dir instead of the main host workspace.
+func (s *server) handleProdRunFoundation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	id := r.PathValue("id")
+	st, err := s.runOutputStore(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	eng := runStoreEngine{st: st}
+	switch r.URL.Query().Get("section") {
+	case "world":
+		serveWorld(eng, w, r)
+	case "characters":
+		serveCharacters(eng, w, r)
+	default:
+		serveOutline(eng, w, r)
+	}
+}
+
+// handleProdRunApprove accepts the reviewed foundation of a run in
+// awaiting_review and restarts the SAME run dir (its own output/novel already
+// has the seeded foundation at phase=writing), so the Writer/Editor loop
+// resumes natively via headless Resume() instead of requiring a live Host to
+// Steer into. See docs/de-xuat-cai-tien-chat-luong.md §1 and
+// docs/journals/260705-foundation-gate.md.
+func (s *server) handleProdRunApprove(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	run := s.prodRunManager.Get(id)
+	if run == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("run not found"))
+		return
+	}
+	if run.Status != prodRunAwaitingReview {
+		writeErr(w, http.StatusConflict, fmt.Errorf("run %q is not awaiting review (status=%s)", id, run.Status))
+		return
+	}
+	next, err := s.prodRunManager.ApproveFoundation(id)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, next)
+}
+
+// handleProdRunReveal opens a run's seeded foundation dir in the OS file
+// manager so the user can hand-edit premise/outline/characters before Approve.
+// Loopback-only (same guard as handleReveal); the dir is derived server-side
+// from the validated run id — no client-supplied path.
+func (s *server) handleProdRunReveal(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	if !isLoopbackHostPort(s.addr) {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("m\u1edf th\u01b0 m\u1ee5c ch\u1ec9 kh\u1ea3 d\u1ee5ng khi bind loopback"))
+		return
+	}
+	id := r.PathValue("id")
+	run := s.prodRunManager.Get(id)
+	if run == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("run not found"))
+		return
+	}
+	dir := filepath.Join(s.prodRunManager.RunDir(id), "output", "novel")
+	if _, err := os.Stat(dir); err != nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("run ch\u01b0a c\u00f3 th\u01b0 m\u1ee5c n\u1ec1n m\u00f3ng"))
+		return
+	}
+	if err := revealOpen(dir); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dir": dir})
+}
+
+// handleProdRunRevise regenerates an awaiting_review run's foundation with a
+// user steering note appended to the profile prompt. See ReviseFoundation.
+func (s *server) handleProdRunRevise(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	var body struct {
+		Feedback string `json:"feedback"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(body.Feedback) == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("feedback is required"))
+		return
+	}
+	next, err := s.prodRunManager.ReviseFoundation(id, body.Feedback)
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, errDeleteRunNotFound) {
+			status = http.StatusNotFound
+		}
+		writeErr(w, status, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, next)
+}
+
+// handleProdRunReject discards a run awaiting foundation review without
+// spending any Writer/Editor tokens on it.
+func (s *server) handleProdRunReject(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	run := s.prodRunManager.Get(id)
+	if run == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("run not found"))
+		return
+	}
+	if run.Status != prodRunAwaitingReview {
+		writeErr(w, http.StatusConflict, fmt.Errorf("run %q is not awaiting review (status=%s)", id, run.Status))
+		return
+	}
+	if err := s.prodRunManager.Delete(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

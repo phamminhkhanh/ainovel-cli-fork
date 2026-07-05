@@ -74,6 +74,65 @@ output/
 > (đưa truyện đang viết dở qua cockpit rồi sync về theo kiểu fast-forward) được bổ sung
 > sau, xem [04-LUU-Y-MERGE-UPSTREAM.md](../../04-LUU-Y-MERGE-UPSTREAM.md) §3.
 
+## State machine — vòng đời ProdRun (cập nhật 2026-07-05: có Foundation Gate)
+
+`ProdRun.Status` ∈ { `queued`, `running`, `paused`, `awaiting_review`, `completed`,
+`failed`, `cancelled` }. Chuyển trạng thái do **runner + poll** (code) điều khiển; user chỉ
+kích hành động qua API. Nguồn: `prodrun.go`, `prodrun_runner.go`.
+
+```
+                         create
+                           │
+                           ▼
+                       ┌────────┐
+                       │ queued │
+                       └────────┘
+                           │ start()  → spawn ainovel-cli --headless
+                           ▼
+                   ┌───────────────┐
+        ┌──────────│    running    │───────────┐
+        │          └───────────────┘           │
+        │ poll: phase=writing              poll │ poll: chapters ≥ target
+        │ & chapters==0                  log has│ hoặc child exit(0)
+        │ & fresh_profile              pause    │
+        │ & !FoundationApproved        marker   │
+        ▼                                 │     ▼
+┌──────────────────┐                      │  ┌───────────┐
+│  awaiting_review │                      ▼  │ completed │
+│ (FOUNDATION GATE)│                 ┌────────┐└───────────┘
+└──────────────────┘                 │ paused │
+   │      │      │                    └────────┘   child exit(err) → failed
+   │      │      │                        │             stop() (bất kỳ lúc running/paused) → cancelled
+   │      │      │                        │ stop() → cancelled
+   │      │      └── reject ──► DELETED (xoá job + run dir; 0 token Writer)
+   │      │
+   │      └── revise(note) ──► tạo run MỚI (queued→running, note ghép vào profile);
+   │                            run cũ GIỮ LẠI làm dự phòng. Regenerate nền móng từ đầu.
+   │
+   └── approve ──► FoundationApproved=true → queued → running
+                    (restart CÙNG run dir; headless Resume() native, KHÔNG --prompt-file;
+                     gate không tái kích vì FoundationApproved)
+
+   reveal (mở thư mục sửa tay): side-action, KHÔNG đổi status.
+
+Sau state cuối (completed/failed/cancelled): sync → copy kết quả về host workspace.
+Khi Web UI restart: load() coalesce running/paused → failed (unclean_shutdown);
+awaiting_review được GIỮ NGUYÊN (child đã chủ động kill, không có process treo).
+```
+
+**Foundation Gate (chi tiết + lý do best-effort, race, các bug đã fix):** xem journal riêng
+[260705-foundation-gate.md](260705-foundation-gate.md). Tóm tắt: engine
+đẩy `phase=writing` **đồng bộ** trong `save_foundation` rồi dispatcher Steer "viết chương 1", nên
+gate (poll 5s) là **best-effort** — tệ nhất Writer kịp draft dở chương 1; không mất hàng trăm chương.
+
+**Ba cách xử lý nền móng ở `awaiting_review`:**
+
+| Hành động | Cơ chế | Chi phí | Độ chính xác |
+|-----------|--------|---------|--------------|
+| **Approve** | restart cùng run dir → native `Resume()` vào writing | tốn token viết (như bình thường) | — |
+| **Sửa tay + Approve** | mở thư mục (`reveal`), sửa file JSON/MD, rồi Approve | 0 | phẫu thuật chính xác; phải tự giữ `outline.json`↔`layered_outline.json`↔`progress.json` khớp |
+| **Revise (AI viết lại)** | ghép góp ý vào cuối `profile.md` → **run mới** regenerate; **run cũ giữ lại** làm dự phòng | ~$0.01 sinh nền móng (same best-effort gate) | KHÔNG phẫu thuật — viết mới hoàn toàn, mọi thứ có thể đổi |
+
 ## Key decisions
 
 - **Child-process isolation.** The Web UI already owns a `host.Host`, so each run spawns its own `ainovel-cli --headless` process with `Cmd.Dir` set to the run directory. This forces engine output into `{runDir}/output/novel` because `bootstrap.Config.OutputDir` is `json:"-"` and `FillDefaults()` resolves it relative to cwd.

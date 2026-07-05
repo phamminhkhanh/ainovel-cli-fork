@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -58,7 +59,7 @@ func (rr *prodRunRunner) start(id string) error {
 	rr.mu.Lock()
 	defer rr.mu.Unlock()
 	if len(rr.running) > 0 {
-		return fmt.Errorf("another production run is already running")
+		return errAnotherRunActive
 	}
 
 	r, err := rr.store.update(id, func(r *ProdRun) {
@@ -105,7 +106,12 @@ func (rr *prodRunRunner) start(id string) error {
 	}
 
 	args := []string{"--headless"}
-	if r.kind() == prodRunKindFreshProfile {
+	if r.kind() == prodRunKindFreshProfile && !runDirHasExistingOutput(runDir) {
+		// Only pass --prompt-file on a truly fresh run dir. If output/novel
+		// already has a progress.json, this is a Foundation Gate approve-resume:
+		// the run dir already contains a seeded book at
+		// phase=writing, so headless must go through native Resume() instead
+		// of re-running startup.PrepareQuick on the same profile.
 		args = append(args, "--prompt-file", "profile.md")
 	}
 	cmd := rr.cmdFactory(rr.binPath, args...)
@@ -206,8 +212,9 @@ func (rr *prodRunRunner) pollLoop(id string, proc *runningProc) {
 
 func (rr *prodRunRunner) poll(id string) {
 	runDir := rr.store.runDir(id)
+	progressPath := filepath.Join(runDir, "output", "novel", "meta", "progress.json")
 
-	chapters := readCompletedChapters(filepath.Join(runDir, "output", "novel", "meta", "progress.json"))
+	chapters := readCompletedChapters(progressPath)
 	reviews, rewrites := countReviewsAndRewrites(filepath.Join(runDir, "output", "novel", "reviews"))
 	cost := readCostUSD(filepath.Join(runDir, "output", "novel", "meta", "usage.json"))
 
@@ -218,6 +225,32 @@ func (rr *prodRunRunner) poll(id string) {
 		r.CostUSD = cost
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "prodrun: failed to persist stats for %s: %v\n", id, err)
+	}
+
+	// Foundation Gate: a fresh_profile run whose Architect just finished the
+	// foundation flips Phase to writing. Catch that transition here and stop
+	// the child so the user can review premise/outline/world/characters before
+	// committing to the bulk of the book. Best-effort (5s poll): the phase flip
+	// + writer dispatch happen synchronously in save_foundation, so worst case
+	// the Writer already drafted part of chapter 1 before this tick lands.
+	// continue_workspace runs are seeded already in phase=writing, so this
+	// check must not apply to them or every continue run would be paused
+	// immediately after start.
+	r := rr.store.get(id)
+	if r != nil && r.kind() == prodRunKindFreshProfile && r.Status == prodRunRunning && chapters == 0 && !r.FoundationApproved {
+		if readWorkspacePhase(progressPath) == string(domain.PhaseWriting) {
+			if _, err := rr.store.update(id, func(r *ProdRun) {
+				if r.Status == prodRunRunning {
+					r.Status = prodRunAwaitingReview
+					r.StopReason = stopReasonFoundationReady
+					r.StoppedAt = time.Now()
+				}
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "prodrun: failed to persist awaiting_review status for %s: %v\n", id, err)
+			}
+			rr.killProcess(id)
+			return
+		}
 	}
 
 	// Pause detection: the engine prints a Chinese prompt when it waits for user input.
@@ -331,13 +364,36 @@ func prepareRunDir(runDir, repoRoot, hostDir string, r *ProdRun, baseCfg bootstr
 
 	switch r.kind() {
 	case prodRunKindFreshProfile:
-		srcProfile, err := resolveExistingProfilePath(r.Profile, repoRoot)
-		if err != nil {
-			return fmt.Errorf("resolve profile: %w", err)
-		}
-		dstProfile := filepath.Join(runDir, "profile.md")
-		if err := copyFile(dstProfile, srcProfile); err != nil {
-			return fmt.Errorf("copy profile: %w", err)
+		// Foundation Gate approve-resume: the run dir already holds a seeded
+		// book at phase=writing and the child will Resume() natively (no
+		// --prompt-file), so the profile is neither needed nor copied. Requiring
+		// it here would make approve fail if the source profile was moved/deleted
+		// after the initial run — and re-copying would be pointless I/O.
+		if !runDirHasExistingOutput(runDir) {
+			srcProfile, err := resolveExistingProfilePath(r.Profile, repoRoot)
+			if err != nil {
+				return fmt.Errorf("resolve profile: %w", err)
+			}
+			dstProfile := filepath.Join(runDir, "profile.md")
+			if err := copyFile(dstProfile, srcProfile); err != nil {
+				return fmt.Errorf("copy profile: %w", err)
+			}
+			// Foundation Gate revise: append the user's steering note so the
+			// Architect regenerates the foundation with it in mind.
+			if strings.TrimSpace(r.RevisionNote) != "" {
+				note := "\n\n## 用户修订要求 (User revision request)\n" + r.RevisionNote + "\n"
+				f, err := os.OpenFile(dstProfile, os.O_APPEND|os.O_WRONLY, 0o644)
+				if err != nil {
+					return fmt.Errorf("open profile for revision note: %w", err)
+				}
+				if _, err := f.WriteString(note); err != nil {
+					_ = f.Close()
+					return fmt.Errorf("append revision note: %w", err)
+				}
+				if err := f.Close(); err != nil {
+					return fmt.Errorf("close profile after revision note: %w", err)
+				}
+			}
 		}
 	case prodRunKindContinueWorkspace:
 		if r.SeededFrom == nil || r.SeededFrom.Fingerprint == "" {
@@ -414,6 +470,28 @@ func readCompletedChapters(path string) int {
 		return 0
 	}
 	return len(p.CompletedChapters)
+}
+
+// runDirHasExistingOutput reports whether a run's output/novel/meta/progress.json
+// already exists, meaning this run dir was already started once (Foundation
+// Gate approve-resume) rather than being a brand-new fresh_profile run.
+func runDirHasExistingOutput(runDir string) bool {
+	_, err := os.Stat(filepath.Join(runDir, "output", "novel", "meta", "progress.json"))
+	return err == nil
+}
+
+// readWorkspacePhase returns the Phase string from a progress.json, or ""
+// if the file is missing/unreadable. Used by the Foundation Gate poll check.
+func readWorkspacePhase(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var p domain.Progress
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	return string(p.Phase)
 }
 
 func countReviewsAndRewrites(dir string) (int, int) {
@@ -576,6 +654,107 @@ func (pm *prodRunManager) CreateContinue(name, model, provider string, targetCha
 		SeededFrom:     seed,
 		Chapters:       seed.CompletedChapters,
 	})
+}
+
+// ApproveFoundation resumes a run that is awaiting_review (Foundation Gate).
+// The run's own sandbox dir already has a seeded book at
+// phase=writing from the first (killed) headless invocation, so this simply
+// flips status back to queued and restarts the same run dir: prepareRunDir's
+// fresh_profile branch is idempotent, and the runner's --prompt-file guard
+// (runDirHasExistingOutput) makes the child skip startup.PrepareQuick and go
+// through native Resume() instead.
+func (pm *prodRunManager) ApproveFoundation(id string) (*ProdRun, error) {
+	r, err := pm.store.update(id, func(r *ProdRun) {
+		if r.Status != prodRunAwaitingReview {
+			return
+		}
+		r.Status = prodRunQueued
+		r.StopReason = ""
+		r.StoppedAt = time.Time{}
+		r.FoundationApproved = true
+	})
+	if err != nil {
+		return nil, err
+	}
+	if r.Status != prodRunQueued {
+		return nil, fmt.Errorf("run %q is not awaiting review", id)
+	}
+	if startErr := pm.startWithReapRetry(id); startErr != nil {
+		// Don't strand the run in queued (it could no longer be rejected).
+		// Revert to awaiting_review so the user can retry or reject.
+		if _, revErr := pm.store.update(id, func(r *ProdRun) {
+			if r.Status == prodRunQueued {
+				r.Status = prodRunAwaitingReview
+				r.StopReason = stopReasonFoundationReady
+			}
+		}); revErr != nil {
+			fmt.Fprintf(os.Stderr, "prodrun: approve failed and could not revert %s: %v\n", id, revErr)
+		}
+		return nil, startErr
+	}
+	return pm.store.get(id), nil
+}
+
+// startWithReapRetry starts a run, retrying for ~1s while the single-run slot
+// is still occupied by a just-killed child that waitProc hasn't reaped yet
+// (the gate's killProcess is async). Any non-"active" error returns immediately.
+func (pm *prodRunManager) startWithReapRetry(id string) error {
+	var startErr error
+	for i := 0; i < 20; i++ {
+		startErr = pm.runner.start(id)
+		if startErr == nil {
+			return nil
+		}
+		if !errors.Is(startErr, errAnotherRunActive) {
+			return startErr
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return startErr
+}
+
+// ReviseFoundation regenerates the foundation of an awaiting_review run with a
+// user steering note (Foundation Gate). It creates a NEW fresh_profile run
+// from the same profile with the note appended to the prompt and starts it
+// (regenerating the foundation and pausing again at the gate). Cost is just the
+// cheap Architect foundation pass (~$0.01); the new run hits the same
+// best-effort gate, so worst case it too drafts a partial chapter 1.
+//
+// The OLD run is intentionally KEPT (not deleted): the new run may fail during
+// regeneration (API/budget/profile), and deleting the reviewed candidate before
+// the new one reaches awaiting_review would lose it. The user picks the new run
+// and rejects the old when satisfied.
+func (pm *prodRunManager) ReviseFoundation(id, feedback string) (*ProdRun, error) {
+	feedback = strings.TrimSpace(feedback)
+	if feedback == "" {
+		return nil, fmt.Errorf("revision note is required")
+	}
+	old := pm.store.get(id)
+	if old == nil {
+		return nil, errDeleteRunNotFound
+	}
+	if old.Status != prodRunAwaitingReview {
+		return nil, fmt.Errorf("run %q is not awaiting review (status=%s)", id, old.Status)
+	}
+	newRun, err := pm.store.createWithOptions(prodRunCreateOptions{
+		Kind:           prodRunKindFreshProfile,
+		Name:           old.Name + " (s\u1eeda)",
+		Profile:        old.Profile,
+		Model:          old.Model,
+		Provider:       old.Provider,
+		TargetChapters: old.TargetChapters,
+		BudgetUSD:      old.BudgetUSD,
+		RevisionNote:   feedback,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if startErr := pm.startWithReapRetry(newRun.ID); startErr != nil {
+		// Clean up the dead new run; the old reviewed candidate stays intact.
+		_ = pm.store.delete(newRun.ID)
+		return nil, startErr
+	}
+	return pm.store.get(newRun.ID), nil
 }
 
 func (pm *prodRunManager) Get(id string) *ProdRun  { return pm.store.get(id) }

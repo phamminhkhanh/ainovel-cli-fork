@@ -212,3 +212,197 @@ func TestHandleProdRunLogEmpty(t *testing.T) {
 		t.Fatalf("expected text/plain, got %s", rec.Header().Get("Content-Type"))
 	}
 }
+
+// createAwaitingReviewRun is a test helper: creates a fresh_profile run whose
+// sandbox output/novel already has a seeded foundation at phase=writing, and
+// marks it awaiting_review — the state a real run reaches after the
+// Foundation Gate poll check kills the child post-foundation.
+func createAwaitingReviewRun(t *testing.T, s *server) *ProdRun {
+	t.Helper()
+	body := `{"name":"gate","profile":"profiles/spike.md","targetChapters":5}`
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleProdRunCreate(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create failed: %d %s", rec.Code, rec.Body.String())
+	}
+	var created ProdRun
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	runDir := s.prodRunManager.RunDir(created.ID)
+	metaDir := filepath.Join(runDir, "output", "novel", "meta")
+	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metaDir, "progress.json"), []byte(`{"phase":"writing","completed_chapters":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "output", "novel", "premise.md"), []byte("# Premise\nA story."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.prodRunManager.store.update(created.ID, func(r *ProdRun) {
+		r.Status = prodRunAwaitingReview
+		r.StopReason = stopReasonFoundationReady
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return s.prodRunManager.Get(created.ID)
+}
+
+func TestHandleProdRunFoundationServesOutline(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	run := createAwaitingReviewRun(t, s)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/prodruns/"+run.ID+"/foundation", nil)
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out outlineResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Premise, "A story") {
+		t.Fatalf("expected premise content, got %q", out.Premise)
+	}
+}
+
+func TestHandleProdRunFoundationMissingRun(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/prodruns/does-not-exist/foundation", nil)
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleProdRunReject(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	run := createAwaitingReviewRun(t, s)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns/"+run.ID+"/reject", nil)
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if s.prodRunManager.Get(run.ID) != nil {
+		t.Fatal("expected run to be deleted after reject")
+	}
+}
+
+func TestHandleProdRunRejectRejectsWrongStatus(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	body := `{"name":"queuedrun","profile":"profiles/spike.md"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleProdRunCreate(rec, req)
+	var created ProdRun
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/prodruns/"+created.ID+"/reject", nil)
+	rec = httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 rejecting a non-awaiting_review run, got %d", rec.Code)
+	}
+}
+
+func TestHandleProdRunApproveWrongStatus(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	body := `{"name":"queuedrun2","profile":"profiles/spike.md"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleProdRunCreate(rec, req)
+	var created ProdRun
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/prodruns/"+created.ID+"/approve", nil)
+	rec = httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 approving a queued run, got %d", rec.Code)
+	}
+}
+
+func TestHandleProdRunReviseValidation(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	run := createAwaitingReviewRun(t, s)
+
+	// Empty feedback → 400.
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns/"+run.ID+"/revise", bytes.NewReader([]byte(`{"feedback":"  "}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty feedback should be 400, got %d", rec.Code)
+	}
+
+	// Revise on a non-awaiting_review run → 409.
+	body := `{"name":"q","profile":"profiles/spike.md"}`
+	cr := httptest.NewRequest(http.MethodPost, "/api/prodruns", bytes.NewReader([]byte(body)))
+	cr.Header.Set("Content-Type", "application/json")
+	crec := httptest.NewRecorder()
+	s.handleProdRunCreate(crec, cr)
+	var queued ProdRun
+	_ = json.Unmarshal(crec.Body.Bytes(), &queued)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/prodruns/"+queued.ID+"/revise", bytes.NewReader([]byte(`{"feedback":"x"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("revise on queued run should be 409, got %d", rec.Code)
+	}
+}
+
+func TestHandleProdRunRevealOpensFoundationDir(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	s.addr = "127.0.0.1:8787" // loopback so reveal is allowed
+	run := createAwaitingReviewRun(t, s)
+
+	var opened string
+	orig := revealOpen
+	revealOpen = func(dir string) error { opened = dir; return nil }
+	defer func() { revealOpen = orig }()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns/"+run.ID+"/reveal", nil)
+	req.SetPathValue("id", run.ID)
+	rec := httptest.NewRecorder()
+	s.handleProdRunReveal(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(filepath.ToSlash(opened), "output/novel") {
+		t.Fatalf("reveal must open the run's output/novel dir, got %q", opened)
+	}
+}
+
+func TestHandleProdRunRevealBlockedOnPublicBind(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	s.addr = "0.0.0.0:8787" // non-loopback
+	run := createAwaitingReviewRun(t, s)
+
+	called := false
+	orig := revealOpen
+	revealOpen = func(string) error { called = true; return nil }
+	defer func() { revealOpen = orig }()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/prodruns/"+run.ID+"/reveal", nil)
+	req.SetPathValue("id", run.ID)
+	rec := httptest.NewRecorder()
+	s.handleProdRunReveal(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("public bind must 403, got %d", rec.Code)
+	}
+	if called {
+		t.Fatal("public bind must not open file manager")
+	}
+}

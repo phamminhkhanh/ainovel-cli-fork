@@ -91,6 +91,11 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("POST /api/prodruns/{id}/export", s.handleProdRunExport)
 	mux.HandleFunc("GET /api/prodruns/{id}/export.txt", s.handleProdRunExportDownload)
 	mux.HandleFunc("POST /api/prodruns/{id}/sync", s.handleProdRunSync)
+	mux.HandleFunc("GET /api/prodruns/{id}/foundation", s.handleProdRunFoundation)
+	mux.HandleFunc("POST /api/prodruns/{id}/approve", s.handleProdRunApprove)
+	mux.HandleFunc("POST /api/prodruns/{id}/reject", s.handleProdRunReject)
+	mux.HandleFunc("POST /api/prodruns/{id}/revise", s.handleProdRunRevise)
+	mux.HandleFunc("POST /api/prodruns/{id}/reveal", s.handleProdRunReveal)
 
 	// 共创 / 导出 / 导入 / 仿写 / 诊断（Phase 3）
 	mux.HandleFunc("/api/cocreate/send", s.handleCoCreateSend)
