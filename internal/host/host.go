@@ -119,6 +119,8 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	var router *flow.Dispatcher
 	var budget *BudgetSentinel
 	var pauser *PausePointSentinel
+	// onGuardBlock 与 router/budget 同款前置声明：h 构造后才能挂事件浮出闭包。
+	var onGuardBlock func(agent, reason string, consecutive int32)
 	coordinator, askUser, restore, coordinatorCtxMgr, applyThinking := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record, func(string) {
 		if budget != nil && budget.HandleBoundary() {
 			return
@@ -129,6 +131,10 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		}
 		if router != nil {
 			router.Dispatch()
+		}
+	}, func(agent, reason string, consecutive int32) {
+		if onGuardBlock != nil {
+			onGuardBlock(agent, reason, consecutive)
 		}
 	})
 	store.Signals.ClearStaleSignals()
@@ -199,6 +205,24 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "指令重复: " + body, Level: "warn"})
 		h.notifier.Send(notify.Notification{Kind: "repeat", Level: "warn", Title: "ainovel: 指令重复", Body: body})
 	})
+	// StopGuard 拦截浮出：blocked 是高频自愈动作，只进屏内事件流（推送会刷屏）；
+	// escalated / hard_stop 意味着本轮子任务报废重派，事件+notify 成对发出（架构 §2.3）。
+	// 没有这层，拦截只进日志，用户在 TUI 上只看到"卡顿+token 变快"（issue #75）。
+	onGuardBlock = func(agent, reason string, n int32) {
+		switch reason {
+		case "escalated":
+			body := fmt.Sprintf("%s 连续 %d 次空转未落盘必要产物，本轮任务终止，交回 Coordinator 裁定", agent, n)
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Agent: agent, Summary: "StopGuard 升级: " + body, Level: "warn"})
+			h.notifier.Send(notify.Notification{Kind: "stop_guard", Level: "warn", Title: "ainovel: StopGuard", Body: body})
+		case "hard_stop":
+			body := fmt.Sprintf("%s 遭 provider 拒答（safety/content_filter），本轮任务立即终止", agent)
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Agent: agent, Summary: "StopGuard 升级: " + body, Level: "warn"})
+			h.notifier.Send(notify.Notification{Kind: "stop_guard", Level: "warn", Title: "ainovel: StopGuard", Body: body})
+		default: // blocked
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Agent: agent,
+				Summary: fmt.Sprintf("StopGuard: %s 未完成必要产物就试图结束，已拦截催促（连续第 %d 次）", agent, n), Level: "info"})
+		}
+	}
 
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
 		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
@@ -697,6 +721,7 @@ func (h *Host) Snapshot() UISnapshot {
 		OverallRecentCacheRead: recentRead,
 		OverallRecentInput:     recentInput,
 		OverallRecentSamples:   recentSamples,
+		TotalCacheBreaks:       h.usage.OverallCacheBreaks(),
 		CachePerAgent:          cacheStats,
 		CachePerModel:          modelStats,
 		MissingAssistantUsage:  h.usage.MissingAssistantUsage(),

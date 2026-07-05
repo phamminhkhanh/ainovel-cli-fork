@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -18,6 +19,14 @@ import (
 // recentSampleCap 是滑动窗大小：只保留每个 role 最近 N 次调用的 (cacheRead, input)
 // 样本，用于在左栏对比"累计 vs 近 N 次"命中率，识别"前期拖累"vs"稳态低命中"。
 const recentSampleCap = 10
+
+// 缓存链断裂判定双阈值（对齐 Claude Code 的实证经验）：命中量较上次下降超过
+// 5%（相对）且降幅 ≥2000 tokens（绝对）才算断裂——单一相对阈值会被小前缀噪声
+// 淹没，单一绝对阈值会漏掉大前缀的显著退化。
+const (
+	cacheBreakKeepRatio     = 0.95
+	cacheBreakMinDropTokens = 2000
+)
 
 // UsageTracker 累计整个会话所有 agent 的 LLM 输入/输出 token 与美元成本。
 //
@@ -41,6 +50,11 @@ type UsageTracker struct {
 	perModel map[string]*agentTotals // key 为 provider/model；provider 未知时退化为 model
 	modelSet *bootstrap.ModelSet
 	store    *storepkg.Store // 可为 nil（测试场景），nil 时所有持久化方法静默 noop
+
+	// cacheTrack 是 per-role 的缓存链基线（上次调用的前缀长度/命中量/时间），
+	// 用于断裂检测。只在 live Record 路径更新——replay 重放历史不检测，
+	// 否则每次启动都会把陈年断裂刷成误报。不持久化。
+	cacheTrack map[string]*cacheTrackState
 
 	// missingAssistantUsage 累计"收到 assistant 消息但 Usage 为 nil"的次数。
 	// 实测下来主要发生在自建 OpenAI 兼容 backend 没在 streaming 末尾按 OpenAI
@@ -69,6 +83,19 @@ type usageSample struct {
 	Input     int
 }
 
+// cacheTrackState 是一个 role 当前会话的缓存链基线。task（spawn 任务文本）是
+// 会话身份：换 task = 新 spawn = 新缓存血统（prompt_cache_key 带 #seq），首请求
+// 命中低是常态，直接换基线不比较——否则"上一会话很短、新会话首请求前缀反而更长"
+// 时会误报断裂。Input 语义（含 CacheRead，见 computeCost 注释）恰好等于"服务端
+// 处理的前缀长度"，据此可区分三种走向：前缀缩短 = 会话内压缩（合法，重置基线）；
+// 前缀增长且命中跟涨 = 链路健康；前缀增长而命中骤降 = 断裂。
+type cacheTrackState struct {
+	task          string
+	lastPrefix    int
+	lastCacheRead int
+	lastAt        time.Time
+}
+
 // agentTotals 是一个 agent 的累计计数。
 //   - Saved 是按当前命中数据反算的"如果按非缓存价计费"的差额
 //   - CacheCapable 仅在该 role 至少经过一次"已知支持 cache 的模型"调用后置 true
@@ -81,17 +108,19 @@ type agentTotals struct {
 	Cost         float64
 	Saved        float64
 	CacheCapable bool
+	CacheBreaks  int // live 检测到的缓存链断裂次数（replay 不计）
 	samples      []usageSample
 	sampleIdx    int
 }
 
 func NewUsageTracker(set *bootstrap.ModelSet, store *storepkg.Store) *UsageTracker {
 	return &UsageTracker{
-		modelSet: set,
-		store:    store,
-		perAgent: make(map[string]*agentTotals, 4),
-		perModel: make(map[string]*agentTotals, 4),
-		saveCh:   make(chan struct{}, 1),
+		modelSet:   set,
+		store:      store,
+		perAgent:   make(map[string]*agentTotals, 4),
+		perModel:   make(map[string]*agentTotals, 4),
+		cacheTrack: make(map[string]*cacheTrackState, 4),
+		saveCh:     make(chan struct{}, 1),
 	}
 }
 
@@ -101,7 +130,7 @@ func NewUsageTracker(set *bootstrap.ModelSet, store *storepkg.Store) *UsageTrack
 // 装配细节（上游协议把 usage 放在响应顶层），未来装配规则变了也不用动这里。
 // 诊断要求 Role=Assistant 且 Content 非空，避免 AbortMsg / 异常恢复 / tool /
 // user 消息污染 missingAssistantUsage 计数。
-func (t *UsageTracker) Record(agentName string, msg agentcore.AgentMessage) {
+func (t *UsageTracker) Record(agentName, task string, msg agentcore.AgentMessage) {
 	if t == nil {
 		return
 	}
@@ -116,8 +145,62 @@ func (t *UsageTracker) Record(agentName string, msg agentcore.AgentMessage) {
 		return
 	}
 	role := agentRoleName(agentName)
+	t.noteCacheBreak(role, task, *m.Usage)
 	provider, modelName := usageActualModel(m.Usage)
 	t.accumulate(role, provider, modelName, *m.Usage)
+}
+
+// noteCacheBreak 是缓存链断裂检测（纯观测，不修复，只在 live Record 路径调用）。
+//
+// 判定：同一会话（role+task）内前缀（Input，含 CacheRead）未缩短，而命中量较上次
+// 下降 >5% 且降幅 ≥2000 tokens。task 变化 = 新 spawn = 新缓存血统，直接换基线不
+// 比较；前缀缩短说明是上下文压缩，属合法下降，只重置基线不告警。归因按优先级给
+// 提示：间隔超过 TTL → 疑似过期；间隔很短且客户端字节本应稳定 → 疑似服务端逐出/
+// 路由漂移（中转站轮询上游是常见原因）。
+func (t *UsageTracker) noteCacheBreak(role, task string, u agentcore.Usage) {
+	now := time.Now()
+	prefix := u.Input // litellm 各 provider 保证 Input 含 CacheRead
+
+	t.mu.Lock()
+	st := t.cacheTrack[role]
+	if st == nil || st.task != task {
+		t.cacheTrack[role] = &cacheTrackState{task: task, lastPrefix: prefix, lastCacheRead: u.CacheRead, lastAt: now}
+		t.mu.Unlock()
+		return
+	}
+	prevPrefix, prevRead, prevAt := st.lastPrefix, st.lastCacheRead, st.lastAt
+	st.lastPrefix, st.lastCacheRead, st.lastAt = prefix, u.CacheRead, now
+
+	broke := prevPrefix > 0 && prefix >= prevPrefix &&
+		float64(u.CacheRead) < float64(prevRead)*cacheBreakKeepRatio &&
+		prevRead-u.CacheRead >= cacheBreakMinDropTokens
+	if broke {
+		t.overall.CacheBreaks++
+		per := t.perAgent[role]
+		if per == nil {
+			per = &agentTotals{}
+			t.perAgent[role] = per
+		}
+		per.CacheBreaks++
+	}
+	t.mu.Unlock()
+
+	if !broke {
+		return
+	}
+	gap := now.Sub(prevAt).Round(time.Second)
+	hint := "疑似服务端逐出/路由漂移（中转站轮询上游是常见原因）"
+	if gap > time.Hour {
+		hint = "疑似 1h TTL 过期"
+	} else if gap > 5*time.Minute {
+		hint = "疑似 5m TTL 过期"
+	}
+	slog.Warn("缓存链断裂：前缀未缩短而命中骤降",
+		"module", "usage", "role", role,
+		"cache_read", fmt.Sprintf("%d→%d", prevRead, u.CacheRead),
+		"prefix", fmt.Sprintf("%d→%d", prevPrefix, prefix),
+		"gap", gap.String(), "hint", hint)
+	t.notifyDirty()
 }
 
 func usageActualModel(u *agentcore.Usage) (provider, modelName string) {
@@ -314,6 +397,16 @@ func (t *UsageTracker) OverallRecent() (cacheRead, input, samples int) {
 	return r, in, len(t.overall.samples)
 }
 
+// OverallCacheBreaks 返回 live 检测到的缓存链断裂总次数。
+func (t *UsageTracker) OverallCacheBreaks() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.overall.CacheBreaks
+}
+
 // OverallCacheCapable 整体是否至少经过一次已知支持 cache 的模型。
 func (t *UsageTracker) OverallCacheCapable() bool {
 	if t == nil {
@@ -483,6 +576,7 @@ func totalsSnapshot(t *agentTotals) domain.AgentUsageTotals {
 		Cost:         t.Cost,
 		Saved:        t.Saved,
 		CacheCapable: t.CacheCapable,
+		CacheBreaks:  t.CacheBreaks,
 	}
 }
 
@@ -497,6 +591,7 @@ func totalsFromState(s domain.AgentUsageTotals) agentTotals {
 		Cost:         s.Cost,
 		Saved:        s.Saved,
 		CacheCapable: s.CacheCapable,
+		CacheBreaks:  s.CacheBreaks,
 	}
 }
 

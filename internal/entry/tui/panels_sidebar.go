@@ -427,6 +427,13 @@ func renderCacheSidebar(snap host.UISnapshot, width int) string {
 		b.WriteString(renderField("缓存写量", "0 "+hint))
 	}
 
+	// 断裂 = 前缀未缩短而命中骤降（合法下降如换章/压缩已豁免）。次数多通常
+	// 指向服务端逐出或中转轮询上游，详情看 tui.log 的"缓存链断裂"warn。
+	if snap.TotalCacheBreaks > 0 {
+		v := lipgloss.NewStyle().Foreground(colorReview).Render(fmt.Sprintf("%d 次", snap.TotalCacheBreaks))
+		b.WriteString(renderField("链路断裂", v))
+	}
+
 	if len(snap.CachePerAgent) > 0 {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).
 			Render(strings.Repeat("·", max(8, width-12))))

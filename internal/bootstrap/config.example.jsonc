@@ -70,6 +70,11 @@
       // responses（/v1/responses）。Codex 类代理通常需要 responses。
       "api": "responses",
       "extra": {
+        // 可选。缓存路由键 prompt_cache_key 默认只发给官方 api.openai.com——
+        // 第三方兼容端对未知字段没有统一契约（Groq/Cerebras/火山等严格端会 400，
+        // 重编组型中转会静默丢弃）。确认你的中转原样透传请求体到 OpenAI 时，
+        // 打开此项可获得缓存路由亲和（提升命中率）。
+        "prompt_cache_params": true,
         "user_agent": "codex-tui/0.142.3 (Mac OS 26.5.1; arm64) Apple_Terminal/470.2 (codex-tui; 0.142.3)",
         "headers": {
           "Originator": "codex-tui",

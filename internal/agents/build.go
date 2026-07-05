@@ -2,6 +2,8 @@ package agents
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -35,6 +37,14 @@ func agentToRole(name string) string {
 	return name
 }
 
+// promptCacheBase 从书目录派生稳定短哈希，作为提示词缓存身份前缀：同一本书
+// 跨进程重启共享路由桶，且不向 provider 泄露本地路径。角色后缀由调用方拼接，
+// subagent 每次 spawn 再追加 "#seq"（一次会话一个键）。
+func promptCacheBase(bookDir string) string {
+	sum := sha256.Sum256([]byte(bookDir))
+	return "nvl-" + hex.EncodeToString(sum[:6])
+}
+
 // subagentMaxRetries 给所有 SubAgentConfig 与 Coordinator 统一的 LLM retry 上限。
 // 退避策略：指数退避（受 maxDelay 上限约束），优先服从 server Retry-After。
 // 配合 ToolsAreIdempotent=true 让 stream-idle / 503 / 短暂网络抖动这类 retryable
@@ -43,8 +53,10 @@ func agentToRole(name string) string {
 const subagentMaxRetries = 7
 
 // UsageRecorder 是 BuildCoordinator 可选的用量回调；签名与 OnMessage 一致，
-// 每条 agent 消息都会调一次，由 Host 层负责聚合。nil 表示不追踪。
-type UsageRecorder func(agentName string, msg agentcore.AgentMessage)
+// 每条 agent 消息都会调一次，由 Host 层负责聚合。task 是本次 spawn 的任务文本
+// （coordinator 无 spawn，恒为空），作为会话身份供缓存链断裂检测按会话重置基线。
+// nil 表示不追踪。
+type UsageRecorder func(agentName, task string, msg agentcore.AgentMessage)
 
 // FlowBoundaryHook runs synchronously after a Coordinator tool that advances
 // the durable story state succeeds. Host uses it to queue the next flow
@@ -99,6 +111,8 @@ func resolvedRoleThinking(model agentcore.ChatModel, cfg bootstrap.Config, role 
 // SetReserveTokens 联动新模型的窗口（writer/architect/editor 走 ContextManagerFactory
 // 自动重建，不需要 ref；只有常驻的 coordinator 需要），并通过 ApplyThinking 联动各角色
 // 推理强度。Host 层通过 Agent.Subscribe 获取事件流,不再需要 emit 回调。
+// onGuardBlock 可选（nil 安全）：所有 StopGuard（coordinator + 各子代理）的拦截/升级
+// 审计回调，Host 用它把拦截事实浮出到 TUI 事件流，见 reminder.BlockHook。
 func BuildCoordinator(
 	cfg bootstrap.Config,
 	store *store.Store,
@@ -106,6 +120,7 @@ func BuildCoordinator(
 	bundle assets.Bundle,
 	recordUsage UsageRecorder,
 	onFlowBoundary FlowBoundaryHook,
+	onGuardBlock reminder.BlockHook,
 ) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack, *corecontext.ContextEngine, ApplyThinking) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
@@ -174,19 +189,25 @@ func BuildCoordinator(
 	onMsg := func(agentName, task string, msg agentcore.AgentMessage) {
 		baseOnMsg(agentName, task, msg)
 		if recordUsage != nil {
-			recordUsage(agentName, msg)
+			recordUsage(agentName, task, msg)
 		}
 	}
 	baseCoordinatorLog := store.Sessions.CoordinatorLogger(modelLookup)
 	coordinatorOnMessage := func(msg agentcore.AgentMessage) {
 		baseCoordinatorLog(msg)
 		if recordUsage != nil {
-			recordUsage("coordinator", msg)
+			recordUsage("coordinator", "", msg)
 		}
 	}
 
+	// 提示词缓存：一书一基、一角色一名、一会话一键（subagent spawn 追加 #seq）。
+	// OpenAI 系用 prompt_cache_key 做路由亲和；Claude 系用 cache_control 滚动断点
+	//（system 地板 + 末消息尖端）。provider 不支持时由 agentcore 按能力静默丢弃，
+	// 多轮会话下读缓存收益恒为正，故不设开关。
+	cacheBase := promptCacheBase(store.Dir())
+
 	architectStopGuardFactory := func(_, _ string) agentcore.StopGuard {
-		return reminder.NewArchitectStopGuard(store)
+		return reminder.NewArchitectStopGuard(store, onGuardBlock)
 	}
 	architectThinking, _ := ResolveThinkingForModel(architectModel, roleThinking(cfg, "architect"))
 	architectShort := subagent.Config{
@@ -200,6 +221,8 @@ func BuildCoordinator(
 		ThinkingLevel:      architectThinking,
 		ToolsAreIdempotent: true,
 		OnMessage:          onMsg,
+		CacheLastMessage:   "ephemeral",
+		PromptCacheKey:     cacheBase + "-architect_short",
 		StopAfterToolResult: func(toolName string, result json.RawMessage) bool {
 			r := decodeSaveFoundationResult(toolName, result)
 			return r.Type == "outline" && r.FoundationReady
@@ -217,6 +240,8 @@ func BuildCoordinator(
 		ThinkingLevel:       architectThinking,
 		ToolsAreIdempotent:  true,
 		OnMessage:           onMsg,
+		CacheLastMessage:    "ephemeral",
+		PromptCacheKey:      cacheBase + "-architect_long",
 		StopAfterToolResult: architectLongShouldStopAfterToolResult,
 		StopGuardFactory:    architectStopGuardFactory,
 	}
@@ -241,8 +266,10 @@ func BuildCoordinator(
 		ToolsAreIdempotent: true,
 		StopAfterTools:     []string{"commit_chapter"},
 		OnMessage:          onMsg,
+		CacheLastMessage:   "ephemeral",
+		PromptCacheKey:     cacheBase + "-writer",
 		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
-			return reminder.NewWriterStopGuard(store)
+			return reminder.NewWriterStopGuard(store, onGuardBlock)
 		},
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
 			// 每次 subagent(writer) 调用都会重建，从当前 runModel 读取最新模型名。
@@ -254,6 +281,10 @@ func BuildCoordinator(
 				ReserveTokens:    bootstrap.CompactReserveTokens(window),
 				KeepRecentTokens: 20000,
 				Agent:            "writer",
+				// 投影提交为新 baseline。瞬态投影在越阈后每次调用都重投影、
+				// 切点滑动，等于每轮改写请求前缀（缓存全灭）；提交后回到
+				// append-only，直到下次越阈。
+				CommitOnProject: true,
 				ToolMicrocompact: &corecontext.ToolResultMicrocompactConfig{
 					IdleThreshold: 5 * time.Minute,
 				},
@@ -285,6 +316,8 @@ func BuildCoordinator(
 		ThinkingLevel:      resolvedRoleThinking(editorModel, cfg, "editor"),
 		ToolsAreIdempotent: true,
 		OnMessage:          onMsg,
+		CacheLastMessage:   "ephemeral",
+		PromptCacheKey:     cacheBase + "-editor",
 		// 仅摘要类终态产物命中即停；save_review 不再硬停——StopAfterTool 退出会绕过
 		// StopGuard（agentcore loop.go），若 save_review 硬停，"被派生成弧摘要却先复核"
 		// 的 editor 会在 save_review 处被砍断、够不到 save_arc_summary。评审/摘要任务的
@@ -293,7 +326,7 @@ func BuildCoordinator(
 			return toolName == "save_arc_summary" || toolName == "save_volume_summary"
 		},
 		StopGuardFactory: func(_, task string) agentcore.StopGuard {
-			return reminder.NewEditorStopGuard(store, task)
+			return reminder.NewEditorStopGuard(store, task, onGuardBlock)
 		},
 	}
 
@@ -318,8 +351,10 @@ func BuildCoordinator(
 		// subagent 是流程主通道；真实错误应显式返回给 Host，而不是在单次 run 内永久禁用工具。
 		agentcore.WithMaxToolErrors(0),
 		agentcore.WithMaxRetries(subagentMaxRetries),
+		agentcore.WithCacheLastMessage("ephemeral"),
+		agentcore.WithPromptCacheKey(cacheBase+"-coordinator"),
 		agentcore.WithContextManager(coordinatorEngine),
-		agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
+		agentcore.WithStopGuard(reminder.NewStopGuard(store, onGuardBlock)),
 		agentcore.WithMiddlewares(flowBoundaryMiddleware(onFlowBoundary)),
 		// phase=complete 时硬拦截 subagent 派发，防止 Writer 死循环。
 		agentcore.WithToolGate(combineToolGates(

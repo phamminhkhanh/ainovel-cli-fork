@@ -53,9 +53,9 @@ func Test_pushSample_RingBuffer(t *testing.T) {
 func Test_UsageTracker_RecordAccumulates(t *testing.T) {
 	tk := NewUsageTracker(nil, nil) // modelSet=nil → 走 provider Cost 兜底，不影响累计逻辑
 
-	tk.Record("writer", makeUsageMsg(1000, 800, 0, 200))
-	tk.Record("writer", makeUsageMsg(1500, 1200, 100, 300))
-	tk.Record("editor", makeUsageMsg(500, 0, 0, 100))
+	tk.Record("writer", "", makeUsageMsg(1000, 800, 0, 200))
+	tk.Record("writer", "", makeUsageMsg(1500, 1200, 100, 300))
+	tk.Record("editor", "", makeUsageMsg(500, 0, 0, 100))
 
 	cost, in, out, cr, cw := tk.Totals()
 	if in != 3000 || out != 600 || cr != 2000 || cw != 100 {
@@ -82,9 +82,9 @@ func Test_UsageTracker_RecordAccumulates(t *testing.T) {
 // 都归一到同一个 "architect" key（避免被 /model 切换的子角色拆成多行）。
 func Test_UsageTracker_ArchitectAliasNormalized(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
-	tk.Record("architect_short", makeUsageMsg(100, 50, 0, 20))
-	tk.Record("architect_mid", makeUsageMsg(200, 100, 0, 40))
-	tk.Record("architect_long", makeUsageMsg(300, 150, 0, 60))
+	tk.Record("architect_short", "", makeUsageMsg(100, 50, 0, 20))
+	tk.Record("architect_mid", "", makeUsageMsg(200, 100, 0, 40))
+	tk.Record("architect_long", "", makeUsageMsg(300, 150, 0, 60))
 
 	per := tk.PerAgent()
 	if len(per) != 1 {
@@ -129,7 +129,7 @@ func Test_UsageTracker_PerModelAccumulates(t *testing.T) {
 
 func Test_UsageTracker_RecordUsesActualUsageModel(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
-	tk.Record("writer", agentcore.Message{
+	tk.Record("writer", "", agentcore.Message{
 		Role: agentcore.RoleAssistant,
 		Usage: &agentcore.Usage{
 			Provider: "openrouter",
@@ -153,7 +153,7 @@ func Test_UsageTracker_RecordUsesActualUsageModel(t *testing.T) {
 
 func Test_UsageTracker_ProviderOnlyDoesNotInventModelKey(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
-	tk.Record("writer", agentcore.Message{
+	tk.Record("writer", "", agentcore.Message{
 		Role: agentcore.RoleAssistant,
 		Usage: &agentcore.Usage{
 			Provider: "openrouter",
@@ -174,11 +174,11 @@ func Test_UsageTracker_RecentWindowReflectsLatest(t *testing.T) {
 
 	// 前 5 次极低命中（首章场景）
 	for i := 0; i < 5; i++ {
-		tk.Record("writer", makeUsageMsg(1000, 0, 0, 200))
+		tk.Record("writer", "", makeUsageMsg(1000, 0, 0, 200))
 	}
 	// 后 8 次（>5）高命中（稳态场景）
 	for i := 0; i < 8; i++ {
-		tk.Record("writer", makeUsageMsg(1000, 900, 0, 200))
+		tk.Record("writer", "", makeUsageMsg(1000, 900, 0, 200))
 	}
 
 	per := tk.PerAgent()
@@ -264,7 +264,7 @@ func Test_UsageTracker_CacheCapableSticky(t *testing.T) {
 		Input: 1000, CacheRead: 500, Output: 200, CacheCapable: true,
 	}
 	// 后续追加一次"不支持 cache 的模型调用"
-	tk.Record("writer", makeUsageMsg(500, 0, 0, 100))
+	tk.Record("writer", "", makeUsageMsg(500, 0, 0, 100))
 
 	per := tk.PerAgent()
 	if len(per) != 1 || per[0].Role != "writer" {
@@ -284,7 +284,7 @@ func Test_UsageTracker_PerAgentSkipsZero(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
 	// 构造一个 role 但不消费 token（极端情况）
 	tk.perAgent["ghost"] = &agentTotals{}
-	tk.Record("writer", makeUsageMsg(100, 50, 0, 20))
+	tk.Record("writer", "", makeUsageMsg(100, 50, 0, 20))
 
 	per := tk.PerAgent()
 	if len(per) != 1 || per[0].Role != "writer" {
@@ -310,15 +310,15 @@ func Test_UsageTracker_MissingAssistantUsageCounted(t *testing.T) {
 	}
 
 	// assistant + 有 Content + nil Usage → 看起来是真响应但缺 usage，计入诊断
-	tk.Record("writer", withContent("hi"))
-	tk.Record("writer", withContent("again"))
+	tk.Record("writer", "", withContent("hi"))
+	tk.Record("writer", "", withContent("again"))
 	// assistant 但 Content 为空 → 异常恢复路径或占位消息，不算 missing
-	tk.Record("writer", agentcore.Message{Role: agentcore.RoleAssistant})
+	tk.Record("writer", "", agentcore.Message{Role: agentcore.RoleAssistant})
 	// user/tool 消息天然不携带 usage，无论 Content 是否为空都不算 missing
-	tk.Record("writer", agentcore.Message{Role: agentcore.RoleUser, Content: []agentcore.ContentBlock{agentcore.TextBlock("u")}})
-	tk.Record("writer", agentcore.Message{Role: agentcore.RoleTool, Content: []agentcore.ContentBlock{agentcore.TextBlock("t")}})
+	tk.Record("writer", "", agentcore.Message{Role: agentcore.RoleUser, Content: []agentcore.ContentBlock{agentcore.TextBlock("u")}})
+	tk.Record("writer", "", agentcore.Message{Role: agentcore.RoleTool, Content: []agentcore.ContentBlock{agentcore.TextBlock("t")}})
 	// 正常带 usage → 走累加路径，不计入诊断
-	tk.Record("writer", makeUsageMsg(100, 50, 0, 20))
+	tk.Record("writer", "", makeUsageMsg(100, 50, 0, 20))
 
 	if got := tk.MissingAssistantUsage(); got != 2 {
 		t.Errorf("MissingAssistantUsage=%d, want 2", got)
@@ -338,7 +338,7 @@ func Test_UsageTracker_CacheCapableFromFacts(t *testing.T) {
 	tk := NewUsageTracker(nil, nil) // modelSet=nil → resolveCost 永远 capable=false
 
 	// 一次有 CacheWrite（模拟首次写入 cache，注册表没标 capable，但事实证明支持）
-	tk.Record("writer", makeUsageMsg(1000, 0, 200, 100))
+	tk.Record("writer", "", makeUsageMsg(1000, 0, 200, 100))
 	per := tk.PerAgent()
 	if len(per) != 1 || !per[0].CacheCapable {
 		t.Fatalf("CacheWrite > 0 应立即标记 CacheCapable=true，got %+v", per)
@@ -348,7 +348,7 @@ func Test_UsageTracker_CacheCapableFromFacts(t *testing.T) {
 	}
 
 	// 反向：完全无 cache 活动的 role，CacheCapable 必须保持 false
-	tk.Record("editor", makeUsageMsg(500, 0, 0, 100))
+	tk.Record("editor", "", makeUsageMsg(500, 0, 0, 100))
 	per = tk.PerAgent()
 	for _, a := range per {
 		if a.Role == "editor" && a.CacheCapable {
@@ -367,7 +367,7 @@ func Test_UsageTracker_AccumulatesAnyRoleWithUsage(t *testing.T) {
 		Role:  agentcore.RoleSystem,
 		Usage: &agentcore.Usage{Input: 200, Output: 50, CacheRead: 100},
 	}
-	tk.Record("writer", hypothetical)
+	tk.Record("writer", "", hypothetical)
 
 	_, in, out, cr, _ := tk.Totals()
 	if in != 200 || out != 50 || cr != 100 {
@@ -391,8 +391,8 @@ func Test_UsageTracker_OnCostCallback(t *testing.T) {
 			Usage: &agentcore.Usage{Input: 100, Output: 10, Cost: &agentcore.Cost{Total: cost}},
 		}
 	}
-	tk.Record("writer", msg(0.5))
-	tk.Record("writer", msg(0.25))
+	tk.Record("writer", "", msg(0.5))
+	tk.Record("writer", "", msg(0.25))
 
 	if len(got) != 2 || got[0] != 0.5 || got[1] != 0.75 {
 		t.Fatalf("onCost should carry growing totals, got %v", got)
@@ -406,11 +406,72 @@ func Test_UsageTracker_OnMissingUsageOnce(t *testing.T) {
 	tk.SetOnMissingUsage(func() { fired++ })
 
 	noUsage := agentcore.Message{Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("正文")}}
-	tk.Record("writer", noUsage)
-	tk.Record("writer", noUsage)
-	tk.Record("editor", noUsage)
+	tk.Record("writer", "", noUsage)
+	tk.Record("writer", "", noUsage)
+	tk.Record("editor", "", noUsage)
 
 	if fired != 1 {
 		t.Fatalf("onMissingUsage should fire exactly once, got %d", fired)
+	}
+}
+
+// TestCacheBreakDetection 验证缓存链断裂检测的四种走向：
+// 同会话内前缀增长+命中骤降 → 断裂；换 task（新 spawn）→ 换基线不比较；
+// 前缀缩短（会话内压缩）→ 只重置基线不告警；降幅不满足双阈值（相对 5%
+// 且绝对 2000）→ 不告警。
+func TestCacheBreakDetection(t *testing.T) {
+	tk := NewUsageTracker(nil, nil)
+
+	// 建立基线：前缀 30k，命中 28k。
+	tk.Record("writer", "写第1章", makeUsageMsg(30000, 28000, 0, 100))
+	if got := tk.OverallCacheBreaks(); got != 0 {
+		t.Fatalf("首条消息不应判断裂，got %d", got)
+	}
+
+	// 同会话内前缀增长而命中骤降（28k→4k）→ 断裂。
+	tk.Record("writer", "写第1章", makeUsageMsg(34000, 4096, 0, 100))
+	if got := tk.OverallCacheBreaks(); got != 1 {
+		t.Fatalf("前缀增长+命中骤降应判 1 次断裂，got %d", got)
+	}
+
+	// 同会话内前缀缩短（上下文压缩，4.4k < 34k）→ 重置基线，不告警。
+	tk.Record("writer", "写第1章", makeUsageMsg(4400, 0, 0, 100))
+	if got := tk.OverallCacheBreaks(); got != 1 {
+		t.Fatalf("前缀缩短应视为压缩重置，got %d", got)
+	}
+
+	// 新基线上小幅回落（降幅 < 2000 绝对阈值）→ 不告警。
+	tk.Record("writer", "写第1章", makeUsageMsg(36000, 30000, 0, 100))
+	tk.Record("writer", "写第1章", makeUsageMsg(38000, 28500, 0, 100))
+	if got := tk.OverallCacheBreaks(); got != 1 {
+		t.Fatalf("降幅 1.5k 未过绝对阈值不应告警，got %d", got)
+	}
+
+	// 换 task = 新 spawn = 新缓存血统：即使首请求前缀不比上一会话末请求短
+	// （38k → 40k）且命中骤降（28.5k→0），也不比较不告警。这是"连续短会话
+	// 误报"回归用例：检测维度必须跟 prompt_cache_key 的会话粒度对齐。
+	tk.Record("writer", "写第2章", makeUsageMsg(40000, 0, 0, 100))
+	if got := tk.OverallCacheBreaks(); got != 1 {
+		t.Fatalf("换 task 换基线，跨会话不应比较，got %d", got)
+	}
+
+	// 新会话内再次断裂 → 正常告警（证明新基线已生效）。
+	tk.Record("writer", "写第2章", makeUsageMsg(45000, 38000, 0, 100))
+	tk.Record("writer", "写第2章", makeUsageMsg(48000, 5000, 0, 100))
+	if got := tk.OverallCacheBreaks(); got != 2 {
+		t.Fatalf("新会话内断裂应正常检测，got %d", got)
+	}
+
+	// 相对降幅 <5%（100k→96k，降 4%）→ 不告警（即使绝对降幅 4k > 2000）。
+	tk.Record("editor", "审阅第一弧", makeUsageMsg(120000, 100000, 0, 100))
+	tk.Record("editor", "审阅第一弧", makeUsageMsg(125000, 96000, 0, 100))
+	if got := tk.OverallCacheBreaks(); got != 2 {
+		t.Fatalf("相对降幅 4%% 未过 5%% 阈值不应告警，got %d", got)
+	}
+
+	// per-role 归属：断裂记在 writer 名下并进 Snapshot。
+	snap := tk.Snapshot()
+	if snap.Overall.CacheBreaks != 2 || snap.PerAgent["writer"].CacheBreaks != 2 {
+		t.Fatalf("断裂计数应进快照：overall=%d writer=%d", snap.Overall.CacheBreaks, snap.PerAgent["writer"].CacheBreaks)
 	}
 }

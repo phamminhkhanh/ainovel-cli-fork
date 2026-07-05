@@ -85,6 +85,7 @@ type UISnapshot struct {
 	OverallRecentCacheRead int  // 滑动窗最近 N 次的 cacheRead 总和
 	OverallRecentInput     int  // 滑动窗最近 N 次的 input 总和
 	OverallRecentSamples   int  // 滑动窗内的样本数（≤ recentSampleCap）
+	TotalCacheBreaks       int  // live 检测到的缓存链断裂次数（前缀未缩短而命中骤降），详见 usage.go noteCacheBreak
 
 	// MissingAssistantUsage > 0 通常意味着上游 streaming 没按 OpenAI
 	// stream_options.include_usage 协议发 final usage chunk（自建 proxy 常见），

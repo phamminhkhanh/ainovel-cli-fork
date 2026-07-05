@@ -23,8 +23,8 @@ import (
 const maxConsecutiveBlocks = 5
 
 // NewStopGuard 构造 Coordinator 专用 StopGuard。
-// onBlock 可选，非 nil 时每次阻拦调一次，用于审计。
-func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32)) agentcore.StopGuard {
+// onBlock 可选，非 nil 时每次阻拦调一次（agent 恒为 "coordinator"），用于审计与 TUI 浮出。
+func NewStopGuard(st *store.Store, onBlock BlockHook) agentcore.StopGuard {
 	var consecutive atomic.Int32
 	var lastBlockTurn atomic.Int64 // 上次 block 的 TurnIndex；-1 表示尚未 block 过
 	lastBlockTurn.Store(-1)
@@ -47,7 +47,7 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 			slog.Error("stop_guard 连续阻拦超限，升级为终止",
 				"module", "host.reminder", "turn", info.TurnIndex, "consecutive", n)
 			if onBlock != nil {
-				onBlock("escalated", n)
+				onBlock("coordinator", "escalated", n)
 			}
 			return agentcore.StopDecision{Allow: false, Escalate: true}
 		}
@@ -58,7 +58,7 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 		slog.Warn("stop_guard 拦截 end_turn",
 			"module", "host.reminder", "turn", info.TurnIndex, "consecutive", n)
 		if onBlock != nil {
-			onBlock("blocked", n)
+			onBlock("coordinator", "blocked", n)
 		}
 		return agentcore.StopDecision{Allow: false, InjectMessage: inject}
 	}
