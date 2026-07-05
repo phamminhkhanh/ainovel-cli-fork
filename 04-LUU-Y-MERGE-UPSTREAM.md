@@ -93,6 +93,8 @@ go test ./internal/entry/web/...
 | **Status `awaiting_review`** | Là schema mới của `ProdRun`. `load()` **cố ý KHÔNG** coalesce nó → `failed` như running/paused (child đã chủ động kill, không có process treo). Nếu refactor `load()`, giữ awaiting_review sống sót qua restart. |
 | **Endpoint Gate mới** (fork-exception `server.go`) | `POST /api/prodruns/{id}/{approve,reject,revise,reveal}` + `GET .../foundation`. Approve = restart cùng run dir (native Resume, skip `--prompt-file` nhờ `runDirHasExistingOutput`). Revise = ghép `RevisionNote` vào cuối `profile.md` rồi tạo run mới. Sau merge nếu reconcile `server.go`, giữ đủ 5 route này. |
 | **Reveal loopback-only** | `POST .../reveal` mở `runDir/output/novel` bằng `revealOpen`; tự chặn 403 khi bind non-loopback (giống `handleReveal`). Đừng nới cho public bind. |
+| **Profile Library** (2026-07-05, `profiles_library.go`) | `GET /api/profiles/content`, `POST /api/profiles/{save,delete}`. Save **project-only** + `409` chống ghi đè âm thầm; delete **project-only** (guard `isWithinDir(resolved, projectBase)` → 403 cho global/legacy). Tái dùng `resolveExistingProfilePath`/`sanitizeFileName`. Nếu upstream đổi layout `profiles/` hay resolver, kiểm lại 3 endpoint này. |
+| **Profile Studio C-lite** (`profile_studio.go`) | `POST /api/profiles/generate` tự dựng `bootstrap.NewModelSet(cfg)` (public constructor — KHÔNG đụng host) rồi `ForRole("thinking").GenerateStream`. Nếu upstream đổi chữ ký `NewModelSet` / `ModelSet.ForRole` / agentcore stream API, vá `runProfileGeneration`. System prompt principle-based, cố ý không ví dụ cụ thể. |
 
 ### Production profile path contract
 
@@ -131,6 +133,7 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 - [ ] Với Production Cockpit resume: tạo `continue_workspace` từ workspace có progress, start không `--prompt-file`, sync fast-forward được, `logs/*.log` không làm fingerprint diverge.
 - [ ] Với force sync: kiểm tra có backup `output/backups/pre-sync-*` trước khi ghi đè.
 - [ ] Với Foundation Gate: tạo `fresh_profile`, start, chờ tới `awaiting_review`; kiểm tra `GET /api/prodruns/{id}/foundation` (+`?section=world|characters`) trả đúng; Approve resume được (không re-gate); Reject xoá; Revise tạo run mới có note trong `profile.md`; Reveal mở đúng `output/novel`.
+- [ ] Với Profile Library: save profile mới (project), sửa + save có 409/confirm ghi đè, delete project OK nhưng delete `global/legacy` trả 403; Studio `generate` trả markdown vào editor (không tự lưu/chạy).
 
 ---
 
@@ -143,6 +146,7 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 | post-v0.6.1 (fork) | 2026-07-04 | Production Cockpit resume mode (`continue_workspace`) + fast-forward sync | Verify native headless `Resume()`, seed fingerprint, `logs/` exclude, force backup, and Windows-safe file-by-file sync |
 | post-v0.6.1 (fork) | 2026-07-04 | Production profile resolver standardized to `.ainovel` 2-layer model + legacy fallback | Verify `/api/profiles`, profile path validation, and `prepareRunDir` resolver after upstream merge |
 | post-v0.6.1 (fork) | 2026-07-05 | Foundation Gate Milestone 1a (`awaiting_review` + approve/reject/revise/reveal, best-effort poll on `progress.json` phase) | Verify `readWorkspacePhase`, `FoundationApproved` chống re-gate, 5 endpoint Gate trong `server.go`, reveal loopback-only |
+| post-v0.6.1 (fork) | 2026-07-05 | Profile Library + Profile Studio C-lite (author/generate profiles in UI) | Verify 4 endpoint `/api/profiles/{content,save,delete,generate}` trong `server.go`; save/delete project-only; `NewModelSet(cfg)` cho Studio |
 ---
 
 ## 6. Link
@@ -151,4 +155,5 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 - Architecture upstream: [`docs/architecture.md`](docs/architecture.md)
 - Journal Production Cockpit MVP (kèm sơ đồ tương tác + state machine): [`docs/journals/260703-production-cockpit-mvp.md`](docs/journals/260703-production-cockpit-mvp.md)
 - Journal Foundation Gate (best-effort gate, revise/reveal, race, bug đã fix): [`docs/journals/260705-foundation-gate.md`](docs/journals/260705-foundation-gate.md)
+- Journal Profile Library & Studio (tạo/sinh/lưu profile trong UI): [`docs/journals/260705-profile-library-studio.md`](docs/journals/260705-profile-library-studio.md)
 - Hướng dẫn dùng Production Cockpit: [`docs/production-cockpit.md`](docs/production-cockpit.md)

@@ -24,6 +24,7 @@ function renderProductionTab() {
             <div class="field-row compact-actions">
               <button class="btn sm primary" id="btnNewFreshRun">+ T\u1ea1o truy\u1ec7n m\u1edbi</button>
               <button class="btn sm" id="btnNewContinueRun">\u21bb Cook ti\u1ebfp</button>
+              <button class="btn sm" id="btnProfileLibrary">\ud83d\udcda Th\u01b0 vi\u1ec7n Profile</button>
             </div>
           </div>
           <ul class="run-list-items" id="runListItems"><li class="muted">\u0110ang t\u1ea3i\u2026</li></ul>
@@ -53,6 +54,58 @@ function renderProductionTab() {
             <button class="btn primary" id="newRunSubmit">T\u1ea1o job</button>
           </footer>
         </div>
+      </div>
+      <div class="modal-overlay" id="profileLibOverlay" hidden>
+        <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="profileLibTitle">
+          <header class="modal-head"><h2 id="profileLibTitle">\ud83d\udcda Th\u01b0 vi\u1ec7n Profile</h2></header>
+          <div class="modal-body profile-lib">
+            <aside class="profile-lib-list">
+              <button class="btn sm primary" id="profileLibNew">+ Profile m\u1edbi</button>
+              <ul id="profileLibItems"><li class="muted">\u0110ang t\u1ea3i\u2026</li></ul>
+              <small class="muted">Ch\u1ec9 profile trong <code>project</code> (./.ainovel/profiles/) s\u1eeda/x\u00f3a \u0111\u01b0\u1ee3c. global/legacy ch\u1ec9 \u0111\u1ecdc.</small>
+            </aside>
+            <section class="profile-lib-editor">
+              <details class="profile-studio" id="profileStudio">
+                <summary>\u2728 Sinh profile t\u1eeb \u00fd t\u01b0\u1edfng (AI)</summary>
+                <div class="field"><label for="studioIdea">\u00dd t\u01b0\u1edfng th\u00f4</label><textarea id="studioIdea" rows="2" placeholder="vd: tu ti\u00ean, main mang ki\u1ebfm bi\u1ebft n\u00f3i, m\u1ed7i l\u1ea7n r\u00fat ki\u1ebfm qu\u00ean m\u1ed9t k\u00fd \u1ee9c"></textarea></div>
+                <div class="field-row">
+                  <div class="field"><label for="studioGenre">Th\u1ec3 lo\u1ea1i</label><input type="text" id="studioGenre" placeholder="vd: tu ti\u00ean huy\u1ec1n huy\u1ec5n"></div>
+                  <div class="field"><label for="studioPlatform">N\u1ec1n t\u1ea3ng/th\u1ecb tr\u01b0\u1eddng</label><input type="text" id="studioPlatform" placeholder="vd: WebNovel, KDP"></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label for="studioLang">Ng\u00f4n ng\u1eef</label><input type="text" id="studioLang" value="Ti\u1ebfng Vi\u1ec7t"></div>
+                  <div class="field"><label for="studioChapters">S\u1ed1 ch\u01b0\u01a1ng d\u1ef1 ki\u1ebfn</label><input type="number" id="studioChapters" min="1" value="60"></div>
+                </div>
+                <div class="field"><label for="studioStyle">Phong c\u00e1ch / y\u00eau c\u1ea7u b\u1eaft bu\u1ed9c (t\u00f9y ch\u1ecdn)</label><input type="text" id="studioStyle" placeholder="vd: k\u1ebft bittersweet, tr\u00e1nh h\u1eady mono, nh\u1ecbp nhanh"></div>
+                <button class="btn primary" id="studioGenerate">\u2728 Sinh profile</button>
+                <small class="muted">Sinh v\u00e0o \u00f4 b\u00ean d\u01b0\u1edbi \u0111\u1ec3 b\u1ea1n duy\u1ec7t/s\u1eeda r\u1ed3i L\u01b0u. T\u1ed1n ~$0.01, kh\u00f4ng t\u1ea1o run.</small>
+              </details>
+              <details class="profile-guide" id="profileGuide">
+                <summary>\ud83d\udcd6 H\u01b0\u1edbng d\u1eabn &amp; l\u01b0u \u00fd vi\u1ebft profile</summary>
+                <ul class="profile-guide-list">
+                  <li><strong>C\u1ee5 th\u1ec3 ho\u00e1:</strong> n\u00eau t\u00ean nh\u00e2n v\u1eadt, chi ti\u1ebft b\u1ed1i c\u1ea3nh, h\u01b0\u1edbng twist \u2014 \u0111\u1eebng \u0111\u1ec3 chung chung, Architect s\u1ebd t\u1ef1 b\u1ecba.</li>
+                  <li><strong>Ch\u1ed1t h\u01b0\u1edbng k\u1ebft</strong> (theo ch\u1ee7 \u0111\u1ec1, kh\u00f4ng ph\u1ea3i t\u00ean ch\u01b0\u01a1ng): happy / bittersweet / open.</li>
+                  <li><strong>\u0110i\u1ec3m kh\u00e1c bi\u1ec7t \u2265 3</strong>: v\u00ec sao \u0111\u1ecdc gi\u1ea3 \u0111\u1ecdc ti\u1ebfp.</li>
+                  <li><strong>Tr\u00e1nh AI-tell:</strong> ghi r\u00f5 c\u1ea5m purple prose, c\u1ea5u tr\u00fac "kh\u00f4ng ph\u1ea3i X m\u00e0 l\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p, tho\u1ea1i gi\u1ea3i th\u00edch th\u1eeba.</li>
+                  <li><strong>Kh\u1edbp \u0111\u1ed9 d\u00e0i</strong>: s\u1ed1 ch\u01b0\u01a1ng + s\u1ed1 t\u1eeb/ch\u01b0\u01a1ng m\u1ee5c ti\u00eau.</li>
+                  <li>D\u00f9ng ngo\u00e0i: copy khung d\u01b0\u1edbi \u0111\u00e2y \u2192 d\u00e1n v\u00e0o LLM kh\u00e1c \u2192 "\u0111i\u1ec1n template n\u00e0y cho \u00fd t\u01b0\u1edfng c\u1ee7a t\u00f4i".</li>
+                  <li><strong>\u0110\u1ecdc k\u1ef9 tr\u01b0\u1edbc khi L\u01b0u:</strong> AI (Studio ho\u1eb7c LLM ngo\u00e0i) c\u00f3 th\u1ec3 c\u00f2n s\u00f3t AI-tell \u2014 hay g\u1eb7p nh\u1ea5t l\u00e0 c\u1ea5u tr\u00fac "kh\u00f4ng ph\u1ea3i X m\u00e0 l\u00e0 Y" \u1edf ph\u1ea7n H\u01b0\u1edbng k\u1ebft. S\u1eeda tay c\u00e1c c\u00e2u \u0111\u00f3 tr\u01b0\u1edbc khi l\u01b0u.</li>
+                </ul>
+              </details>
+              <div class="field"><label for="profileLibName">T\u00ean file (.md)</label><input type="text" id="profileLibName" placeholder="vd: werewolf-100c"></div>
+              <div class="field profile-lib-content-field"><label for="profileLibContent">N\u1ed9i dung brief (markdown)</label><textarea id="profileLibContent" placeholder="M\u00f4 t\u1ea3 truy\u1ec7n b\u1ea1n mu\u1ed1n engine vi\u1ebft: b\u1ed1i c\u1ea3nh, th\u1ec3 lo\u1ea1i, nh\u00e2n v\u1eadt, \u0111\u1ed9 d\u00e0i, phong c\u00e1ch\u2026"></textarea></div>
+              <div class="profile-lib-actions">
+                <button class="btn primary" id="profileLibSave">L\u01b0u</button>
+                <button class="btn" id="profileLibCopyLLM">\ud83d\udccb Copy cho LLM ngo\u00e0i</button>
+                <button class="btn danger" id="profileLibDelete" hidden>\ud83d\uddd1 X\u00f3a</button>
+                <span class="muted" id="profileLibHint"></span>
+              </div>
+            </section>
+          </div>
+          <footer class="modal-foot">
+            <button class="btn" id="profileLibClose">\u0110\u00f3ng</button>
+          </footer>
+        </div>
       </div>`;
     panel.dataset.initialized = 'true';
     bindProductionEvents();
@@ -69,6 +122,24 @@ function bindProductionEvents() {
     if (e.target.id === 'newRunOverlay') closeNewRunModal();
   });
   $('#newRunSubmit')?.addEventListener('click', submitNewRun);
+
+  // Profile Library
+  $('#btnProfileLibrary')?.addEventListener('click', openProfileLibrary);
+  $('#profileLibClose')?.addEventListener('click', () => { $('#profileLibOverlay').hidden = true; });
+  $('#profileLibOverlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'profileLibOverlay') $('#profileLibOverlay').hidden = true;
+  });
+  $('#profileLibNew')?.addEventListener('click', profileLibNew);
+  $('#studioGenerate')?.addEventListener('click', generateProfileFromIdea);
+  $('#profileLibSave')?.addEventListener('click', profileLibSave);
+  $('#profileLibCopyLLM')?.addEventListener('click', profileLibCopyForLLM);
+  $('#profileLibDelete')?.addEventListener('click', profileLibDelete);
+  $('#profileLibItems')?.addEventListener('click', (e) => {
+    const li = e.target.closest('[data-profile-path]');
+    if (!li) return;
+    profileLibLoad(li.dataset.profilePath, li.dataset.profileSource);
+  });
+
   $('#runListItems')?.addEventListener('click', (e) => {
     const li = e.target.closest('[data-run-id]');
     if (!li) return;
@@ -205,6 +276,235 @@ function clearNewRunForm() {
   $('#newRunProvider').value = '';
   $('#newRunTarget').value = '30';
   $('#newRunBudget').value = '5';
+}
+
+// ── Profile Library ──────────────────────────────────────────────
+// Profile = SSOT brief authored/reviewed here BEFORE a run exists.
+// Only project profiles (./.ainovel/profiles/) are editable/deletable;
+// global/legacy are read-only (edit = save-as into project).
+
+let profileLibSelected = null; // { path, source }
+
+// Khung profile chuẩn (khớp các chiều Architect cần để sinh Premise mạnh).
+// Điền tay trong UI, hoặc copy ra LLM ngoài. Gợi ý trong ngoặc — thay bằng nội dung thật.
+const PROFILE_TEMPLATE = `# [Tên truyện]
+
+<!-- Nguyên tắc: mô tả ĐỊNH HƯỚNG & RÀNG BUỘC, đừng viết sẵn câu văn mẫu.
+     Ghi rõ mỗi phần cần ĐẠT gì, để Architect/Writer tự sáng tạo. Xoá dòng gợi ý khi viết xong. -->
+
+## Thể loại & giọng điệu
+(thể loại chính + sub-genre; sắc thái cảm xúc chủ đạo; nhịp kể; nền tảng & đối tượng đọc nếu nhắm bán)
+
+## Bối cảnh & thế giới quan
+(luật chơi + kết cấu thế giới RÀNG BUỘC cốt truyện: tài nguyên, cái giá, giới hạn, biên các thế lực — đủ để dựng world rules, không chỉ trang trí)
+
+## Nhân vật chính & tuyến quan hệ
+(mỗi nhân vật chính: một khát khao, một vết thương, một mâu thuẫn nội tại; quan hệ phải có căng thẳng thường trực, không chỉ là đồng minh)
+
+## Xung đột cốt lõi
+(áp lực trung tâm đủ sức nuôi CẢ truyện, không phải một sự việc lẻ)
+
+## Hướng kết (theo chủ đề, không phải tên chương)
+(câu hỏi mà cái kết trả lời + lập trường nó chọn; happy / bittersweet / open)
+
+## Điểm bán khác biệt (≥3)
+(mỗi điểm phải là thứ mà truyện CÙNG THỂ LOẠI không chắc có)
+
+## Công thức chương
+(cách một chương điển hình mở — dựng — kết; kỷ luật giữ người đọc lật trang)
+
+## Điều cần tránh
+(cliché của thể loại cần né; VÀ AI-tell nêu dạng nguyên tắc: purple prose, cấu trúc "không phải X mà là Y", nội tâm lặp, thoại giải thích thừa, câu dài đều nhịp)
+
+## Độ dài & phong cách
+(số chương mục tiêu + số từ/chương; văn phong; ngôn ngữ viết)
+`;
+
+async function openProfileLibrary() {
+  $('#profileLibOverlay').hidden = false;
+  profileLibNew();
+  await refreshProfileLibList();
+}
+
+async function refreshProfileLibList() {
+  const ul = $('#profileLibItems');
+  if (!ul) return;
+  try {
+    const res = await fetch('/api/profiles');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const items = await res.json();
+    if (!items.length) {
+      ul.innerHTML = '<li class="muted">Ch\u01b0a c\u00f3 profile n\u00e0o.</li>';
+      return;
+    }
+    ul.innerHTML = items.map((p) => {
+      const sel = profileLibSelected && profileLibSelected.path === p.path ? ' selected' : '';
+      const ro = p.source !== 'project' ? ' <span class="profile-lib-ro">read-only</span>' : '';
+      return `<li class="profile-lib-item${sel}" data-profile-path="${escapeHtml(p.path)}" data-profile-source="${escapeHtml(p.source)}" tabindex="0">
+        <span class="profile-lib-name">${escapeHtml(p.name)}</span>
+        <span class="profile-lib-src">${escapeHtml(p.source)}${ro}</span>
+      </li>`;
+    }).join('');
+  } catch (e) {
+    ul.innerHTML = '<li class="muted">L\u1ed7i t\u1ea3i: ' + escapeHtml(String(e)) + '</li>';
+  }
+}
+
+function profileLibNew() {
+  profileLibSelected = null;
+  $('#profileLibName').value = '';
+  $('#profileLibName').readOnly = false;
+  $('#profileLibContent').value = PROFILE_TEMPLATE;
+  $('#profileLibDelete').hidden = true;
+  $('#profileLibHint').textContent = 'Khung m\u1eabu \u0111\u00e3 \u0111i\u1ec1n s\u1eb5n \u2014 thay g\u1ee3i \u00fd b\u1eb1ng n\u1ed9i dung r\u1ed3i L\u01b0u.';
+}
+
+async function profileLibLoad(path, source) {
+  try {
+    const res = await fetch('/api/profiles/content?path=' + encodeURIComponent(path));
+    if (!res.ok) { const d = await res.json().catch(() => ({})); toast(d.error || ('HTTP ' + res.status), 'error'); return; }
+    const data = await res.json();
+    profileLibSelected = { path, source };
+    $('#profileLibContent').value = data.content || '';
+    // Name is the base filename; project files keep their name, non-project
+    // become a save-as (name editable, will land in project).
+    const base = (data.name || '').replace(/\.md$/i, '');
+    $('#profileLibName').value = base;
+    if (source === 'project') {
+      $('#profileLibName').readOnly = true;
+      $('#profileLibDelete').hidden = false;
+      $('#profileLibHint').textContent = 'S\u1eeda tr\u1ef1c ti\u1ebfp profile project n\u00e0y.';
+    } else {
+      $('#profileLibName').readOnly = false;
+      $('#profileLibDelete').hidden = true;
+      $('#profileLibHint').textContent = source + ' l\u00e0 read-only \u2014 L\u01b0u s\u1ebd t\u1ea1o b\u1ea3n copy trong project.';
+    }
+    await refreshProfileLibList();
+  } catch (e) {
+    toast('L\u1ed7i t\u1ea3i profile: ' + e, 'error');
+  }
+}
+
+// Profile Studio (C-lite): one-shot generate a profile from a rough idea into
+// the editor for review. Does not save or run anything.
+async function generateProfileFromIdea() {
+  const idea = $('#studioIdea').value.trim();
+  if (!idea) { toast('Nh\u1eadp \u00fd t\u01b0\u1edfng th\u00f4 tr\u01b0\u1edbc', 'error'); return; }
+  const btn = $('#studioGenerate');
+  const body = {
+    idea,
+    genre: $('#studioGenre').value.trim() || undefined,
+    platform: $('#studioPlatform').value.trim() || undefined,
+    language: $('#studioLang').value.trim() || undefined,
+    styleNotes: $('#studioStyle').value.trim() || undefined,
+    targetChapters: parseInt($('#studioChapters').value, 10) || undefined,
+  };
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '\u23f3 \u0110ang sinh\u2026';
+  try {
+    const res = await post('/api/profiles/generate', body);
+    if (res && res.content) {
+      // Treat as a fresh, unsaved project profile (editable, no delete yet).
+      profileLibSelected = null;
+      $('#profileLibName').readOnly = false;
+      $('#profileLibDelete').hidden = true;
+      $('#profileLibContent').value = res.content;
+      if (!$('#profileLibName').value.trim()) {
+        $('#profileLibName').value = 'profile-' + Date.now();
+      }
+      $('#profileLibHint').textContent = '\u0110\u00e3 sinh \u2014 duy\u1ec7t/s\u1eeda r\u1ed3i b\u1ea5m L\u01b0u.';
+      toast('\u0110\u00e3 sinh profile, duy\u1ec7t r\u1ed3i L\u01b0u', 'ok');
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+
+async function profileLibSave() {
+  const name = $('#profileLibName').value.trim();
+  const content = $('#profileLibContent').value;
+  if (!name) { toast('Nh\u1eadp t\u00ean file', 'error'); return; }
+  if (!content.trim()) { toast('N\u1ed9i dung tr\u1ed1ng', 'error'); return; }
+  // Editing an existing project profile → overwrite expected. New/generated →
+  // don't clobber silently: backend returns 409, we confirm then retry.
+  const editingProject = !!(profileLibSelected && profileLibSelected.source === 'project');
+  const res = await saveProfileRequest(name, content, editingProject);
+  if (res) {
+    profileLibSelected = { path: res.path, source: res.source };
+    $('#profileLibName').readOnly = true;
+    $('#profileLibDelete').hidden = false;
+    $('#profileLibHint').textContent = '\u0110\u00e3 l\u01b0u ' + res.path;
+    toast('\u0110\u00e3 l\u01b0u profile', 'ok');
+    await refreshProfileLibList();
+    // Refresh the New Run dropdown so the new profile is immediately usable.
+    productionProfilesCache = [];
+    await populateProfileSelect();
+  }
+}
+
+// saveProfileRequest posts a save; on 409 (exists) confirms once then retries
+// with overwrite=true. Returns the saved item, or null if cancelled/failed.
+async function saveProfileRequest(name, content, overwrite) {
+  const r = await fetch('/api/profiles/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, content, overwrite: !!overwrite }),
+  });
+  if (r.status === 409 && !overwrite) {
+    if (confirm('Profile "' + name + '.md" \u0111\u00e3 t\u1ed3n t\u1ea1i. Ghi \u0111\u00e8?')) {
+      return saveProfileRequest(name, content, true);
+    }
+    return null;
+  }
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    toast(d.error || ('HTTP ' + r.status), 'error');
+    return null;
+  }
+  return r.json();
+}
+
+// Copy the current template/brief + a ready instruction to the clipboard, so
+// the user can paste it into an external LLM (ChatGPT/Claude), have it filled,
+// then paste the result back. Reduces the manual "select textarea + write
+// instruction" friction of the external-LLM path.
+async function profileLibCopyForLLM() {
+  const tpl = $('#profileLibContent').value || PROFILE_TEMPLATE;
+  const payload =
+    'B\u1ea1n l\u00e0 tr\u1ee3 l\u00fd so\u1ea1n "profile" (brief) cho engine vi\u1ebft ti\u1ec3u thuy\u1ebft d\u00e0i.\n' +
+    '\u0110i\u1ec1n \u0111\u1ea7y \u0111\u1ee7 template Markdown b\u00ean d\u01b0\u1edbi cho \u00fd t\u01b0\u1edfng c\u1ee7a t\u00f4i: [\u0110I\u1ec0N \u00dd T\u01af\u1edeNG TH\u00d4 C\u1ee6A B\u1ea0N \u1ede \u0110\u00c2Y]\n\n' +
+    'Nguy\u00ean t\u1eafc:\n' +
+    '- Vi\u1ebft C\u1ee4 TH\u1ec2 (t\u00ean nh\u00e2n v\u1eadt, chi ti\u1ebft b\u1ed1i c\u1ea3nh, h\u01b0\u1edbng twist), t\u1ef1 quy\u1ebft \u0111\u1ecbnh khi t\u00f4i b\u1ecf tr\u1ed1ng.\n' +
+    '- M\u00f4 t\u1ea3 theo \u0110\u1ecaNH H\u01af\u1edaNG & R\u00c0NG BU\u1ed8C, \u0110\u1eebNG vi\u1ebft s\u1eb5n c\u00e2u v\u0103n m\u1eabu (tr\u00e1nh anchor).\n' +
+    '- Tr\u00e1nh AI-tell: no purple prose, no "kh\u00f4ng ph\u1ea3i X m\u00e0 l\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p, tho\u1ea1i gi\u1ea3i th\u00edch th\u1eeba.\n' +
+    '- Ch\u1ec9 xu\u1ea5t Markdown c\u1ee7a profile, kh\u00f4ng gi\u1ea3i th\u00edch th\u00eam.\n\n' +
+    '--- TEMPLATE ---\n' + tpl;
+  try {
+    await navigator.clipboard.writeText(payload);
+    toast('\u0110\u00e3 copy template + c\u00e2u l\u1ec7nh. D\u00e1n v\u00e0o ChatGPT/Claude, \u0111i\u1ec1n \u00fd t\u01b0\u1edfng, r\u1ed3i d\u00e1n k\u1ebft qu\u1ea3 v\u1ec1 \u00f4 n\u00e0y.', 'ok');
+  } catch (e) {
+    toast('Tr\u00ecnh duy\u1ec7t ch\u1eb7n clipboard \u2014 h\u00e3y b\u00f4i \u0111en \u00f4 n\u1ed9i dung r\u1ed3i copy tay.', 'error');
+  }
+}
+
+async function profileLibDelete() {
+  if (!profileLibSelected || profileLibSelected.source !== 'project') return;
+  if (!confirm('X\u00f3a profile "' + profileLibSelected.path + '"?')) return;
+  try {
+    const r = await fetch('/api/profiles/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: profileLibSelected.path }),
+    });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); toast(d.error || ('HTTP ' + r.status), 'error'); return; }
+    toast('\u0110\u00e3 x\u00f3a profile', 'ok');
+    profileLibNew();
+    await refreshProfileLibList();
+    productionProfilesCache = [];
+    await populateProfileSelect();
+  } catch (e) {
+    toast('L\u1ed7i x\u00f3a: ' + e, 'error');
+  }
 }
 
 async function loadProductionData() {

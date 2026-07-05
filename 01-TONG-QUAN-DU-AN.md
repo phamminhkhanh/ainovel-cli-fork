@@ -288,6 +288,14 @@ Engine gốc là tiếng Trung. Muốn viết tiếng Việt:
 
 > Yêu cầu mơ hồ → AI tự bịa hướng → 50 chương sau mới phát hiện lệch → tốn token sửa.
 
+**Soạn "profile" ngay trong Web UI (bản fork — tab Sản xuất → 📚 Thư viện Profile):** profile là
+bản brief `.md` mà job sản xuất dùng làm hạt giống — nay tạo/sửa/lưu thẳng trong UI, khỏi sửa file
+ngoài. Ba cách: (1) **+ Profile mới** điền sẵn khung template chuẩn (9 mục theo nguyên tắc, không ví
+dụ cụ thể) để bạn tự viết; (2) **✨ Sinh profile từ ý tưởng** — nhập ý tưởng thô + vài field, AI
+sinh 1 profile đầy đủ (~$0.01) vào ô editor để bạn duyệt/sửa; (3) copy khung template ra LLM ngoài
+rồi dán lại. Profile là **SSOT — chốt/duyệt trước khi tạo run**, không tự sinh ngầm lúc tạo job.
+Chi tiết: [docs/journals/260705-profile-library-studio.md](docs/journals/260705-profile-library-studio.md).
+
 ### 9.4 Can thiệp sớm
 
 Thấy lệch hướng → gõ can thiệp **ngay** vào ô input. Ví dụ:

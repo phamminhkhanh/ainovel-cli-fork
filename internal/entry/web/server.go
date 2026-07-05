@@ -29,6 +29,13 @@ type server struct {
 	jobMu      sync.Mutex         // 串行化后台任务（import/simulate/importsim）
 	jobRunning bool               // 是否有后台任务在跑——guardExclusive 不跟踪它们，故 web 侧自锁
 	jobCancel  context.CancelFunc // 取消当前后台任务的 ctx（无任务时为 nil）；imp/sim.Run 在章节边界检查 ctx
+
+	// Profile Studio: lazily-built model set from cfg (bootstrap.NewModelSet),
+	// used to generate profiles from a rough idea. Separate from the engine's
+	// own model set; additive, no host coupling.
+	studioOnce   sync.Once
+	studioModels *bootstrap.ModelSet
+	studioErr    error
 }
 
 // Store returns the cached on-disk store for read-only content handlers.
@@ -81,6 +88,10 @@ func (s *server) mux() http.Handler {
 
 	// Production Cockpit（fork 新增；server.go 是已被 fork 修改过的 upstream 文件）
 	mux.HandleFunc("/api/profiles", s.handleProfilesList)
+	mux.HandleFunc("GET /api/profiles/content", s.handleProfileContent)
+	mux.HandleFunc("POST /api/profiles/save", s.handleProfileSave)
+	mux.HandleFunc("POST /api/profiles/delete", s.handleProfileDelete)
+	mux.HandleFunc("POST /api/profiles/generate", s.handleProfileGenerate)
 	mux.HandleFunc("GET /api/prodruns", s.handleProdRunsList)
 	mux.HandleFunc("POST /api/prodruns", s.handleProdRunCreate)
 	mux.HandleFunc("GET /api/prodruns/{id}", s.handleProdRunGet)
