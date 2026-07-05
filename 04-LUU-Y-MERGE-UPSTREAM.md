@@ -143,3 +143,5 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 
 - Report merge test chi tiết: [`plans/reports/upstream-merge-test-260703-1121-v061-pause-convergence-report.md`](plans/reports/upstream-merge-test-260703-1121-v061-pause-convergence-report.md)
 - Architecture upstream: [`docs/architecture.md`](docs/architecture.md)
+- Journal Production Cockpit MVP (kèm sơ đồ tương tác hệ thống): [`docs/journals/260703-production-cockpit-mvp.md`](docs/journals/260703-production-cockpit-mvp.md)
+- Hướng dẫn dùng Production Cockpit: [`docs/production-cockpit.md`](docs/production-cockpit.md)

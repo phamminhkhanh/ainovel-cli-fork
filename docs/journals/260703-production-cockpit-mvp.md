@@ -22,6 +22,58 @@ Implemented a new Web UI tab that lets users queue and run automated, headless n
 - Updated `index.html`, `app-workspace.js`, `app-i18n.js`, `app.css`.
 - Added `app-production.js` to `embed.go` and `assets_test.go` guards.
 
+## Sơ đồ tương tác hệ thống
+
+Cockpit **không gọi engine trực tiếp** — nó là file-plumber + process-spawner. Nó đẻ một
+tiến trình `ainovel-cli --headless` con rồi quan sát bằng cách đọc file (read-only polling).
+
+```
+Browser — tab "Sản xuất"
+   │  POST /api/prodruns · /start · /stop · /sync · /export
+   ▼
+Web server  (đang giữ 1 host.Host của workspace chính)
+   │
+   └── prodRunManager ── prodRunStore (jobs.json)
+            │
+            │ start: chỉ 1 run active tại một thời điểm
+            ▼
+      prepareRunDir → cmd.Start()                     poll mỗi 5s (chỉ ĐỌC)
+            │                                    ┌───────────────────────────┐
+            ▼                                    │                           │
+   ainovel-cli --headless   (Cmd.Dir = runDir)   │                           │
+            │ ghi                                 │                           │
+            ▼                                     │                           │
+   output/jobs/{id}/output/novel/  ◄──────────────┘                           │
+      ├── meta/progress.json  → đếm chương → dừng cứng khi ≥ targetChapters ──┘
+      ├── reviews/*.json      → đếm reviews / rewrites (verdict=="rewrite")
+      ├── meta/usage.json     → chi phí (CostUSD)
+      └── run.log             → dò marker pause (等待用户输入…) → status=paused
+```
+
+### Bố cục thư mục & ranh giới sync
+
+Chỉ có **một** host workspace (`eng.Dir()`); mỗi run là một sandbox tách biệt. Mọi trao
+đổi giữa hai bên đều là **copy file**, chặn khi host engine đang chạy.
+
+```
+output/
+├── novel/                     ← host workspace (Web UI thường + TUI đọc/ghi ở đây)
+│      ▲                          sync copy về — CHỈ khi host idle
+│      │  fresh_profile: chỉ vào workspace trống (force → clear rồi đè)
+├── jobs/
+│   ├── jobs.json              (prodRunStore: danh sách ProdRun)
+│   └── run-001/
+│       ├── .ainovel/{config.json, rules/}
+│       ├── profile.md         (chỉ fresh_profile)
+│       ├── run.log
+│       └── output/novel/  ────┘  ← child headless ghi vào đây
+└── backups/pre-sync-*/        (backup trước khi force sync)
+```
+
+> MVP này là `fresh_profile` (đẻ truyện mới từ profile). Chế độ `continue_workspace`
+> (đưa truyện đang viết dở qua cockpit rồi sync về theo kiểu fast-forward) được bổ sung
+> sau, xem [04-LUU-Y-MERGE-UPSTREAM.md](../../04-LUU-Y-MERGE-UPSTREAM.md) §3.
+
 ## Key decisions
 
 - **Child-process isolation.** The Web UI already owns a `host.Host`, so each run spawns its own `ainovel-cli --headless` process with `Cmd.Dir` set to the run directory. This forces engine output into `{runDir}/output/novel` because `bootstrap.Config.OutputDir` is `json:"-"` and `FillDefaults()` resolves it relative to cwd.
@@ -61,8 +113,8 @@ Production Cockpit MVP implementation complete and reviewed.
 
 - Moved **Hỗ trợ** tab to the end of the workspace tab bar; **Sản xuất** now sits between **Đánh giá** and **Hỗ trợ**.
 - Added a vertical divider and heading underline to the Production left/right panes for clearer separation.
-- Created user guide [`docs/production-cockpit.md`](docs/production-cockpit.md).
-- Updated [`04-LUU-Y-MERGE-UPSTREAM.md`](04-LUU-Y-MERGE-UPSTREAM.md) with Production Cockpit post-merge notes.
+- Created user guide [`docs/production-cockpit.md`](../production-cockpit.md).
+- Updated [`04-LUU-Y-MERGE-UPSTREAM.md`](../../04-LUU-Y-MERGE-UPSTREAM.md) with Production Cockpit post-merge notes.
 - Fixed QA blockers:
   - Load `app-production.js` before `app-workspace.js` and guarded `loadProductionTab()` to prevent a boot crash when the last active tab was **Sản xuất**.
   - Enforced one running production job at a time in `prodRunRunner.start()`.
