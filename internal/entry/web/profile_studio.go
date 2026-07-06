@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 )
 
@@ -39,6 +40,10 @@ func (s *server) studioModelSet() (*bootstrap.ModelSet, error) {
 	return s.studioModels, nil
 }
 
+// studioMaxTokens là trần output cho single-shot profile generation.
+// Reasoning model cần đủ budget cho cả reasoning_content lẫn final content.
+const studioMaxTokens = 16000
+
 const profileStudioSystemPrompt = `You are a profile author for an autonomous long-form novel-writing engine.
 
 Your job: turn the user's rough idea + parameters into ONE complete, production-ready
@@ -64,27 +69,37 @@ Output rules:
 - Output ONLY the profile as Markdown. No preamble, no explanation, no code fences.
 - Write in the user's requested language (default: Vietnamese). Keep genre / trope names natural.
 - Use "## " headings. Cover, adapted to the story:
-  1. Title — 2-3 candidate titles taking different angles.
+  1. Title — ONE final title only.
   2. Genre & tone — primary genre + sub-genre, dominant emotional register, pace; target
      platform & reader if given.
-  3. Setting & world — the rules and texture that CONSTRAIN the plot (resources, costs, power
+  3. Reader promise — ONE sentence: the repeatable emotional or intellectual payoff every chapter
+     must deliver. This is the engine's quality bar.
+  4. Setting & world — the rules and texture that CONSTRAIN the plot (resources, costs, power
      boundaries), not decoration; enough for the Architect to derive world rules.
-  4. Main characters & relationships — for each principal: a want, a wound, and an inner
+  5. Main characters & relationships — for each principal: a want, a wound, and an inner
      contradiction; relationships must carry standing tension, not mere alliance.
-  5. Core conflict — the central pressure that can sustain the WHOLE book, not one episode.
-  6. Ending direction (thematic) — the QUESTION the ending answers and the stance it takes;
+  6. Story engine — the MECHANISM that pushes the plot forward chapter by chapter. Be specific:
+     is it a repeating dilemma (solve-or-lose), an escalating threat, a mystery to uncover, a
+     competition with stakes, a relationship that builds through opposition? State the pattern,
+     not just the premise.
+  7. Core conflict — the central pressure that can sustain the WHOLE book, not one episode.
+     Include the MID-PIVOT: the moment (roughly chapter 40-60%) when the protagonist's initial
+     approach fails and they must adopt a fundamentally different strategy to reach the ending.
+  8. Ending direction (thematic) — the QUESTION the ending answers and the stance it takes;
      never a chapter name or plot beat.
-  7. Chapter formula — how a typical chapter opens, builds, and closes; the discipline that
+  9. Chapter formula — how a typical chapter opens, builds, and closes; the discipline that
      keeps readers turning the page.
-  8. Differentiation hooks (>=3) — each must be something competing books in this genre do NOT
+  10. Differentiation hooks (>=3) — each must be something competing books in this genre do NOT
      reliably deliver.
-  9. What to avoid — genre clichés to skip, AND AI-tell stated as principles: no purple prose,
+  11. What to avoid — genre clichés to skip, AND AI-tell stated as principles: no purple prose,
      no "not X but Y" construction, no repetitive interiority, no over-explaining dialogue, no
      uniform sentence rhythm.
-  10. Length & scale — respect the requested chapter count; sketch how arc load distributes
+  12. Length & scale — respect the requested chapter count; sketch how arc load distributes
      across the run.
 - Keep it tight and usable — a strong brief, not a draft of the novel. ~600-1000 words.
-- Prefer stating intentions and boundaries over writing specimen prose.`
+- Prefer stating intentions and boundaries over writing specimen prose.
+- Before final output, silently rewrite the profile to remove every banned phrase, placeholder
+  alternative, and "not X but Y" / "không phải X mà là Y" construction.`
 
 // handleProfileGenerate runs the single-shot generation and returns markdown.
 // The result is returned only — the client puts it in the Library editor for
@@ -100,6 +115,8 @@ func (s *server) handleProfileGenerate(w http.ResponseWriter, r *http.Request) {
 		Platform       string `json:"platform"`
 		StyleNotes     string `json:"styleNotes"`
 		TargetChapters int    `json:"targetChapters"`
+		Model          string `json:"model"`
+		Provider       string `json:"provider"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -110,10 +127,52 @@ func (s *server) handleProfileGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ms, err := s.studioModelSet()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, fmt.Errorf("model init: %w", err))
+	providerOverride := strings.TrimSpace(body.Provider)
+	modelOverride := strings.TrimSpace(body.Model)
+	if (providerOverride == "") != (modelOverride == "") {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("provider and model must be provided together"))
 		return
+	}
+
+	// If user specified a different provider/model, create a one-off model for this request
+	var model agentcore.ChatModel
+	if providerOverride != "" {
+		pc, ok := s.cfg.Providers[providerOverride]
+		if !ok {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown provider: %s", providerOverride))
+			return
+		}
+		providerType, err := pc.ProviderType(providerOverride)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("provider type: %w", err))
+			return
+		}
+		providerExtra := cloneMap(pc.Extra)
+		if pc.API != "" {
+			if providerExtra == nil {
+				providerExtra = make(map[string]any, 1)
+			}
+			providerExtra["api"] = pc.API
+		}
+		m, err := llm.NewModel(providerType, modelOverride,
+			llm.WithAPIKey(pc.APIKey),
+			llm.WithBaseURL(pc.BaseURL),
+			llm.WithStreamIdleTimeout(5*time.Minute),
+			llm.WithProviderExtra(providerExtra),
+			llm.WithExtra(pc.ExtraBody),
+		)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("model init: %w", err))
+			return
+		}
+		model = m
+	} else {
+		ms, err := s.studioModelSet()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, fmt.Errorf("model init: %w", err))
+			return
+		}
+		model = ms.ForRole("thinking")
 	}
 
 	lang := strings.TrimSpace(body.Language)
@@ -136,7 +195,7 @@ func (s *server) handleProfileGenerate(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "Style notes / must-haves: %s\n", sn)
 	}
 
-	content, err := s.runProfileGeneration(r.Context(), ms, b.String())
+	content, err := s.runProfileGeneration(r.Context(), model, b.String())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -146,16 +205,17 @@ func (s *server) handleProfileGenerate(w http.ResponseWriter, r *http.Request) {
 
 // runProfileGeneration does one non-streaming LLM call (drains the stream
 // server-side) and returns the trimmed markdown.
-func (s *server) runProfileGeneration(ctx context.Context, ms *bootstrap.ModelSet, userMsg string) (string, error) {
+func (s *server) runProfileGeneration(ctx context.Context, model agentcore.ChatModel, userMsg string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 150*time.Second)
 	defer cancel()
-
-	model := ms.ForRole("thinking")
 	msgs := []agentcore.Message{
 		agentcore.SystemMsg(profileStudioSystemPrompt),
 		agentcore.UserMsg(userMsg),
 	}
-	streamCh, err := model.GenerateStream(ctx, msgs, nil, agentcore.WithMaxTokens(4096))
+	// Profiles are Vietnamese Markdown with dense world-building; VI text costs
+	// far more tokens than EN, so 4096 truncated mid-section. 8192 fits a full
+	// detailed brief while staying within the 150s timeout above.
+	streamCh, err := model.GenerateStream(ctx, msgs, nil, agentcore.WithMaxTokens(studioMaxTokens))
 	if err != nil {
 		return "", fmt.Errorf("profile generate: %w", err)
 	}
@@ -198,4 +258,17 @@ func stripCodeFence(s string) string {
 	}
 	s = strings.TrimSuffix(strings.TrimRight(s, "\n"), "```")
 	return strings.TrimSpace(s)
+}
+
+// cloneMap returns a shallow copy of m. Used to avoid mutating shared
+// ProviderConfig.Extra when building a one-off model override.
+func cloneMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }

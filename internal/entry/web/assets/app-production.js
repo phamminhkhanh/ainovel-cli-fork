@@ -30,7 +30,13 @@ function renderProductionTab() {
           <ul class="run-list-items" id="runListItems"><li class="muted">\u0110ang t\u1ea3i\u2026</li></ul>
         </aside>
         <main class="run-detail" id="runDetail">
-          <div class="placeholder">Ch\u1ecdn m\u1ed9t job b\u00ean tr\u00e1i \u0111\u1ec3 xem chi ti\u1ebft.</div>
+          <div class="placeholder">
+            <p>Ch\u1ecdn m\u1ed9t job b\u00ean tr\u00e1i \u0111\u1ec3 xem chi ti\u1ebft.</p>
+            <p class="muted help-text">
+              <strong>Ch\u1ebf \u0111\u1ed9 S\u1ea3n xu\u1ea5t = headless:</strong> job ch\u1ea1y tr\u00ean server, kh\u00f4ng m\u1edf TUI nh\u01b0 ch\u1ebf \u0111\u1ed9 th\u01b0\u1eddng.
+              Cook li\u00ean t\u1ee5c \u0111\u1ebfn khi \u0111\u1ea1t m\u1ee5c ti\u00eau ho\u1eb7c h\u1ebft budget. D\u00f9ng \u201c\u0110\u1ed3ng b\u1ed9\u201d \u0111\u1ec3 \u0111\u1ed5 k\u1ebft qu\u1ea3 v\u1ec1 workspace ch\u00ednh, ho\u1eb7c \u201cD\u1eebng\u201d \u0111\u1ec3 xem t\u1eebng ch\u01b0\u01a1ng \u0111\u00e3 vi\u1ebft.
+            </p>
+          </div>
         </main>
       </div>
       <div class="modal-overlay" id="newRunOverlay" hidden>
@@ -65,40 +71,77 @@ function renderProductionTab() {
               <small class="muted">Ch\u1ec9 profile trong <code>project</code> (./.ainovel/profiles/) s\u1eeda/x\u00f3a \u0111\u01b0\u1ee3c. global/legacy ch\u1ec9 \u0111\u1ecdc.</small>
             </aside>
             <section class="profile-lib-editor">
-              <details class="profile-studio" id="profileStudio">
-                <summary>\u2728 Sinh profile t\u1eeb \u00fd t\u01b0\u1edfng (AI)</summary>
-                <div class="field"><label for="studioIdea">\u00dd t\u01b0\u1edfng th\u00f4</label><textarea id="studioIdea" rows="2" placeholder="vd: tu ti\u00ean, main mang ki\u1ebfm bi\u1ebft n\u00f3i, m\u1ed7i l\u1ea7n r\u00fat ki\u1ebfm qu\u00ean m\u1ed9t k\u00fd \u1ee9c"></textarea></div>
-                <div class="field-row">
-                  <div class="field"><label for="studioGenre">Th\u1ec3 lo\u1ea1i</label><input type="text" id="studioGenre" placeholder="vd: tu ti\u00ean huy\u1ec1n huy\u1ec5n"></div>
-                  <div class="field"><label for="studioPlatform">N\u1ec1n t\u1ea3ng/th\u1ecb tr\u01b0\u1eddng</label><input type="text" id="studioPlatform" placeholder="vd: WebNovel, KDP"></div>
+              <!-- Step 1: Brief Template -->
+              <div class="studio-step">
+                <div class="step-header"><span class="step-num">1</span> Brief c\u01a1 b\u1ea3n</div>
+                <div class="step-hint">Ch\u1ecdn template c\u00f3 s\u1eb5n HO\u1eb6C \u0111i\u1ec1n tr\u1ef1c ti\u1ebfp v\u00e0o \u00f4 markdown</div>
+                <div class="genre-template-chips">
+                  <button class="chip-btn" data-template="werewolf">Werewolf</button>
+                  <button class="chip-btn" data-template="dark-romance">Dark Romance</button>
+                  <button class="chip-btn" data-template="billionaire">Billionaire</button>
+                  <button class="chip-btn" data-template="second-chance">Second Chance</button>
+                  <button class="chip-btn" data-template="fantasy">Fantasy</button>
                 </div>
-                <div class="field-row">
-                  <div class="field"><label for="studioLang">Ng\u00f4n ng\u1eef</label><input type="text" id="studioLang" value="Ti\u1ebfng Vi\u1ec7t"></div>
-                  <div class="field"><label for="studioChapters">S\u1ed1 ch\u01b0\u01a1ng d\u1ef1 ki\u1ebfn</label><input type="number" id="studioChapters" min="1" value="60"></div>
+                <textarea id="studioBriefTemplate" rows="6" placeholder="M\u1eabu brief markdown... (click template \u0111\u1ec3 \u0111i\u1ec1n)"></textarea>
+              </div>
+
+              <!-- Step 2: \u00dd t\u01b0\u1edfng th\u00f4 -->
+              <div class="studio-step">
+                <div class="step-header"><span class="step-num">2</span> \u00dd t\u01b0\u1edfng th\u00f4 <span class="step-optional">(t\u00f9y ch\u1ecdn \u2014 AI d\u00f9ng n\u1ebfu c\u00f3)</span></div>
+                <div class="step-fields">
+                  <div class="field"><label for="studioIdea">\u00dd t\u01b0\u1edfng th\u00f4</label><textarea id="studioIdea" rows="2" placeholder="vd: b\u1ecb \u0111u\u1ed5i h\u1ecdc, v\u00f4 t\u00ecnh l\u1ea1c v\u00e0o th\u1ebf gi\u1edbi werewolf"></textarea></div>
+                  <div class="field-row">
+                    <div class="field"><label for="studioGenre">Th\u1ec3 lo\u1ea1i</label><input type="text" id="studioGenre" placeholder="werewolf"></div>
+                    <div class="field"><label for="studioPlatform">Platform</label><input type="text" id="studioPlatform" placeholder="WebNovel, KDP"></div>
+                  </div>
+                  <div class="field-row">
+                    <div class="field"><label for="studioLang">Ng\u00f4n ng\u1eef</label><input type="text" id="studioLang" value="Ti\u1ebfng Vi\u1ec7t"></div>
+                    <div class="field"><label for="studioChapters">S\u1ed1 ch\u01b0\u01a1ng</label><input type="number" id="studioChapters" min="1" value="300"></div>
+                  </div>
+                  <div class="field"><label for="studioStyle">Phong c\u00e1ch / y\u00eau c\u1ea7u</label><input type="text" id="studioStyle" placeholder="vd: \u0111\u1ea5u tr\u00ed, main th\u00f4ng minh"></div>
                 </div>
-                <div class="field"><label for="studioStyle">Phong c\u00e1ch / y\u00eau c\u1ea7u b\u1eaft bu\u1ed9c (t\u00f9y ch\u1ecdn)</label><input type="text" id="studioStyle" placeholder="vd: k\u1ebft bittersweet, tr\u00e1nh h\u1eady mono, nh\u1ecbp nhanh"></div>
-                <button class="btn primary" id="studioGenerate">\u2728 Sinh profile</button>
-                <small class="muted">Sinh v\u00e0o \u00f4 b\u00ean d\u01b0\u1edbi \u0111\u1ec3 b\u1ea1n duy\u1ec7t/s\u1eeda r\u1ed3i L\u01b0u. T\u1ed1n ~$0.01, kh\u00f4ng t\u1ea1o run.</small>
-              </details>
-              <details class="profile-guide" id="profileGuide">
-                <summary>\ud83d\udcd6 H\u01b0\u1edbng d\u1eabn &amp; l\u01b0u \u00fd vi\u1ebft profile</summary>
-                <ul class="profile-guide-list">
-                  <li><strong>C\u1ee5 th\u1ec3 ho\u00e1:</strong> n\u00eau t\u00ean nh\u00e2n v\u1eadt, chi ti\u1ebft b\u1ed1i c\u1ea3nh, h\u01b0\u1edbng twist \u2014 \u0111\u1eebng \u0111\u1ec3 chung chung, Architect s\u1ebd t\u1ef1 b\u1ecba.</li>
-                  <li><strong>Ch\u1ed1t h\u01b0\u1edbng k\u1ebft</strong> (theo ch\u1ee7 \u0111\u1ec1, kh\u00f4ng ph\u1ea3i t\u00ean ch\u01b0\u01a1ng): happy / bittersweet / open.</li>
-                  <li><strong>\u0110i\u1ec3m kh\u00e1c bi\u1ec7t \u2265 3</strong>: v\u00ec sao \u0111\u1ecdc gi\u1ea3 \u0111\u1ecdc ti\u1ebfp.</li>
-                  <li><strong>Tr\u00e1nh AI-tell:</strong> ghi r\u00f5 c\u1ea5m purple prose, c\u1ea5u tr\u00fac "kh\u00f4ng ph\u1ea3i X m\u00e0 l\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p, tho\u1ea1i gi\u1ea3i th\u00edch th\u1eeba.</li>
-                  <li><strong>Kh\u1edbp \u0111\u1ed9 d\u00e0i</strong>: s\u1ed1 ch\u01b0\u01a1ng + s\u1ed1 t\u1eeb/ch\u01b0\u01a1ng m\u1ee5c ti\u00eau.</li>
-                  <li>D\u00f9ng ngo\u00e0i: copy khung d\u01b0\u1edbi \u0111\u00e2y \u2192 d\u00e1n v\u00e0o LLM kh\u00e1c \u2192 "\u0111i\u1ec1n template n\u00e0y cho \u00fd t\u01b0\u1edfng c\u1ee7a t\u00f4i".</li>
-                  <li><strong>\u0110\u1ecdc k\u1ef9 tr\u01b0\u1edbc khi L\u01b0u:</strong> AI (Studio ho\u1eb7c LLM ngo\u00e0i) c\u00f3 th\u1ec3 c\u00f2n s\u00f3t AI-tell \u2014 hay g\u1eb7p nh\u1ea5t l\u00e0 c\u1ea5u tr\u00fac "kh\u00f4ng ph\u1ea3i X m\u00e0 l\u00e0 Y" \u1edf ph\u1ea7n H\u01b0\u1edbng k\u1ebft. S\u1eeda tay c\u00e1c c\u00e2u \u0111\u00f3 tr\u01b0\u1edbc khi l\u01b0u.</li>
-                </ul>
-              </details>
-              <div class="field"><label for="profileLibName">T\u00ean file (.md)</label><input type="text" id="profileLibName" placeholder="vd: werewolf-100c"></div>
-              <div class="field profile-lib-content-field"><label for="profileLibContent">N\u1ed9i dung brief (markdown)</label><textarea id="profileLibContent" placeholder="M\u00f4 t\u1ea3 truy\u1ec7n b\u1ea1n mu\u1ed1n engine vi\u1ebft: b\u1ed1i c\u1ea3nh, th\u1ec3 lo\u1ea1i, nh\u00e2n v\u1eadt, \u0111\u1ed9 d\u00e0i, phong c\u00e1ch\u2026"></textarea></div>
-              <div class="profile-lib-actions">
-                <button class="btn primary" id="profileLibSave">L\u01b0u</button>
-                <button class="btn" id="profileLibCopyLLM">\ud83d\udccb Copy cho LLM ngo\u00e0i</button>
-                <button class="btn danger" id="profileLibDelete" hidden>\ud83d\uddd1 X\u00f3a</button>
-                <span class="muted" id="profileLibHint"></span>
+              </div>
+
+              <!-- Step 3: Sinh profile -->
+              <div class="studio-step">
+                <div class="step-header"><span class="step-num">3</span> Sinh profile</div>
+                <div class="field-row">
+                  <div class="field">
+                    <label for="studioModelUse">Model</label>
+                    <select id="studioModelUse">
+                      <option value="">M\u1eb7c \u0111\u1ecbnh</option>
+                    </select>
+                  </div>
+                  <div class="field" id="studioModelOverride" hidden>
+                    <label for="studioModelProvider">Provider</label>
+                    <select id="studioModelProvider"><option value="">\u2014</option></select>
+                  </div>
+                  <div class="field" id="studioModelSelect" hidden>
+                    <label for="studioModel">Model</label>
+                    <select id="studioModel"><option value="">\u2014</option></select>
+                  </div>
+                </div>
+                <div class="step-actions">
+                  <button class="btn primary" id="studioGenerate">\u2728 T\u1ea1o b\u1eb1ng AI</button>
+                  <button class="btn" id="studioCopyForLLM">\ud83d\udccb Copy cho LLM ngo\u00e0i</button>
+                </div>
+                <div class="step-hint" id="studioHint"></div>
+              </div>
+
+              <!-- Step 4: K\u1ebft qu\u1ea3 -->
+              <div class="studio-step studio-step-output">
+                <div class="step-header"><span class="step-num">4</span> K\u1ebft qu\u1ea3 <span class="step-optional">(copy t\u1eeb AI / d\u00e1n t\u1eeb LLM ngo\u00e0i)</span></div>
+                <textarea id="studioOutput" rows="12" placeholder="Profile output s\u1ebd xu\u1ea5t hi\u1ec7n \u1edf \u0111\u00e2y..."></textarea>
+              </div>
+
+              <!-- Save section -->
+              <div class="studio-save">
+                <div class="field"><label for="profileLibName">T\u00ean file (.md)</label><input type="text" id="profileLibName" placeholder="vd: werewolf-100c"></div>
+                <div class="studio-save-actions">
+                  <button class="btn primary" id="profileLibSave">\u2705 L\u01b0u Profile</button>
+                  <button class="btn danger" id="profileLibDelete" hidden>\ud83d\uddd1 X\u00f3a</button>
+                  <span class="muted" id="profileLibHint"></span>
+                </div>
               </div>
             </section>
           </div>
@@ -112,6 +155,88 @@ function renderProductionTab() {
   }
   loadProductionData();
   startProductionPoll();
+  initStudioModelSelect();
+}
+
+function initStudioModelSelect() {
+  const useSelect = $('#studioModelUse');
+  const providerSelect = $('#studioModelProvider');
+  const modelSelect = $('#studioModel');
+  const providerField = $('#studioModelOverride');
+  const modelField = $('#studioModelSelect');
+  if (!useSelect || useSelect.dataset.initialized === 'true') return;
+  useSelect.dataset.initialized = 'true';
+
+  let modelData = { providers: [], models: {}, roles: [] };
+  const CUSTOM = '__custom';
+  const ROLE_PREFIX = 'role:';
+
+  const addOption = (select, value, label, dataset) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    if (dataset) {
+      Object.entries(dataset).forEach(([k, v]) => { opt.dataset[k] = v || ''; });
+    }
+    select.appendChild(opt);
+    return opt;
+  };
+
+  const setModelFieldsVisible = (visible) => {
+    providerField.hidden = !visible;
+    modelField.hidden = !visible;
+  };
+
+  const populateModelsForProvider = (provider, selectedModel) => {
+    modelSelect.textContent = '';
+    addOption(modelSelect, '', '-');
+    (modelData.models?.[provider] || []).forEach((m) => addOption(modelSelect, m, m));
+    modelSelect.value = selectedModel || '';
+  };
+
+  const populateProviderOptions = () => {
+    providerSelect.textContent = '';
+    addOption(providerSelect, '', '-');
+    (modelData.providers || []).forEach((p) => addOption(providerSelect, p, p));
+  };
+
+  const applyMode = () => {
+    if (useSelect.value === CUSTOM) {
+      setModelFieldsVisible(true);
+      if (!providerSelect.value && modelData.providers?.length) {
+        providerSelect.value = modelData.providers[0];
+      }
+      populateModelsForProvider(providerSelect.value, modelSelect.value);
+      return;
+    }
+    setModelFieldsVisible(false);
+  };
+
+  fetch('/api/models')
+    .then(r => r.json())
+    .then(data => {
+      modelData = data || modelData;
+      useSelect.textContent = '';
+      addOption(useSelect, '', 'M\u1eb7c \u0111\u1ecbnh Studio (k\u1ebf th\u1eeba)');
+      (modelData.roles || [])
+        .filter(role => role.key && role.key !== 'default')
+        .forEach(role => {
+          const label = `${role.label || role.key} \u2014 ${role.provider || '?'} / ${role.model || '?'}`;
+          addOption(useSelect, ROLE_PREFIX + role.key, label, {
+            provider: role.provider || '',
+            model: role.model || '',
+          });
+        });
+      addOption(useSelect, CUSTOM, 'T\u00f9y ch\u1ecdn provider/model...');
+      populateProviderOptions();
+      applyMode();
+    })
+    .catch(() => {});
+
+  useSelect.addEventListener('change', applyMode);
+  providerSelect.addEventListener('change', () => {
+    populateModelsForProvider(providerSelect.value, '');
+  });
 }
 
 function bindProductionEvents() {
@@ -129,15 +254,21 @@ function bindProductionEvents() {
   $('#profileLibOverlay')?.addEventListener('click', (e) => {
     if (e.target.id === 'profileLibOverlay') $('#profileLibOverlay').hidden = true;
   });
-  $('#profileLibNew')?.addEventListener('click', profileLibNew);
+  $('#profileLibNew')?.addEventListener('click', profileLibNewWithConfirm);
   $('#studioGenerate')?.addEventListener('click', generateProfileFromIdea);
   $('#profileLibSave')?.addEventListener('click', profileLibSave);
-  $('#profileLibCopyLLM')?.addEventListener('click', profileLibCopyForLLM);
+  $('#studioCopyForLLM')?.addEventListener('click', profileLibCopyForLLM);
   $('#profileLibDelete')?.addEventListener('click', profileLibDelete);
   $('#profileLibItems')?.addEventListener('click', (e) => {
     const li = e.target.closest('[data-profile-path]');
     if (!li) return;
+    if (!confirmDiscardProfileDraft()) return;
     profileLibLoad(li.dataset.profilePath, li.dataset.profileSource);
+  });
+
+  // Genre template chips
+  document.querySelectorAll('.chip-btn').forEach((btn) => {
+    btn.addEventListener('click', () => applyGenreTemplate(btn.dataset.template));
   });
 
   $('#runListItems')?.addEventListener('click', (e) => {
@@ -205,8 +336,8 @@ function configureNewRunModal() {
     ? 'M\u1ee5c ti\u00eau l\u00e0 t\u1ed5ng s\u1ed1 ch\u01b0\u01a1ng cu\u1ed1i c\u00f9ng, kh\u00f4ng ph\u1ea3i s\u1ed1 ch\u01b0\u01a1ng vi\u1ebft th\u00eam. V\u00ed d\u1ee5 \u0111ang 12 ch\u01b0\u01a1ng, mu\u1ed1n t\u1edbi 100 th\u00ec nh\u1eadp 100.'
     : '';
   $('#newRunModeHelp').textContent = isContinue
-    ? 'Job s\u1ebd ch\u1ea1y trong sandbox ri\u00eang. Workspace ch\u00ednh ch\u1ec9 thay \u0111\u1ed5i khi b\u1ea1n b\u1ea5m \u0110\u1ed3ng b\u1ed9.'
-    : 'Job m\u1edbi sinh truy\u1ec7n t\u1eeb profile \u0111\u00e3 ch\u1ecdn trong sandbox ri\u00eang.';
+    ? 'Job ch\u1ea1y \u1edf ch\u1ebf \u0111\u1ed9 headless (server). Kh\u00f4ng m\u1edf c\u1eeda s\u1ed5 TUI. Kh\u00e1c ch\u1ebf \u0111\u1ed9 th\u01b0\u1eddng \u1edf: kh\u00f4ng c\u00f3 t\u01b0\u01a1ng t\u00e1c tr\u1ef1c ti\u1ebfp khi vi\u1ebft, kh\u00f4ng steer \u0111\u01b0\u1ee3c gi\u1eefa ch\u1eebng, ch\u1ec9 \u0110\u1ed3ng b\u1ed9 k\u1ebft qu\u1ea3 khi xong ho\u1eb7c D\u1eebng \u0111\u1ec3 xem t\u1eebng ph\u1ea7n.'
+    : 'Job ch\u1ea1y \u1edf ch\u1ebf \u0111\u1ed9 headless (server) \u2014 kh\u00f4ng m\u1edf c\u1eeda s\u1ed5 TUI nh\u01b0 ch\u1ebf \u0111\u1ed9 th\u01b0\u1eddng. Sinh truy\u1ec7n li\u00ean t\u1ee5c trong sandbox, \u0110\u1ed3ng b\u1ed9 k\u1ebft qu\u1ea3 khi xong.';
   const done = productionWorkspaceSnapshot?.CompletedCount || 0;
   if (isContinue && done > 0) {
     $('#newRunTarget').value = String(Math.max(done + 1, productionWorkspaceSnapshot.TotalChapters || done + 20));
@@ -285,6 +416,176 @@ function clearNewRunForm() {
 
 let profileLibSelected = null; // { path, source }
 
+// Genre-specific profile templates based on MyNovel/KDP best practices.
+const GENRE_TEMPLATES = {
+  werewolf: `# [Tên truyện Werewolf Romance]
+
+<!-- Template cho truyện Werewolf/Romantasy — thể loại HOT trên MyNovel (ít cạnh tranh, engagement cao) -->
+
+## Thể loại & giọng điệu
+Werewolf Romance + Paranormal Fantasy. Giọng điệu: primal passion xen lẫn ngọt ngào. Nhịp: slow burn 30 chương đầu, payoff rõ ở nửa sau. Đối tượng: phụ nữ 18-35 tuổi thích alpha male + supernatural twist.
+
+## Bối cảnh & thế giới quan
+Thế giới ngầm werewolf tồn tại song song xã hội loài người. Alpha cai trị bầy bằng sức mạnh + mate bond (ràng buộc định mệnh). Con người không biết werewolf tồn tại trừ khi bị tiết lộ. Có Hội đồng các thế lực siêu nhiên giữ hòa bình. Vi phạm luật bị trừng phạt nghiêm khắc.
+
+## Nhân vật chính & tuyến quan hệ
+- Nữ chính: [tên], [nghề nghiệp: VD: bác sĩ/luật sư/nhân viên bình thường], tính cách mạnh mẽ nhưng có vết thương [VD: mồ côi, từng bị phản bội]. Khát khao: được yêu thật sự, không phải vì định mệnh ép buộc. Mâu thuẫn: không tin vào mate bond nhưng không thể cưỡng lại.
+- Nam chính: Alpha [tên], [bí mật: VD: giàu có nhưng cô đơn, bị nguyền không thể kiểm soát sức mạnh]. Khát khao: tìm được người chấp nhận cả người lẫn sói. Mâu thuẫn: bản năng sói muốn chiếm hữu nhưng tình yêu đòi hỏi tôn trọng.
+- Quan hệ: Căng thẳng từ mate bond không mong muốn + class difference (con người vs Alpha).
+
+## Xung đột cốt lõi
+Mate bond là định mệnh nhưng cả hai đều chống lại. Kẻ thù của bầy (rogue werewolf, vampire council, human hunter) buộc họ phải hợp tác. Câu hỏi: tình yêu có thể vượt qua định mệnh ép buộc không?
+
+## Hướng kết (theo chủ đề, không phải tên chương)
+HEA — họ chấp nhận mate bond không phải kết thúc mà là bắt đầu. Cách họ chiến thắng kẻ thù + hiểu nhau tạo nên payoff thực sự.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Mate bond không phải "love at first sight" mà là quá trình chấp nhận dần]
+- [VD: Alpha không possessive tức thì mà phải học cách tôn trọng]
+- [VD: World-building có Hội đồng với luật lệ cụ thể, không phải thế giới hỗn loạn]
+- [VD: Có mystery subplot về nguồn gốc mate bond]
+
+## Công thức chương
+Mở: Hậu quả cliffhanger nhẹ từ chương trước + POV nội tâm. Giữa: Phát triển mối quan hệ / subplot. Kết: Mở ra tension mới HOẶC hoàn thành một arc nhỏ.
+
+## Điều cần tránh
+- Alpha "ảo tưởng" — không kiểm soát được bản thân, ghen tuông vô lý.
+- Nữ chính "yếu đuối bất ngờ" — không có backbone riêng.
+- Mate bond "easy" — không đủ conflict để justify slow burn.
+- Purple prose mô tả bối cảnh; dialogue exposition thừa.
+
+## Độ dài & phong cách
+60-80 chương, ~2500 từ/chương. Văn phong: immersive, sensory, nội tâm sâu. Ngôn ngữ: tiếng Việt tự nhiên, không cứng nhắc.`,
+
+  'dark-romance': `# [Tên truyện Dark Romance]
+
+<!-- Template cho Dark Romance — engagement cao nhất trên MyNovel, đặc biệt với mystery + kidnapping tropes -->
+
+## Thể loại & giọng điệu
+Dark Romance + Psychological Thriller. Giọng điệu: bóng tối, nguy hiểm, tension căng thẳng. Nhịp: build đều, không rushing, payoff mạnh ở climax. Đối tượng: độc giả thích "morally grey" characters, cao trào cảm xúc.
+
+## Bối cảnh & thế giới quan
+[VD: Thế giới ngầm mafia / crime syndicate / kidnap ring]. Nam chính có quyền lực tuyệt đối trong lãnh địa của hắn. Nữ chính bị bắt / sáp nhập / ép buộc phải ở đó. Luật ngầm: kẻ yếu không có quyền lên tiếng.
+
+## Nhân vật chính & tuyến quan hệ
+- Nữ chính: [tên], [hoàn cảnh: VD: con gái người tốt nhưng bị nhầm là "của cải" của antagonist]. Tính cách: thông minh, kiên cường, không đầu hàng dù bị ép. Vết thương: [VD: mất gia đình, từng bị phản bội]. Khát khao: sống sót + tìm lại quyền tự quyết. Mâu thuẫn: bắt đầu sợ hãi nhưng dần hiểu kẻ bắt có lý do riêng.
+- Nam chính: [tên], [vai trò: VD: mafia boss / kidnapper chuyên nghiệp]. Tính cách: lạnh lùng, tính toán, nhưng có mã não xấu bảo vệ [VD: người anh đã chết vì bị phản bội]. Khát khao: kiểm soát tuyệt đối nhưng thực ra sợ hãi mất kiểm soát. Mâu thuẫn: biết hành động của mình sai nhưng không thể dừng.
+- Quan hệ: Bắt đầu là captor/captive, dần chuyển thành obsessive devotion. Tension: physical danger + psychological manipulation + forbidden attraction.
+
+## Xung đột cốt lõi
+Anh bắt nhầm / cô bị lôi vào thế giới ngầm nguy hiểm. Họ phát triển connection bất chấp hoàn cảnh. Nhưng: có kẻ thù chung đòi hỏi họ phải chọn — tự do hay nhau? Câu hỏi: tình yêu có thể nở từ đất đen không?
+
+## Hướng kết (theo chủ đề, không phải tên chương)
+Có thể HEA hoặc bittersweet — tuỳ mức dark bạn muốn. Nếu HEA: anh từ bỏ quyền lực để ở bên cô. Nếu bittersweet: cô thoát ra nhưng phải chấp nhận góc khuất trong anh không bao giờ thay đổi hoàn toàn.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Anti-hero không "redeemed" dễ dàng — phải đấu tranh thật sự]
+- [VD: Nữ chính không "broken bird" — cô chiến đấu bằng trí tuệ không phải sự yếu đuối]
+- [VD: Mystery subplot đan xen — ai là kẻ thù thật sự?]
+- [VD: Psychological depth — khám phá trauma và cách nó shape hành vi]`
+
+,
+
+  billionaire: `# [Tên truyện Billionaire Romance]
+
+<!-- Template cho Romance + Billionaire/Millionaire — thể loại phổ biến nhất trên MyNovel, dễ tiếp cận độc giả mới -->
+
+## Thể loại & giọng điệu
+Contemporary Romance + Billionaire/Millionaire. Giọng điều: ngọt ngào xen lẫn witty banter. Nhịp: meet-cute → conflict → attraction → obstacle → resolution. Đối tượng: độc giả thích power fantasy (gái thường gặp hoàng tử).
+
+## Bối cảnh & thế giới quan
+Thế giới doanh nhân giàu có: công ty lớn, sự kiện thượng lưu, mâu thuẫn gia tộc. Nữ chính thường ở "bottom rung" — assistant, nghèo khó, hoặc bị giáng chức. Bối cảnh cụ thể: [VD: tập đoàn đối thủ, công ty startup bị nuốt, gia đình cần tiền].
+
+## Nhân vật chính & tuyến quan hệ
+- Nữ chính: [tên], [nghề nghiệp: VD: trợ lý/đầu bếp/nhân viên bình thường]. Tính cách: độc lập, có nguyên tắc, không vị lợi. Vết thương: [VD: cha mẹ ly dị khiến cô không tin hôn nhân]. Khát khao: thành công trong sự nghiệp mà không phải hy sinh giá trị. Mâu thuẫn: bị hấp dẫn bởi quyền lực nhưng sợ bị mất chính mình.
+- Nam chính: [tên], [vai trò: VD: CEO trẻ nổi tiếng / người thừa kế]. Tính cách: lạnh lùng bề ngoài, ấm áp bên trong. Bí mật: [VD: bị ép buộc phải cưới vì lợi ích gia đình]. Khát khao: được yêu vì con người thật, không phải tài khoản. Mâu thuẫn: cam kết ngăn cản tình cảm, nhưng không thể cưỡng lại cô.
+- Quan hệ: Bắt đầu vì hợp đồng / circumstance không mong muốn → phát triển attraction thật. Trope phổ biến: Contract Marriage, Fake Relationship, Marriage of Convenience.
+
+## Xung đột cốt lõi
+Họ phải giả vờ [yêu/cưới/hợp tác] vì lý do ngoài tình yêu. Trong quá trình giả, họ phát hiện đối phương không như stereotype. Nhưng: gia đình / đối thủ / hoàn cảnh cũ ngăn cản họ ở bên nhau thật. Câu hỏi: tiền có thể mua hạnh phúc không?
+
+## Hướng kết (theo chủ đề, không phải tên chương)
+HEA rõ ràng — họ chọn nhau bất chấp áp lực bên ngoài. Điểm payoff: nam chính từ bỏ [điều gì đó quan trọng với anh] để chứng minh tình yêu quan trọng hơn.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Hero không "fixed" bằng tình yêu — cô giúp anh thay đổi từ bên trong]
+- [VD: Có subplot về self-worth — cô không cần anh để được công nhận]
+- [VD: Supporting characters đáng nhớ — best friend/sassy secretary/comic relief]
+- [VD: World-building thực sự — business drama không chỉ là backdrop]`
+
+,
+
+  'second-chance': `# [Tên truyện Second Chance Romance]
+
+<!-- Template cho Romance + Second Chance / Second Chance at Love — trope có engagement cao, emotional depth sâu -->
+
+## Thể loại & giọng điệu
+Contemporary Romance + Second Chance / Friends to Lovers to Enemies to Lovers. Giọng điệu: nostalgic, bittersweet, emotional payoff mạnh. Nhịp: backstory song song với present, gradual revelation. Đối tượng: độc giả thích emotional journey, không chỉ physical attraction.
+
+## Bối cảnh & thế giới quan
+Thiết lập present: [VD: thành phố nhỏ / thành phố lớn / hometown họ từng rời đi]. Quá khứ: [VD: college, first job, summer fling] nơi họ yêu nhau lần đầu. Present: họ vô tình gặp lại sau nhiều năm.
+
+## Nhân vật chính & tuyến quan hệ
+- Nữ chính: [tên], [cuộc sống hiện tại: VD: thành công nhưng cô đơn, quay về hometown vì lý do]. Vết thương từ breakup: [VD: anh chọn [điều khác] thay vì cô, cô mất [điều quan trọng] vì anh]. Khát khao: closure hoặc second chance. Mâu thuẫn: muốn tin lại nhưng sợ bị tổn thương cùng một cách.
+- Nam chính: [tên], [cuộc sống hiện tại: VD: ở lại hometown, thành công theo cách khác]. Vết thương từ breakup: [VD: cô rời đi, anh không theo được]. Khát khao: được tha thứ, được cơ hội sửa sai. Mâu thuẫn: tự hào không cho phép anh thừa nhận sai lầm.
+- Quan hệ: Họ đã có history — memories đan xen present. Căng thẳng từ: chưa tha thứ + still attracted + hoàn cảnh buộc họ tương tác.
+
+## Xung đột cốt lõi
+Nguyên nhân chia tay ngày xưa vẫn tồn tại dưới dạng [VD: unfulfilled dream, different life goals, external pressure]. Họ phải đối mặt: điều gì thực sự chia cách họ? Họ đã thay đổi chưa? Họ có thể thay đổi để ở bên nhau không?
+
+## Hướng kết (theo chủ đề, không phải tên chương)
+HEA — họ nhận ra [điều khiến họ chia tay] không còn là rào cản vì họ đã thay đổi / vì hoàn cảnh đã khác. Payoff emotional: không phải grand gesture mà là small moment of vulnerability.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Không "misunderstanding" rẻ tiền — nguyên nhân chia tay thật sự và đáng weight]
+- [VD: Backstory reveal gradual, không dump tất cả một lần]
+- [VD: Supporting characters phản ánh main couple's journey]
+- [VD: Emotional growth từ cả hai phía, không chỉ một người thay đổi]`
+
+,
+
+  fantasy: `# [Tên truyện Fantasy Romance]
+
+<!-- Template cho Fantasy/Adventure + Romance elements — cho thể loại Romantasy, Epic Fantasy romance, Magical Academy -->
+
+## Thể loại & giọng điệu
+Fantasy + Romance (Romantasy / Epic Fantasy với romance core). Giọng điệu: epic world-building xen lẫn intimate character moments. Nhịp: alternating giữa high stakes plot và romantic development. Đối tượng: độc giả thích world-building sâu + slow burn romance.
+
+## Bối cảnh & thế giới quan
+Thế giới fantasy với [VD: magic system có giới hạn rõ ràng, political factions, prophecy cần hoàn thành]. Địa lý cụ thể: [VD: kingdom đang bị đe dọa, academy đào tạo mages, borderland giữa territories]. Quy tắc magic/physics của thế giới phải nhất quán.
+
+## Nhân vật chính & tuyến quan hệ
+- Nữ chính: [tên], [vai trò: VD: orphan với hidden power, princess không muốn ngai vàng, apprentice mới vào academy]. Khát khao: [VD: tìm identity, bảo vệ những người yêu thương, hoàn thành prophecy]. Mâu thuẫn: [VD: power của cô có thể save hoặc destroy, cô không biếttrust ai].
+- Nam chính: [tên], [vai trò: VD: rival/broody mage, prince với secret, mentor có agendar]. Khát khao: [VD: revenge, redemption, protecting kingdom]. Mâu thuẫn: [VD: feelings for cô conflict với duty/past trauma].
+- Quan hệ: Often start as rivals/unequal power dynamic → enemies-to-allies → slow burn attraction.
+
+## Xung đột cốt lõi
+[Major plot conflict: prophecy cần fulfill, war sắp xảy ra, kingdom đang bị threaten]. Romance xảy ra trong context này. Câu hỏi: khi duty và love conflict, họ chọn gì?
+
+## Hướng kết (theo chủ đề, không phải tên chương)
+Tuỳ scope: có thể series hoặc standalone. Nếu standalone: main plot resolve + romance payoff. Nếu series: main conflict resolve, romance open-ended for continuation.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Magic system có rules, không phải deus ex machina]
+- [VD: World-building phục vụ plot, không dump lore không cần thiết]
+- [VD: Romance enhances plot, không phải distraction from plot]
+- [VD: Supporting cast đa chiều, không chỉ là billboard cho main couple]`
+};
+
+// Apply genre template to Step 1 brief textarea
+function applyGenreTemplate(genre) {
+  const tpl = GENRE_TEMPLATES[genre];
+  if (!tpl) return;
+  const existing = $('#studioBriefTemplate').value.trim();
+  const isDefault = existing === '' || existing === PROFILE_TEMPLATE.trim();
+  if (!isDefault && !confirm('Ghi đè brief hiện tại?')) return;
+  $('#studioBriefTemplate').value = tpl;
+  // Mark active chip
+  document.querySelectorAll('.chip-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.chip-btn[data-template="${genre}"]`)?.classList.add('active');
+  $('#studioHint').textContent = 'Template "' + genre + '" đã điền. Bổ sung ý tưởng ở Step 2 nếu muốn.';
+}
+
 // Khung profile chuẩn (khớp các chiều Architect cần để sinh Premise mạnh).
 // Điền tay trong UI, hoặc copy ra LLM ngoài. Gợi ý trong ngoặc — thay bằng nội dung thật.
 const PROFILE_TEMPLATE = `# [Tên truyện]
@@ -320,10 +621,29 @@ const PROFILE_TEMPLATE = `# [Tên truyện]
 (số chương mục tiêu + số từ/chương; văn phong; ngôn ngữ viết)
 `;
 
+function profileLibHasDraft() {
+  return !!($('#studioOutput').value.trim() ||
+    ($('#studioBriefTemplate').value.trim() && $('#studioBriefTemplate').value.trim() !== PROFILE_TEMPLATE.trim()) ||
+    $('#studioIdea').value.trim() ||
+    $('#studioGenre').value.trim() ||
+    $('#studioPlatform').value.trim() ||
+    $('#studioStyle').value.trim());
+}
+
+function confirmDiscardProfileDraft(action) {
+  return !profileLibHasDraft() || confirm(action + ' s\u1ebd x\u00f3a draft hi\u1ec7n t\u1ea1i \u1edf Profile Studio. Ti\u1ebfp t\u1ee5c?');
+}
+
 async function openProfileLibrary() {
+  if (!confirmDiscardProfileDraft('M\u1edf Th\u01b0 vi\u1ec7n Profile')) return;
   $('#profileLibOverlay').hidden = false;
   profileLibNew();
   await refreshProfileLibList();
+}
+
+function profileLibNewWithConfirm() {
+  if (!confirmDiscardProfileDraft('T\u1ea1o profile m\u1edbi')) return;
+  profileLibNew();
 }
 
 async function refreshProfileLibList() {
@@ -354,9 +674,19 @@ function profileLibNew() {
   profileLibSelected = null;
   $('#profileLibName').value = '';
   $('#profileLibName').readOnly = false;
-  $('#profileLibContent').value = PROFILE_TEMPLATE;
   $('#profileLibDelete').hidden = true;
-  $('#profileLibHint').textContent = 'Khung m\u1eabu \u0111\u00e3 \u0111i\u1ec1n s\u1eb5n \u2014 thay g\u1ee3i \u00fd b\u1eb1ng n\u1ed9i dung r\u1ed3i L\u01b0u.';
+  $('#profileLibHint').textContent = '';
+  // Reset all studio fields
+  $('#studioBriefTemplate').value = PROFILE_TEMPLATE;
+  $('#studioIdea').value = '';
+  $('#studioGenre').value = '';
+  $('#studioPlatform').value = '';
+  $('#studioLang').value = 'Ti\u1ebfng Vi\u1ec7t';
+  $('#studioChapters').value = '300';
+  $('#studioStyle').value = '';
+  $('#studioOutput').value = '';
+  $('#studioHint').textContent = '';
+  document.querySelectorAll('.chip-btn').forEach(b => b.classList.remove('active'));
 }
 
 async function profileLibLoad(path, source) {
@@ -365,15 +695,15 @@ async function profileLibLoad(path, source) {
     if (!res.ok) { const d = await res.json().catch(() => ({})); toast(d.error || ('HTTP ' + res.status), 'error'); return; }
     const data = await res.json();
     profileLibSelected = { path, source };
-    $('#profileLibContent').value = data.content || '';
-    // Name is the base filename; project files keep their name, non-project
-    // become a save-as (name editable, will land in project).
+    // Load into Step 4 output textarea
+    $('#studioOutput').value = data.content || '';
+    // Name is the base filename
     const base = (data.name || '').replace(/\.md$/i, '');
     $('#profileLibName').value = base;
     if (source === 'project') {
       $('#profileLibName').readOnly = true;
       $('#profileLibDelete').hidden = false;
-      $('#profileLibHint').textContent = 'S\u1eeda tr\u1ef1c ti\u1ebfp profile project n\u00e0y.';
+      $('#profileLibHint').textContent = 'Profile \u0111\u00e3 t\u1ea3i. S\u1eeda n\u1ebfu c\u1ea7n r\u1ed3i b\u1ea5m "L\u01b0u Profile".';
     } else {
       $('#profileLibName').readOnly = false;
       $('#profileLibDelete').hidden = true;
@@ -385,37 +715,65 @@ async function profileLibLoad(path, source) {
   }
 }
 
-// Profile Studio (C-lite): one-shot generate a profile from a rough idea into
-// the editor for review. Does not save or run anything.
+// Generate profile via AI \u2192 output to Step 4 textarea
 async function generateProfileFromIdea() {
-  const idea = $('#studioIdea').value.trim();
-  if (!idea) { toast('Nh\u1eadp \u00fd t\u01b0\u1edfng th\u00f4 tr\u01b0\u1edbc', 'error'); return; }
   const btn = $('#studioGenerate');
+  const hint = $('#studioHint');
+  const brief = $('#studioBriefTemplate').value.trim();
+  const ideaField = $('#studioIdea').value.trim();
+  const hasBrief = brief && brief !== PROFILE_TEMPLATE.trim();
+  // Guard: need Step 1 brief (non-default) or Step 2 idea
+  if (!hasBrief && !ideaField) {
+    toast('\u0110i\u1ec1n \u00fd t\u01b0\u1edfng \u1edf Step 1 (template/brief) ho\u1eb7c Step 2 tr\u01b0\u1edbc', 'error');
+    return;
+  }
   const body = {
-    idea,
+    idea: ideaField || undefined,
     genre: $('#studioGenre').value.trim() || undefined,
     platform: $('#studioPlatform').value.trim() || undefined,
     language: $('#studioLang').value.trim() || undefined,
     styleNotes: $('#studioStyle').value.trim() || undefined,
     targetChapters: parseInt($('#studioChapters').value, 10) || undefined,
   };
+  const modelMode = $('#studioModelUse')?.value || '';
+  if (modelMode === '__custom') {
+    body.provider = $('#studioModelProvider')?.value || '';
+    body.model = $('#studioModel')?.value || '';
+    if (!body.provider || !body.model) {
+      toast('Ch\u1ecdn \u0111\u1ee7 provider v\u00e0 model cho Profile Studio', 'error');
+      return;
+    }
+  } else if (modelMode.startsWith('role:')) {
+    const sel = $('#studioModelUse').options[$('#studioModelUse').selectedIndex];
+    body.provider = sel?.dataset.provider || '';
+    body.model = sel?.dataset.model || '';
+    if (!body.provider || !body.model) {
+      toast('Role model ch\u01b0a c\u00f3 provider/model h\u1ee3p l\u1ec7', 'error');
+      return;
+    }
+  }
+  // Feed Step 1 brief into idea if present and not default template
+  if (hasBrief) {
+    body.idea = [brief, ideaField].filter(Boolean).join('\n\n');
+  }
   const prev = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '\u23f3 \u0110ang sinh\u2026';
+  btn.textContent = '\u23f3 \u0110ang sinh...';
+  hint.textContent = '';
   try {
     const res = await post('/api/profiles/generate', body);
     if (res && res.content) {
-      // Treat as a fresh, unsaved project profile (editable, no delete yet).
-      profileLibSelected = null;
-      $('#profileLibName').readOnly = false;
-      $('#profileLibDelete').hidden = true;
-      $('#profileLibContent').value = res.content;
-      if (!$('#profileLibName').value.trim()) {
-        $('#profileLibName').value = 'profile-' + Date.now();
+      $('#studioOutput').value = res.content;
+      hint.textContent = '\u2705 \u0110\u00e3 sinh xong! S\u1eeda n\u1ebfu c\u1ea7n r\u1ed3i b\u1ea5m "L\u01b0u Profile".';
+      toast('\u0110\u00e3 sinh profile th\u00e0nh c\u00f4ng', 'ok');
+      // Auto-fill name from content title
+      const match = res.content.match(/^#\s+(.+)/m);
+      if (match && !$('#profileLibName').value.trim()) {
+        $('#profileLibName').value = match[1].replace(/[^\w\-]/g, '-').toLowerCase().slice(0, 40);
       }
-      $('#profileLibHint').textContent = '\u0110\u00e3 sinh \u2014 duy\u1ec7t/s\u1eeda r\u1ed3i b\u1ea5m L\u01b0u.';
-      toast('\u0110\u00e3 sinh profile, duy\u1ec7t r\u1ed3i L\u01b0u', 'ok');
     }
+  } catch (e) {
+    hint.textContent = '\u274c L\u1ed7i: ' + e;
   } finally {
     btn.disabled = false;
     btn.textContent = prev;
@@ -424,9 +782,9 @@ async function generateProfileFromIdea() {
 
 async function profileLibSave() {
   const name = $('#profileLibName').value.trim();
-  const content = $('#profileLibContent').value;
+  const content = $('#studioOutput').value;
   if (!name) { toast('Nh\u1eadp t\u00ean file', 'error'); return; }
-  if (!content.trim()) { toast('N\u1ed9i dung tr\u1ed1ng', 'error'); return; }
+  if (!content.trim()) { toast('N\u1ed9i dung tr\u1ed1ng \u2014 \u0111i\u1ec1n v\u00e0o Step 4 tr\u01b0\u1edbc', 'error'); return; }
   // Editing an existing project profile → overwrite expected. New/generated →
   // don't clobber silently: backend returns 409, we confirm then retry.
   const editingProject = !!(profileLibSelected && profileLibSelected.source === 'project');
@@ -465,26 +823,44 @@ async function saveProfileRequest(name, content, overwrite) {
   return r.json();
 }
 
-// Copy the current template/brief + a ready instruction to the clipboard, so
-// the user can paste it into an external LLM (ChatGPT/Claude), have it filled,
-// then paste the result back. Reduces the manual "select textarea + write
-// instruction" friction of the external-LLM path.
+// Build prompt from all form fields and copy for external LLM
 async function profileLibCopyForLLM() {
-  const tpl = $('#profileLibContent').value || PROFILE_TEMPLATE;
-  const payload =
-    'B\u1ea1n l\u00e0 tr\u1ee3 l\u00fd so\u1ea1n "profile" (brief) cho engine vi\u1ebft ti\u1ec3u thuy\u1ebft d\u00e0i.\n' +
-    '\u0110i\u1ec1n \u0111\u1ea7y \u0111\u1ee7 template Markdown b\u00ean d\u01b0\u1edbi cho \u00fd t\u01b0\u1edfng c\u1ee7a t\u00f4i: [\u0110I\u1ec0N \u00dd T\u01af\u1edeNG TH\u00d4 C\u1ee6A B\u1ea0N \u1ede \u0110\u00c2Y]\n\n' +
-    'Nguy\u00ean t\u1eafc:\n' +
-    '- Vi\u1ebft C\u1ee4 TH\u1ec2 (t\u00ean nh\u00e2n v\u1eadt, chi ti\u1ebft b\u1ed1i c\u1ea3nh, h\u01b0\u1edbng twist), t\u1ef1 quy\u1ebft \u0111\u1ecbnh khi t\u00f4i b\u1ecf tr\u1ed1ng.\n' +
-    '- M\u00f4 t\u1ea3 theo \u0110\u1ecaNH H\u01af\u1edaNG & R\u00c0NG BU\u1ed8C, \u0110\u1eebNG vi\u1ebft s\u1eb5n c\u00e2u v\u0103n m\u1eabu (tr\u00e1nh anchor).\n' +
-    '- Tr\u00e1nh AI-tell: no purple prose, no "kh\u00f4ng ph\u1ea3i X m\u00e0 l\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p, tho\u1ea1i gi\u1ea3i th\u00edch th\u1eeba.\n' +
-    '- Ch\u1ec9 xu\u1ea5t Markdown c\u1ee7a profile, kh\u00f4ng gi\u1ea3i th\u00edch th\u00eam.\n\n' +
-    '--- TEMPLATE ---\n' + tpl;
+  const hint = $('#studioHint');
+  const brief = $('#studioBriefTemplate').value.trim();
+  const idea = $('#studioIdea').value.trim();
+  const genre = $('#studioGenre').value.trim();
+  const platform = $('#studioPlatform').value.trim();
+  const lang = $('#studioLang').value.trim() || 'Ti\u1ebfng Vi\u1ec7t';
+  const chapters = $('#studioChapters').value.trim();
+  const style = $('#studioStyle').value.trim();
+
+  let payload = `B\u1ea1n l\u00e0 tr\u1ee3 l\u00fd so\u1ea1n "profile" (brief) cho engine vi\u1ebft ti\u1ec3u thuy\u1ebft d\u00e0i.\n\n`;
+
+  if (idea) payload += `## \u00dd t\u01b0\u1edfng th\u00f4\n${idea}\n\n`;
+  if (genre) payload += `## Th\u1ec3 lo\u1ea1i\n${genre}\n\n`;
+  if (platform) payload += `## N\u1ec1n t\u1ea3ng / th\u1ecb tr\u01b0\u1eddng\n${platform}\n\n`;
+  if (chapters) payload += `## S\u1ed1 ch\u01b0\u01a1ng d\u1ef1 ki\u1ebfn\n${chapters}\n\n`;
+  if (lang) payload += `## Ng\u00f4n ng\u1eef\n${lang}\n\n`;
+  if (style) payload += `## Phong c\u00e1ch / y\u00eau c\u1ea7u\n${style}\n\n`;
+
+  payload += `## Nguy\u00ean t\u1eafc
+- Vi\u1ebft C\u1ee4 TH\u1ec2 (t\u00ean nh\u00e2n v\u1eadt, chi ti\u1ebft b\u1ed1i c\u1ea3nh, h\u01b0\u1edbng twist)
+- M\u00f4 t\u1ea3 theo \u0110\u1ecaNH H\u01af\u1edaNG & R\u00c0NG BU\u1ed8C, \u0110\u1eeaNG vi\u1ebft s\u1eb5n c\u00e2u v\u0103n m\u1eabu
+- Tr\u00e1nh AI-tell: no purple prose, no "kh\u00f4ng ph\u1ea3i X m\u00e0 l\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p
+- Ch\u1ec9 xu\u1ea5t Markdown c\u1ee7a profile, kh\u00f4ng gi\u1ea3i th\u00edch th\u00eam\n\n`;
+
+  if (brief) {
+    payload += `--- BRIEF TEMPLATE ---\n${brief}\n`;
+  } else {
+    payload += `--- DEFAULT TEMPLATE ---\n${PROFILE_TEMPLATE}\n`;
+  }
+
   try {
     await navigator.clipboard.writeText(payload);
-    toast('\u0110\u00e3 copy template + c\u00e2u l\u1ec7nh. D\u00e1n v\u00e0o ChatGPT/Claude, \u0111i\u1ec1n \u00fd t\u01b0\u1edfng, r\u1ed3i d\u00e1n k\u1ebft qu\u1ea3 v\u1ec1 \u00f4 n\u00e0y.', 'ok');
+    hint.textContent = '\ud83d\udccb \u0110\u00e3 copy prompt! D\u00e1n v\u00e0o LLM ngo\u00e0i, \u0111i\u1ec1n \u00fd t\u01b0\u1edfng, r\u1ed3i d\u00e1n k\u1ebft qu\u1ea3 v\u00e0o \u00f4 Step 4.';
+    toast('\u0110\u00e3 copy prompt cho LLM ngo\u00e0i', 'ok');
   } catch (e) {
-    toast('Tr\u00ecnh duy\u1ec7t ch\u1eb7n clipboard \u2014 h\u00e3y b\u00f4i \u0111en \u00f4 n\u1ed9i dung r\u1ed3i copy tay.', 'error');
+    hint.textContent = '\u274c L\u1ed7i clipboard';
   }
 }
 
@@ -790,7 +1166,7 @@ async function renderProductionDetail(run) {
   const detail = $('#runDetail');
   if (!detail) return;
   if (!run) {
-    detail.innerHTML = '<div class="placeholder">Ch\u1ecdn m\u1ed9t job b\u00ean tr\u00e1i \u0111\u1ec3 xem chi ti\u1ebft.</div>';
+    detail.innerHTML = '<div class="placeholder"><p>Ch\u1ecdn m\u1ed9t job b\u00ean tr\u00e1i \u0111\u1ec3 xem chi ti\u1ebft.</p><p class="muted" style="margin-top: var(--space-3); font-size: 0.9em;"><strong>Ch\u1ebf \u0111\u1ed9 S\u1ea3n xu\u1ea5t = headless:</strong> job ch\u1ea1y tr\u00ean server, kh\u00f4ng m\u1edf TUI nh\u01b0 ch\u1ebf \u0111\u1ed9 th\u01b0\u1eddng. Cook li\u00ean t\u1ee5c \u0111\u1ebfn khi \u0111\u1ea1t m\u1ee5c ti\u00eau ho\u1eb7c h\u1ebft budget. D\u00f9ng \u201c\u0110\u1ed3ng b\u1ed9\u201d \u0111\u1ec3 \u0111\u1ed5 k\u1ebft qu\u1ea3 v\u1ec1 workspace ch\u00ednh, ho\u1eb7c \u201cD\u1eebng\u201d \u0111\u1ec3 xem t\u1eebng ch\u01b0\u01a1ng \u0111\u00e3 vi\u1ebft.</p></div>';
     return;
   }
 

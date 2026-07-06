@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +19,25 @@ func TestHandleProfileGenerateRequiresIdea(t *testing.T) {
 		s.handleProfileGenerate(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("missing idea should be 400, got %d for body %s", rec.Code, body)
+		}
+	}
+}
+
+func TestHandleProfileGenerateRejectsPartialModelOverride(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	for _, body := range []string{
+		`{"idea":"x","provider":"kakalot"}`,
+		`{"idea":"x","model":"deepseek-v4-pro"}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/profiles/generate", bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.handleProfileGenerate(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("partial model override should be 400, got %d for body %s", rec.Code, body)
+		}
+		if !strings.Contains(rec.Body.String(), "provider and model") {
+			t.Fatalf("partial model override error = %s", rec.Body.String())
 		}
 	}
 }
