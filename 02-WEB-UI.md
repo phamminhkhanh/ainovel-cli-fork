@@ -144,16 +144,18 @@ Cockpit có 2 kiểu job:
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET | `/api/profiles` | — | `[{name, path, source}]`, với `path` dạng `project/foo.md`, `global/foo.md`, hoặc `legacy/foo.md` |
-| GET | `/api/prodruns` | — | `[ProdRun]` |
-| POST | `/api/prodruns` | `{kind:"fresh_profile", name, profile, model?, provider?, targetChapters?, budgetUsd?}` | `ProdRun` |
-| POST | `/api/prodruns` | `{kind:"continue_workspace", name, model?, provider?, targetChapters, budgetUsd?}` | `ProdRun` kèm `seededFrom` |
-| GET | `/api/prodruns/{id}` | — | `ProdRun` |
-| POST | `/api/prodruns/{id}/start` | — | `ProdRun` |
-| POST | `/api/prodruns/{id}/stop` | — | `ProdRun` |
+| GET | `/api/prodruns` | — | `[ProdRunView]` (`ProdRun` + `health`) |
+| POST | `/api/prodruns` | `{kind:"fresh_profile", name, profile, model?, provider?, targetChapters?, budgetUsd?}` | `ProdRunView` |
+| POST | `/api/prodruns` | `{kind:"continue_workspace", name, model?, provider?, targetChapters, budgetUsd?}` | `ProdRunView` kèm `seededFrom` |
+| GET | `/api/prodruns/{id}` | — | `ProdRunView` |
+| POST | `/api/prodruns/{id}/start` | — | `ProdRunView` |
+| POST | `/api/prodruns/{id}/stop` | — | `ProdRunView` |
 | POST | `/api/prodruns/{id}/sync` | `{force?: boolean}` | `{copiedFiles, mode, fastForward}` |
 | GET | `/api/prodruns/{id}/log` | — | text/plain tail |
 | POST | `/api/prodruns/{id}/export` | `{format}` | `{path}` |
 | GET | `/api/prodruns/{id}/export.txt` | — | `text/plain` download |
+
+`ProdRunView` là `ProdRun` được wrap thêm `health: { overall, metrics[] }`. Các metric ổn định gồm `progress`, `rewrite_rate`, `cost_pace`, `budget`; level là `idle/good/warn/bad`. Health được tính backend-side từ dữ liệu đã poll (`progress.json`, `reviews/*.json`, `usage.json`) để response của list/get/create/start/stop/approve/revise có cùng shape.
 
 ### Luồng fresh_profile
 

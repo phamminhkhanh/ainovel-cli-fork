@@ -81,6 +81,11 @@ function renderProductionTab() {
                   <button class="chip-btn" data-template="billionaire">Billionaire</button>
                   <button class="chip-btn" data-template="second-chance">Second Chance</button>
                   <button class="chip-btn" data-template="fantasy">Fantasy</button>
+                  <button class="chip-btn" data-template="tien-hiep">Tiên hiệp</button>
+                  <button class="chip-btn" data-template="huyen-huyen">Huyền huyễn</button>
+                  <button class="chip-btn" data-template="lit-rpg">LitRPG</button>
+                  <button class="chip-btn" data-template="trinh-tham">Trinh thám</button>
+                  <button class="chip-btn" data-template="xuyen-khong">Xuyên không</button>
                 </div>
                 <textarea id="studioBriefTemplate" rows="6" placeholder="M\u1eabu brief markdown... (click template \u0111\u1ec3 \u0111i\u1ec1n)"></textarea>
               </div>
@@ -128,10 +133,31 @@ function renderProductionTab() {
                 <div class="step-hint" id="studioHint"></div>
               </div>
 
-              <!-- Step 4: K\u1ebft qu\u1ea3 -->
+              <!-- Step 4: Kết quả -->
               <div class="studio-step studio-step-output">
-                <div class="step-header"><span class="step-num">4</span> K\u1ebft qu\u1ea3 <span class="step-optional">(copy t\u1eeb AI / d\u00e1n t\u1eeb LLM ngo\u00e0i)</span></div>
-                <textarea id="studioOutput" rows="12" placeholder="Profile output s\u1ebd xu\u1ea5t hi\u1ec7n \u1edf \u0111\u00e2y..."></textarea>
+                <div class="step-header"><span class="step-num">4</span> Kết quả <span class="step-optional">(copy từ AI / dán từ LLM ngoài)</span></div>
+                <textarea id="studioOutput" rows="12" placeholder="Profile output sẽ xuất hiện ở đây..."></textarea>
+                <div class="studio-review" id="studioReview">
+                  <div class="review-head">🔍 Soát nền móng trước khi lưu <span class="step-optional">— profile là gốc, sai ở đây nhân lên hàng trăm chương</span></div>
+                  <ul class="review-checklist">
+                    <li>Nhân vật chính có want + wound + mâu thuẫn rõ? Tên &amp; tính cách nhất quán, phân biệt được?</li>
+                    <li>Tài năng lõi (vd trí tuệ) có nguồn gốc + <strong>giới hạn</strong>? (vô hạn → hoá "thánh", mất căng thẳng)</li>
+                    <li><strong>Có thua / trả giá thật</strong> dọc truyện, hay chỉ thắng liên tục? (truyện dài cần nhiều setback, không chỉ 1 bước ngoặt)</li>
+                    <li>Phản diện xứng tầm, lặp lại, có mưu riêng — không phải "bộ máy vô danh"? Mồi dài hơi có bị bỏ rơi?</li>
+                    <li>Thể loại chính có được cấu trúc phục vụ tương xứng, hay bị nhánh khác lấn → lệch mood/kỳ vọng?</li>
+                    <li>Cơ chế lõi (vd mate bond) có <strong>luật + giá + giới hạn</strong> rõ? (mơ hồ → deus ex machina)</li>
+                    <li>Mid-pivot cụ thể (~40–60%)? Xung đột lõi đủ sức kéo cả truyện?</li>
+                    <li>Có ensemble / tuyến nhân vật phụ đủ nuôi truyện dài?</li>
+                    <li>Công thức chương có biến thể, không đơn điệu một mô-típ suốt truyện?</li>
+                    <li>Kết = câu hỏi chủ đề (không phải plot beat) và có cái giá? Tên truyện khớp tông của kết?</li>
+                    <li>AI-tell: no purple prose, no "không phải X mà là Y", nội tâm lặp, nhịp câu đều đều?</li>
+                    <li><strong>Hợp gu thị trường mục tiêu (${new Date().getFullYear()}+)?</strong> Trope/độ nóng/nhịp/nội dung khớp văn hoá đọc nước đích? (vd Tây Ban Nha ≠ Việt Nam ≠ Anh–Mỹ)</li>
+                  </ul>
+                  <div class="step-actions">
+                    <button class="btn" id="studioCopyReview">📋 Copy profile + prompt review cho LLM ngoài</button>
+                  </div>
+                  <div class="step-hint" id="studioReviewHint"></div>
+                </div>
               </div>
 
               <!-- Save section -->
@@ -217,7 +243,14 @@ function initStudioModelSelect() {
     .then(data => {
       modelData = data || modelData;
       useSelect.textContent = '';
-      addOption(useSelect, '', 'M\u1eb7c \u0111\u1ecbnh Studio (k\u1ebf th\u1eeba)');
+      // Nhãn mặc định hiện rõ model thực sự được kế thừa (default trong config
+      // lúc server khởi động — Studio không đổi theo ⚙ Model runtime).
+      const sd = modelData.studioDefault || {};
+      const sdModel = sd.model ? `${sd.provider ? sd.provider + '/' : ''}${sd.model}` : '';
+      const defaultLabel = sdModel
+        ? `M\u1eb7c \u0111\u1ecbnh config: ${sdModel}`
+        : 'M\u1eb7c \u0111\u1ecbnh Studio (k\u1ebf th\u1eeba)';
+      addOption(useSelect, '', defaultLabel);
       (modelData.roles || [])
         .filter(role => role.key && role.key !== 'default')
         .forEach(role => {
@@ -258,6 +291,7 @@ function bindProductionEvents() {
   $('#studioGenerate')?.addEventListener('click', generateProfileFromIdea);
   $('#profileLibSave')?.addEventListener('click', profileLibSave);
   $('#studioCopyForLLM')?.addEventListener('click', profileLibCopyForLLM);
+  $('#studioCopyReview')?.addEventListener('click', profileLibCopyForReview);
   $('#profileLibDelete')?.addEventListener('click', profileLibDelete);
   $('#profileLibItems')?.addEventListener('click', (e) => {
     const li = e.target.closest('[data-profile-path]');
@@ -437,10 +471,10 @@ Thế giới ngầm werewolf tồn tại song song xã hội loài người. Alp
 Mate bond là định mệnh nhưng cả hai đều chống lại. Kẻ thù của bầy (rogue werewolf, vampire council, human hunter) buộc họ phải hợp tác. Câu hỏi: tình yêu có thể vượt qua định mệnh ép buộc không?
 
 ## Hướng kết (theo chủ đề, không phải tên chương)
-HEA — họ chấp nhận mate bond không phải kết thúc mà là bắt đầu. Cách họ chiến thắng kẻ thù + hiểu nhau tạo nên payoff thực sự.
+HEA — họ chấp nhận mate bond, coi đó là khởi đầu cho chặng đường mới. Cách họ chiến thắng kẻ thù + hiểu nhau tạo nên payoff thực sự.
 
 ## Điểm bán khác biệt (≥3)
-- [VD: Mate bond không phải "love at first sight" mà là quá trình chấp nhận dần]
+- [VD: Mate bond là quá trình chấp nhận dần — tình cảm xây qua thời gian, né trope "love at first sight"]
 - [VD: Alpha không possessive tức thì mà phải học cách tôn trọng]
 - [VD: World-building có Hội đồng với luật lệ cụ thể, không phải thế giới hỗn loạn]
 - [VD: Có mystery subplot về nguồn gốc mate bond]
@@ -534,7 +568,7 @@ Thiết lập present: [VD: thành phố nhỏ / thành phố lớn / hometown h
 Nguyên nhân chia tay ngày xưa vẫn tồn tại dưới dạng [VD: unfulfilled dream, different life goals, external pressure]. Họ phải đối mặt: điều gì thực sự chia cách họ? Họ đã thay đổi chưa? Họ có thể thay đổi để ở bên nhau không?
 
 ## Hướng kết (theo chủ đề, không phải tên chương)
-HEA — họ nhận ra [điều khiến họ chia tay] không còn là rào cản vì họ đã thay đổi / vì hoàn cảnh đã khác. Payoff emotional: không phải grand gesture mà là small moment of vulnerability.
+HEA — họ nhận ra [điều khiến họ chia tay] không còn là rào cản vì họ đã thay đổi / vì hoàn cảnh đã khác. Payoff emotional đến từ một khoảnh khắc nhỏ phơi bày sự yếu lòng, né khuôn "grand gesture".
 
 ## Điểm bán khác biệt (≥3)
 - [VD: Không "misunderstanding" rẻ tiền — nguyên nhân chia tay thật sự và đáng weight]
@@ -569,7 +603,197 @@ Tuỳ scope: có thể series hoặc standalone. Nếu standalone: main plot res
 - [VD: Magic system có rules, không phải deus ex machina]
 - [VD: World-building phục vụ plot, không dump lore không cần thiết]
 - [VD: Romance enhances plot, không phải distraction from plot]
-- [VD: Supporting cast đa chiều, không chỉ là billboard cho main couple]`
+- [VD: Supporting cast đa chiều, không chỉ là billboard cho main couple]`,
+
+  'tien-hiep': `# [Tên truyện Tiên hiệp / Tu tiên]
+
+<!-- Template Tiên hiệp / Tu tiên (Cultivation). Hợp gu WebNovel, KDP; VN: webnovel.vn/Waka/TruyenFull. Engine style: fantasy -->
+
+## Thể loại & giọng điệu
+Tiên hiệp / Tu tiên (Cultivation / Xianxia). Giọng điệu: hào hùng, kỳ vĩ. Nhịp: progression đều — mỗi cảnh giới là một arc, đột phá là cao trào. Đối tượng: độc giả thích hệ thống năng lượng rõ, main từ đáy vươn lên đỉnh.
+
+## Bối cảnh & thế giới quan
+Thế giới tu tiên chia cảnh giới rõ (luyện khí → trúc cơ → kim đan → nguyên anh → ...). Linh khí hữu hạn; tranh tài nguyên là nguồn xung đột chính. Ba lớp thế lực: tông môn, thế gia, tán tu. Thiên kiếp ràng buộc mỗi lần thăng cấp — đột phá luôn có cái giá.
+
+## Nhân vật chính & tuyến quan hệ
+- Main: [tên], xuất thân thấp (tán tu / phế thể / tông môn ngoại biên). Vết thương: [VD: gia tộc bị diệt, cơ duyên bị đoạt]. Khát khao: chứng minh bản thân, đạt đỉnh cao tu đạo. Điểm mù: kiêu ngạo sau đột phá, hoặc quá tín một đạo pháp tới mức mù quáng.
+- Đối thủ ngang cơ: [tên] — tài năng tương đương, đạo khác (chính vs ma), đối đầu lặp lại xuyên nhiều cảnh giới.
+- Quan hệ: sư đồ có căng thẳng (ân tình xen lợi dụng); đạo lữ đồng tiến nhưng có thể phân kỳ về đạo.
+
+## Xung đột cốt lõi
+Đạo tâm bị thử thách xuyên suốt: tài nguyên khan hiếm buộc tranh đoạt, mỗi đột phá là thiên kiếp có thể ngã. Câu hỏi: lên đỉnh cao bằng đạo nào mà còn giữ được bản tâm?
+
+## Hướng kết (theo chủ đề)
+Main đột phá cảnh giới tối thượng nhưng nhận ra đỉnh cao ấy để lại cái giá thật (mất nhân duyên, cắt rễ phàm, hoặc giác ngộ rằng tu tiên là buông bỏ). Trả lời câu hỏi đạo tâm.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Hệ thống cảnh giới có sáng tạo, khác formula cũ]
+- [VD: Thiên kiếp có luật riêng — đột phá là high stakes, có trả giá]
+- [VD: Đạo tâm là xung đột thật — main từng thất đạo rồi tìm lại]
+
+## Công thức chương
+Mở: hệ quả lần tu hành trước. Giữa: gặp cơ duyên / đối đầu / bế quan. Kết: đột phá nhỏ hoặc hé lộ thế lực lớn hơn phía trước.
+
+## Điều cần tránh
+- Main "nghịch thiên" vô lý — đột phá nhờ deus ex machina, không trả giá.
+- Phản diện chỉ làm nền, không có mưu đồ riêng.
+- Dump setting cảnh giới dài không phục vụ plot.
+- Cliché lặp: "khí thế ngút trời", "sắc mặt đại biến".
+
+## Độ dài & phong cách
+200-400 chương, ~2500-3000 từ/chương. Văn phong: kỳ vĩ, tiết chế. Ngôn ngữ: tiếng Việt.`,
+
+  'huyen-huyen': `# [Tên truyện Huyền huyễn / Đông phương huyền bí]
+
+<!-- Template Huyền huyễn (Eastern Fantasy). Hợp gu WebNovel, KDP; VN: webnovel.vn/Waka/TruyenFull. Engine style: fantasy -->
+
+## Thể loại & giọng điệu
+Huyền huyễn / Đông phương huyền bí (Eastern Fantasy). Giọng điệu: bí ẩn, kỳ ảo, đôi lúc u ám. Nhịp: khám phá + leo thang sức mạnh đan xen. Đối tượng: độc giả thích thế giới bí ẩn, dị thú, hệ thống lực lượng có quy tắc.
+
+## Bối cảnh & thế giới quan
+Thế giới huyền bí nơi lực lượng siêu nhiên (võ hồn, linh thú, huyết mạch, thần thông) tuân theo quy tắc rõ. Có dị vực / cấm địa / di tích cổ chứa bảo vật và hiểm nguy. Thế lực giang hồ và tổ chức ẩn vận hành ngầm. Mỗi năng lực có giới hạn và cái giá khi lạm dụng.
+
+## Nhân vật chính & tuyến quan hệ
+- Main: [tên], [VD: thức tỉnh võ hồn biến dị / mang huyết mạch cấm / nhặt được bí tịch cổ]. Vết thương: [VD: bị dòng họ ruồng bỏ, mất người thân vì cấm địa]. Khát khao: tìm chân tướng nguồn sức mạnh, vươn lên. Điểm mù: tin quá vào lực lượng mới có được, khinh thường thế lực cũ.
+- Đối thủ: [tên] — nắm giữ thế lực / bí mật liên quan nguồn gốc sức mạnh của main, đối đầu lặp lại.
+- Quan hệ: đồng bạn vong niên, sư truyền ẩn danh; mỗi người mang bí mật riêng sẽ nổ ra sau.
+
+## Xung đột cốt lõi
+Sức mạnh main có được gắn với một bí mật / lời nguyền lớn — càng mạnh càng gần chân tướng nguy hiểm. Câu hỏi: sức mạnh ấy là ân hay nghiệt, và main sẽ dùng nó cho ai?
+
+## Hướng kết (theo chủ đề)
+Main nắm được chân tướng cội nguồn, phải chọn: giữ sức mạnh với cái giá nặng, hay buông bỏ để bảo vệ điều mình trân trọng. Câu hỏi chủ đề được trả lời.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Hệ thống lực lượng có quy tắc sáng tạo, cân bằng]
+- [VD: Cấm địa / di tích là high stakes thật, vào là có thương vong]
+- [VD: Bí mật main đuổi theo dẫn tới phản diện cá nhân xứng tầm]
+
+## Công thức chương
+Mở: dấu hiệu thế lực / hiện tượng huyền bí mới. Giữa: khám phá + đối đầu + thi triển lực. Kết: hé lộ tầng bí mật sâu hơn.
+
+## Điều cần tránh
+- Năng lực vô hạn — phá quy tắc thế giới lúc cần.
+- Cấm địa "miễn phí" — vào ra lành không trả giá.
+- Dump lore thần thông không phục vụ plot.
+- Cliché: chỉ xếp hàng lực lượng, thiếu tâm lý nhân vật.
+
+## Độ dài & phong cách
+200-400 chương, ~2500-3000 từ/chương. Văn phong: kỳ ảo, gợi hình. Ngôn ngữ: tiếng Việt.`,
+
+  'lit-rpg': `# [Tên truyện LitRPG / Progression Fantasy]
+
+<!-- Template LitRPG / Progression Fantasy. Hợp gu Royal Road → Patreon, KDP. Engine style: fantasy -->
+
+## Thể loại & giọng điệu
+LitRPG / Progression Fantasy. Giọng điệu: năng động, cuốn hút, có giọng hệ thống. Nhịp: grind + level-up + challenge leo thang rõ ràng. Đối tượng: độc giả thích số liệu, build, power curve rõ ràng.
+
+## Bối cảnh & thế giới quan
+Thế giới vận hành theo "hệ thống": cấp độ, chỉ số, kỹ năng, dungeon, phần thưởng. Có thể là VR game, apocalypse hệ thống, hoặc thế giới khác bị áp đặt luật hệ thống. Quy tắc hệ thống phải rõ, nhất quán; có PvP / bảng xếp hạng / kỳ thi để so sánh.
+
+## Nhân vật chính & tuyến quan hệ
+- Main: [tên], [VD: class hiếm / build ngoài lệ / bắt đầu với bất lợi]. Vết thương: [VD: bị phát hiện sức mạnh ẩn, mất đội cũ]. Khát khao: leo top, sinh tồn, tìm lối ra. Điểm mù: quá tin build của mình tới mức khinh địch trước build khắc.
+- Đối thủ: [tên] — build khắc hệ / đang giữ top, đối đầu trong dungeon và kỳ thi.
+- Quan hệ: đội hình cố định có căng thẳng (phân chia tài nguyên, rời đội).
+
+## Xung đột cốt lõi
+Hệ thống buộc leo thang — dừng lại là bị bỏ lại hoặc chết. Mỗi tier mới có rào cản thật (dungeon boss, kỳ thi, PvP). Câu hỏi: leo lên đỉnh hệ thống bằng giá nào, và hệ thống giấu chân tướng gì?
+
+## Hướng kết (theo chủ đề)
+Main đạt top hoặc phá vỡ hệ thống, nhưng nhận ra đỉnh đó có cái giá (mất đồng đội, phát hiện chân tối của hệ thống). Trả lời câu hỏi chủ đề.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Build main sáng tạo, dựa vào chiến thuật thay vì stat brute-force]
+- [VD: Hệ thống có luật bất ngờ, dungeon khó đoán]
+- [VD: Cái giá thật của mỗi level — mất mát đi kèm]
+
+## Công thức chương
+Mở: hệ quả lần grind trước. Giữa: vào dungeon / PvP / học kỹ năng. Kết: level-up hoặc mở khóa tầng thử thách lớn hơn.
+
+## Điều cần tránh
+- Main "bất bại" — level-up nhờ luck / deus ex machina, không build thật.
+- Dump bảng stat dài không phục vụ plot.
+- Hệ thống mâu thuẫn luật (chỉ số không khớp).
+- Cliché: đột phá qua đêm, phản diện phẳng.
+
+## Độ dài & phong cách
+150-300 chương, ~2500-3000 từ/chương. Văn phong: năng động, rõ số liệu. Ngôn ngữ: tiếng Việt.`,
+
+  'trinh-tham': `# [Tên truyện Trinh thám / Thriller]
+
+<!-- Template Trinh thám / Thriller (Mystery). Hợp gu KDP, Royal Road. Engine style: suspense -->
+
+## Thể loại & giọng điệu
+Trinh thám / Thriller (Mystery / Psychological Thriller). Giọng điệu: rùng rợn, căng thẳng, logic. Nhịp: mỗi chương một manh mối + một hook, mở màn dần. Đối tượng: độc giả thích đoán, nghi vấn, twist công bằng.
+
+## Bối cảnh & thế giới quan
+Bối cảnh cụ thể [VD: thành phố lớn, cộng đồng khép kín, thời đại cụ thể]. Có một vụ việc (án mạng / mất tích / bí ẩn) phá vỡ bề ngoài yên bình. Luật chơi: mọi manh mối phải công bằng — độc giả có cơ hội đoán đúng.
+
+## Nhân vật chính & tuyến quan hệ
+- Main: [tên], [VD: thám tử / phóng viên / người có liên quan cá nhân]. Vết thương: [VD: một án chưa giải ở quá khứ, mất người thân]. Khát khao: tìm chân tướng. Điểm mù: thiên kiến cá nhân khiến nghi ngờ sai người, hoặc ám ảnh quá khiến bỏ qua nguy cơ cá nhân.
+- Đối thủ: [tên] — thủ phạm / puppeteer ẩn, thông minh ngang main, để lại thử thách trực tiếp.
+- Quan hệ: đồng nghiệp / người thân có thể là nghi phạm; lòng tin bị thử.
+
+## Xung đột cốt lõi
+Mỗi lớp bí mật mở ra lại dẫn tới tầng sâu hơn; thủ phạm luôn hơn một bước. Câu hỏi: chân tướng có đáng cái giá main phải trả (an toàn, danh dự, người thân)?
+
+## Hướng kết (theo chủ đề)
+Main giải được án nhưng phát hiện chân tướng đụng chạm người thân / đòi hy sinh cá nhân. Twist cuối trả lời câu hỏi chủ đề, công bằng với độc giả.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Manh mối công bằng — twist có thể đoán được nếu tinh]
+- [VD: Thriller tâm lý — thủ phạm ngang cơ, có động cơ thật]
+- [VD: Cái giá giải án — main trả giá thật, không toàn thắng]
+
+## Công thức chương
+Mở: manh mối / phát hiện mới. Giữa: nghi vấn + đối đầu + loại trừ. Kết: hook (nghi vấn mới hoặc nguy cơ cá nhân).
+
+## Điều cần tránh
+- Deus ex machina — thông tin vụt hiện lúc kết, không có manh mối trước.
+- Red herring rẻ tiền — đánh lạc hướng bằng lừa dối thay vì logic.
+- Dump procedure điều tra khô khan.
+- Cliché: thám tử "thần thánh", không bao giờ sai bước.
+
+## Độ dài & phong cách
+60-150 chương, ~2500-3000 từ/chương. Văn phong: cắt gọn, gợi sợ. Ngôn ngữ: tiếng Việt.`,
+
+  'xuyen-khong': `# [Tên truyện Xuyên không / Cổ trang]
+
+<!-- Template Xuyên không / Cổ trang (Isekai / Historical Romance). Hợp gu webnovel.vn, Waka, TruyenFull (VN). Engine style: romance hoặc default -->
+
+## Thể loại & giọng điệu
+Xuyên không / Cổ trang (Isekai / Historical Romance). Giọng điệu: kịch tính, mưu trí, xen ngọt ngào. Nhịp: main dùng tri thức hiện đại giải nguy + leo quyền lực. Đối tượng: độc giả Việt thích xuyên việt / cung đấu / tổng tài / cổ đại.
+
+## Bối cảnh & thế giới quan
+Main xuyên tới [VD: cổ đại / thế giới song song / vào thân thể kẻ khác]. Quy tắc thế giới mới khắc nghiệt (cung đình, gia tộc, hắc bang). Tri thức hiện đại là lợi thế nhưng có giới hạn (không dùng được nếu thiếu tài nguyên / thế lực).
+
+## Nhân vật chính & tuyến quan hệ
+- Nữ chính: [tên], mang ký ức hiện đại, phải thích nghi thân phận mới. Vết thương: [VD: nguyên chủ bị ức hiếp, bị hứa hôn ép buộc]. Khát khao: tự chủ, sinh tồn, kiến tạo cuộc đời mới. Điểm mù: quá tin tri thức hiện đại, khinh thường quy tắc ngầm thời đại đó.
+- Nam chính: [tên], [VD: vương gia lạnh lùng / tổng tài / hoàng đế]. Có quyền lực + bí mật. Mâu thuẫn: bị thu hút vì nữ chính khác thường nhưng duty / gia tộc cản.
+- Quan hệ: đối đầu → đồng minh → tình cảm; có yếu tố "sủng" rõ (chiều chuộng qua hành động bảo vệ).
+
+## Xung đột cốt lõi
+Nữ chính phải sống sót và leo lên trong thế giới có luật khắc nghiệt, dùng mưu trí thay vì sức mạnh để đối phó đối thủ. Câu hỏi: kiến tạo cuộc đời mới có giữ được bản ngã người hiện đại không?
+
+## Hướng kết (theo chủ đề)
+Nữ chính giành tự chủ / địa vị, trả lời câu hỏi bản ngã. Có HEA với nam chính nhưng kèm cái giá (cắt đứt với quá khứ, hy sinh điều gì đó). Khớp tên / lời hứa truyện.
+
+## Điểm bán khác biệt (≥3)
+- [VD: Nữ chính thắng bằng mưu trí, có điểm mù rõ — không "não tàn vô đối"]
+- [VD: Yếu tố "sủng" rõ — nhịp ngọt xen mưu đồ]
+- [VD: Quy tắc thế giới mới ràng buộc thật — tri thức hiện đại có giới hạn]
+
+## Công thức chương
+Mở: hệ quả mưu chương trước. Giữa: đối phó đối thủ + tiến triển tình cảm. Kết: hé lộ mưu lớn hơn hoặc khoảnh khắc "sủng".
+
+## Điều cần tránh
+- Nữ chính "bất bại" — tri thức hiện đại giải quyết mọi thứ, không có giới hạn.
+- Thiếu nhịp "sủng" — độc giả Việt ngôn tình cần chiều chuộng rõ.
+- Nam chính "tổng tài mẫu bản" — không có chiều sâu riêng.
+- Cliché: hiểu lầm rẻ tiền kéo dài, mary sue.
+
+## Độ dài & phong cách
+150-300 chương, ~2500-3000 từ/chương. Văn phong: kịch tính + ngọt. Ngôn ngữ: tiếng Việt.`
 };
 
 // Apply genre template to Step 1 brief textarea
@@ -577,8 +801,14 @@ function applyGenreTemplate(genre) {
   const tpl = GENRE_TEMPLATES[genre];
   if (!tpl) return;
   const existing = $('#studioBriefTemplate').value.trim();
-  const isDefault = existing === '' || existing === PROFILE_TEMPLATE.trim();
-  if (!isDefault && !confirm('Ghi đè brief hiện tại?')) return;
+  // Chip-to-chip switching is free: only prompt when the brief holds genuine
+  // user content — not empty, not the blank skeleton, and not any chip template
+  // (including one already applied). Editing a chip's placeholders makes the
+  // text diverge from its template, so an edited brief still prompts.
+  const isPristine = existing === ''
+    || existing === PROFILE_TEMPLATE.trim()
+    || Object.values(GENRE_TEMPLATES).some(t => existing === t.trim());
+  if (!isPristine && !confirm('Ghi đè brief hiện tại?')) return;
   $('#studioBriefTemplate').value = tpl;
   // Mark active chip
   document.querySelectorAll('.chip-btn').forEach(b => b.classList.remove('active'));
@@ -843,11 +1073,35 @@ async function profileLibCopyForLLM() {
   if (lang) payload += `## Ng\u00f4n ng\u1eef\n${lang}\n\n`;
   if (style) payload += `## Phong c\u00e1ch / y\u00eau c\u1ea7u\n${style}\n\n`;
 
-  payload += `## Nguy\u00ean t\u1eafc
-- Vi\u1ebft C\u1ee4 TH\u1ec2 (t\u00ean nh\u00e2n v\u1eadt, chi ti\u1ebft b\u1ed1i c\u1ea3nh, h\u01b0\u1edbng twist)
-- M\u00f4 t\u1ea3 theo \u0110\u1ecaNH H\u01af\u1edaNG & R\u00c0NG BU\u1ed8C, \u0110\u1eeaNG vi\u1ebft s\u1eb5n c\u00e2u v\u0103n m\u1eabu
-- Tr\u00e1nh AI-tell: no purple prose, no "kh\u00f4ng ph\u1ea3i X m\u00e0 l\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p
-- Ch\u1ec9 xu\u1ea5t Markdown c\u1ee7a profile, kh\u00f4ng gi\u1ea3i th\u00edch th\u00eam\n\n`;
+  // Sync note: keep the long-novel survival rules here aligned with
+  // profile_studio.go (profileStudioSystemPrompt) and buildProfileReviewPrompt.
+  const year = new Date().getFullYear();
+  payload += `## Trước khi viết (tự xác định, KHÔNG in ra — output chỉ là profile)
+- Thể loại & sub-genre ĐÚNG yêu cầu (tôn trọng, đừng trôi về genre mặc định như romance/werewolf)
+- Thể loại này đã ĐẠI TRÀ chưa? cliché cần tránh; nếu niche thì phải nail điều gì cho fan cứng
+- Đặc trưng / quy ước độc giả thể loại này kỳ vọng (payoff bắt buộc)
+- Thị trường mục tiêu & gu tại năm ${year}
+Để khung này chi phối toàn bộ profile.
+
+## Nguyên tắc
+- Viết CỤ THỂ (tên nhân vật, chi tiết bối cảnh, hướng twist), theo ĐỊNH HƯỚNG & RÀNG BUỘC, ĐỪNG viết sẵn câu văn mẫu
+- Phù hợp VĂN HOÁ ĐỌC & THỊ HIẾU thị trường mục tiêu tại năm ${year} (trope/độ "nóng"/bạo lực/nhịp/độ dài/điều cấm kỵ khác nhau theo nước — vd Tây Ban Nha/Mỹ Latinh ≠ Việt Nam ≠ Anh–Mỹ; chú ý mã trope bản địa vs ngoại nhập và kỳ vọng cảm xúc đặc trưng như "sủng" ở ngôn tình VN); tránh trope cũ/nội dung nhạy cảm. Đừng ghi năm/số liệu vào profile
+
+## Nguyên tắc truyện dài (bắt buộc phản ánh)
+- CÁI GIÁ thật, không chỉ twist: rải nhiều mất mát để lại dấu vết dài, không chỉ 1 cú vấp giữa truyện (thắng mãi → độc giả hết lo)
+- Nhân vật chính có GIỚI HẠN/điểm mù rõ + nguồn gốc năng lực (không "thánh")
+- Phản diện có TÊN, có mưu riêng, đối đầu lặp lại; gài ≥1 tuyến phản bội có trả
+- Phục vụ THỂ LOẠI CHÍNH bằng nhịp riêng (vd romance cần beat tình cảm/longing/"sủng" riêng, không để nhánh khác lấn)
+- Cơ chế lõi có LUẬT + giá + giới hạn; tiên tri/mồi dài hơi gài sớm phải có chỗ trả
+- Mỗi nhân vật chính một GIỌNG riêng (nguyên tắc, không câu mẫu)
+- Ensemble: đặt tên + 1 dòng arc cho ≥3 nhân vật phụ
+- Mid-pivot: một chương "không thể quay đầu" CỤ THỂ (~40–60%)
+- Kết có CÁI GIÁ không đảo ngược (không utopia) + khớp tên truyện
+- Đa dạng nhịp: đừng khóa mọi chương vào 1 khuôn / 1 kiểu nội tâm
+
+## Chống AI-tell
+- No purple prose, no "không phải X mà là Y" (kể cả trong worldbuilding), nội tâm lặp, nhịp câu đều đều
+- Chỉ xuất Markdown của profile, không giải thích thêm\n\n`;
 
   if (brief) {
     payload += `--- BRIEF TEMPLATE ---\n${brief}\n`;
@@ -861,6 +1115,86 @@ async function profileLibCopyForLLM() {
     toast('\u0110\u00e3 copy prompt cho LLM ngo\u00e0i', 'ok');
   } catch (e) {
     hint.textContent = '\u274c L\u1ed7i clipboard';
+  }
+}
+
+// buildProfileReviewPrompt: prompt SOÁT LỖI profile đã sinh, dán kèm chính
+// profile cho LLM ngoài (GPT/Claude). Bám sát các lỗi LLM hay mắc ở foundation
+// truyện dài: thánh-hoá nhân vật, thiếu cái giá, phản diện vô danh, lệch
+// mood/thể loại, cơ chế lõi mơ hồ, đơn điệu, kết telegraph. Prompt càng tốt →
+// review càng bắt đúng chỗ chết người của cả trăm chương phía sau.
+// Sync note: keep these review axes aligned with profile_studio.go
+// (profileStudioSystemPrompt) and profileLibCopyForLLM.
+function buildProfileReviewPrompt(profile, opts) {
+  opts = opts || {};
+  const chapters = opts.chapters || 0;
+  const year = opts.year || new Date().getFullYear();
+  const n = chapters && chapters > 0 ? `~${chapters}` : 'dài kỳ (vài trăm)';
+  const marketParts = [];
+  if (opts.platform) marketParts.push(`nền tảng mục tiêu: ${opts.platform}`);
+  if (opts.language) marketParts.push(`ngôn ngữ / thị trường: ${opts.language}`);
+  const marketLine = marketParts.length
+    ? marketParts.join('; ')
+    : '(chưa khai báo — hãy suy ra từ nền tảng/độc giả nêu trong profile; nếu chưa rõ quốc gia, nêu giả định của bạn)';
+  return `Bạn là biên tập viên kỳ cựu chuyên tiểu thuyết mạng dài kỳ (serialized web fiction), rành cả craft lẫn THỊ TRƯỜNG từng nước. Nhiệm vụ: SOÁT LỖI một "profile" (bản brief nền móng) mà một cuốn ${n} chương sẽ dựa vào để triển khai. Profile sai ở đây sẽ nhân lên thành hàng trăm chương sai — hãy nghiêm khắc.
+
+Bối cảnh thị trường mục tiêu: ${marketLine}. Thời điểm đánh giá: ${year}.
+
+Yêu cầu: phản biện thẳng, KHÔNG khen xã giao, KHÔNG tóm tắt lại. Chỉ nêu điểm yếu + cách sửa cụ thể, trích dẫn nguyên văn phần có vấn đề. Nếu một trục ổn thì ghi "Đạt" ngắn gọn rồi qua trục khác.
+
+TRƯỚC KHI SOÁT, nêu ngắn (3–5 dòng) khung tham chiếu để việc soát bám đúng thể loại — rồi mới soát 13 trục DỰA TRÊN khung này:
+- Thể loại & sub-genre của profile này là gì?
+- Thể loại/sub-genre này đã ĐẠI TRÀ chưa? Nếu rồi: cliché nào phải tránh; nếu niche: phải làm tốt điều gì cho fan cứng?
+- Đặc trưng / quy ước độc giả thể loại này KỲ VỌNG (payoff bắt buộc, thiếu là hụt)?
+- Thị trường mục tiêu & gu hiện tại?
+
+Soát theo 13 trục (đánh dấu Đạt / Cần sửa cho từng trục):
+1. Nhất quán nhân vật — mỗi nhân vật chính có want + wound + mâu thuẫn nội tâm rõ và không tự mâu thuẫn? Tên cố định? Tính cách/giọng phân biệt được giữa các nhân vật?
+2. Nguồn & giới hạn năng lực chính — tài năng cốt lõi (vd trí tuệ) có được neo nguồn gốc và có GIỚI HẠN rõ? (năng lực vô hạn → nhân vật hoá "thánh", mất căng thẳng)
+3. Cái giá & thất bại thật — phân biệt TWIST (đẩy plot) với CÁI GIÁ (đánh vào nhân vật và để lại dấu vết dài: mất đồng minh, mất niềm tin, hy sinh không lấy lại được). Nhân vật chính có nhiều cái giá thật rải DỌC truyện không, hay chỉ thắng liên tục với đúng một cú vấp giữa truyện? Truyện ${n} chương chỉ thua một lần → độc giả hết lo từ khoảng chương 100.
+4. Phản diện xứng tầm — có (các) đối thủ CỤ THỂ, lặp lại, mưu đồ và trí tuệ ngang cơ không, hay chỉ là "bộ máy/thế lực vô danh"? Mối đe doạ có leo thang? Có mồi dài hơi/tuyến phản bội ban đầu nào bị bỏ rơi?
+5. Thể loại chính vs cấu trúc — thể loại được hứa (vd Romance) có được cấu trúc truyện phục vụ tương xứng, hay bị nhánh khác (chính trị/hành động) lấn át → lệch kỳ vọng độc giả & lệch mood?
+6. Cơ chế lõi có RÀNG BUỘC — cơ chế siêu nhiên/đặc thù trung tâm (vd mate bond) có luật rõ, có giá, có giới hạn? Hay mơ hồ → dễ thành deus ex machina giải quyết mọi thứ?
+7. Xung đột lõi & mid-pivot — xung đột trung tâm đủ sức kéo CẢ truyện? Bước ngoặt giữa có chốt được MỘT chương "không thể quay đầu" cụ thể (~40–60%) và thực sự buộc đổi chiến lược, hay chỉ là một dải chương mơ hồ / leo thang tuyến tính?
+8. Bền cho truyện dài — có tuyến nhân vật phụ / ensemble đủ nuôi ${n} chương? Có tuyến dài hơi để tránh cạn ý giữa chừng?
+9. Chống đại trà — reader promise cụ thể (không sáo)? Có ≥3 điểm khác biệt THẬT mà truyện cùng thể loại không có sẵn? Có trope mòn nào lọt vào?
+10. Nhịp & lặp — công thức chương có biến thể không, hay lặp một mô-típ suốt ${n} chương → đơn điệu, mỏi?
+11. Kết & lời hứa — định hướng kết là CÂU HỎI CHỦ ĐỀ (không phải plot beat/tên chương)? Kết có cái giá hay quá dễ/utopia? Tên truyện có khớp tông và kỳ vọng của kết không?
+12. AI-tell — có purple prose, cấu trúc "không phải X mà là Y", nội tâm lặp, câu văn mẫu, nhịp câu đều đều không?
+13. Phù hợp văn hoá đọc & thị hiếu thị trường mục tiêu tại ${year}+ — thể loại/trope/độ "nóng"/bạo lực/nhịp/độ dài/nội dung có khớp gu độc giả thị trường HIỆN TẠI không? Chú ý cụ thể: (i) MÃ TROPE bản địa vs ngoại nhập (vd werewolf/Alpha/pack là mã Tây, không phải mã ngôn tình Hoa quen thuộc với độc giả Việt); (ii) KỲ VỌNG CẢM XÚC đặc trưng của thị trường (vd yếu tố "sủng"/chiều chuộng gần như bắt buộc ở ngôn tình VN; "longing"/fated-mate ở werewolf romance quốc tế) — thiếu là rủi ro rớt độc giả; (iii) ngưỡng 18+/bạo lực và kiểm duyệt nền tảng. Nêu: (a) điểm khớp gu, (b) điểm lệch gu / rủi ro văn hoá–pháp lý / rủi ro thương mại, (c) đề xuất điều chỉnh để bán được. Nếu một lựa chọn đi NGƯỢC xu hướng đang thắng, coi đó là risk có chủ đích cần bù đắp, không phải "điểm mới lạ an toàn". Nếu KHÔNG chắc xu hướng ${year}+, nói rõ và khuyên kiểm chứng bằng bảng bestseller/đề xuất đang chạy của chính nền tảng mục tiêu.
+
+Ngoài 13 trục: chỉ ra nếu profile TỰ VI PHẠM mục "Điều cần tránh" của chính nó (kể cả cấu trúc "không phải X mà là Y" lọt vào worldbuilding).
+
+Định dạng trả lời:
+- Mỗi trục: [Đạt/Cần sửa] + 1–2 câu vấn đề (trích nguyên văn) + đề xuất sửa cụ thể.
+- Kết: "3 việc PHẢI sửa trước tiên", xếp theo mức sát thương với truyện dài.
+
+--- PROFILE CẦN SOÁT ---
+${profile}`;
+}
+
+// Copy chính profile đã sinh + prompt review cho LLM ngoài (GPT/Claude...).
+// Khác studioCopyForLLM (copy Ý TƯỞNG để LLM ngoài SINH profile).
+async function profileLibCopyForReview() {
+  const hint = $('#studioReviewHint');
+  const profile = $('#studioOutput').value.trim();
+  if (!profile) {
+    if (hint) hint.textContent = '⚠ Chưa có profile ở Step 4 để review. Sinh hoặc dán profile trước.';
+    toast('Chưa có profile để review', 'error');
+    return;
+  }
+  const payload = buildProfileReviewPrompt(profile, {
+    chapters: parseInt($('#studioChapters').value, 10) || 0,
+    platform: $('#studioPlatform').value.trim(),
+    language: $('#studioLang').value.trim(),
+    year: new Date().getFullYear(),
+  });
+  try {
+    await navigator.clipboard.writeText(payload);
+    if (hint) hint.textContent = '📋 Đã copy profile + prompt review! Dán vào GPT/Claude để soát, rồi sửa lại ở Step 4 trước khi Lưu.';
+    toast('Đã copy prompt review cho LLM ngoài', 'ok');
+  } catch (e) {
+    if (hint) hint.textContent = '❌ Lỗi clipboard';
   }
 }
 
@@ -1191,6 +1525,8 @@ async function renderProductionDetail(run) {
     ? `<div class="stat"><span class="stat-label">Seed t\u1eeb workspace</span><span class="stat-value">${run.seededFrom.completedChapters || 0} ch\u01b0\u01a1ng</span></div>`
     : '';
 
+  const healthHtml = renderHealthStrip(run.health);
+
   const canStart = run.status === 'queued';
   const canStop = run.status === 'running' || run.status === 'paused';
   const canExport = run.chapters > 0;
@@ -1226,6 +1562,7 @@ async function renderProductionDetail(run) {
       </div>
       ${pauseNotice}
       ${reviewNotice}
+      ${healthHtml}
       <div class="run-detail-stats">
         <div class="stat"><span class="stat-label">Ki\u1ec3u job</span><span class="stat-value">${escapeHtml(productionRunKindLabel(run))}</span></div>
         ${seedHtml}
@@ -1260,6 +1597,45 @@ async function renderProductionDetail(run) {
     const previewEl = $('#runFoundationPreview');
     if (previewEl) previewEl.innerHTML = html;
   }
+}
+
+// Health strip: at-a-glance "đúng nhịp / nên xem / cần chú ý" cho một run.
+// Dữ liệu (level + value) tính ở backend (prodrun_health.go, có test); ở đây
+// chỉ map key -> nhãn tiếng Việt và tô màu. Ẩn khi chưa đủ dữ liệu (queued).
+const HEALTH_METRIC_LABELS = {
+  progress: 'Ti\u1ebfn \u0111\u1ed9',
+  rewrite_rate: 'Vi\u1ebft l\u1ea1i',
+  cost_pace: 'Chi ph\u00ed/ch\u01b0\u01a1ng',
+  budget: 'Ng\u00e2n s\u00e1ch',
+};
+
+const HEALTH_OVERALL = {
+  good: { icon: '\ud83d\udfe2', text: '\u0110ang \u0111\u00fang nh\u1ecbp' },
+  warn: { icon: '\ud83d\udfe1', text: 'N\u00ean xem l\u1ea1i' },
+  bad: { icon: '\ud83d\udd34', text: 'C\u1ea7n ch\u00fa \u00fd' },
+  idle: { icon: '\u26aa', text: 'Ch\u01b0a \u0111\u1ee7 d\u1eef li\u1ec7u' },
+};
+
+// Backend health enum; allowlist before interpolating into a class attribute so
+// a malformed/future field can't break out of the attribute context.
+const HEALTH_LEVELS = ['good', 'warn', 'bad', 'idle'];
+
+function renderHealthStrip(health) {
+  if (!health || !Array.isArray(health.metrics)) return '';
+  // Chưa có dữ liệu thực (mọi metric idle) → không hiện, tránh nhiễu cho job Chờ.
+  // Allowlist level (backend enum) + bỏ entry malform để payload hỏng không crash detail panel.
+  const metrics = health.metrics.filter((m) => m && HEALTH_LEVELS.includes(m.level));
+  if (!metrics.some((m) => m.level !== 'idle')) return '';
+  const overallLevel = HEALTH_LEVELS.includes(health.overall) ? health.overall : 'idle';
+  const overall = HEALTH_OVERALL[overallLevel];
+  const chips = metrics.map((m) => {
+    const label = HEALTH_METRIC_LABELS[m.key] || m.key;
+    return `<span class="health-chip health-${m.level}"><span class="health-dot"></span>${escapeHtml(label)}: <strong>${escapeHtml(m.value || '\u2014')}</strong></span>`;
+  }).join('');
+  return `<div class="health-strip health-overall-${overallLevel}">
+    <span class="health-summary">${overall.icon} ${escapeHtml(overall.text)}</span>
+    <div class="health-chips">${chips}</div>
+  </div>`;
 }
 
 function statusLabel(status) {

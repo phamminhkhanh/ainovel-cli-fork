@@ -635,6 +635,30 @@ select:focus { outline: none; border-color: var(--color-accent); }
 }
 .studio-step-output textarea:focus { outline: none; border-color: var(--color-accent); }
 
+/* Soát nền móng — review checklist + copy-for-review at step 4 */
+.studio-review {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-warn);
+  border-radius: var(--radius-sm);
+}
+.review-head { font-size: 13px; font-weight: 600; margin-bottom: var(--space-2); }
+.review-checklist {
+  list-style: none; margin: 0 0 var(--space-2); padding: 0;
+  display: flex; flex-direction: column; gap: var(--space-1);
+}
+.review-checklist li {
+  position: relative; padding-left: 20px;
+  font-size: 12px; line-height: 1.45; color: var(--color-text-dim);
+}
+.review-checklist li::before {
+  content: "\2610"; position: absolute; left: 0; top: 0;
+  color: var(--color-text-faint);
+}
+.review-checklist strong { color: var(--color-text); }
+
 .studio-save {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -993,6 +1017,35 @@ select:focus { outline: none; border-color: var(--color-accent); }
 }
 .run-detail-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .run-detail-head h2 { margin: 0; font-size: 16px; }
+
+/* ── Health strip: "đúng nhịp / nên xem / cần chú ý" ── */
+.health-strip {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2); border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-border); border-radius: var(--radius-sm);
+}
+.health-overall-good { border-left-color: var(--color-success); }
+.health-overall-warn { border-left-color: var(--color-warn); }
+.health-overall-bad { border-left-color: var(--color-danger); }
+.health-summary { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.health-chips { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+.health-chip {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  font-size: 12px; color: var(--color-text-dim);
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: 1px var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+.health-chip strong { color: var(--color-text); }
+.health-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--color-text-faint); }
+.health-good .health-dot { background: var(--color-success); }
+.health-warn .health-dot { background: var(--color-warn); }
+.health-bad .health-dot { background: var(--color-danger); }
+.health-warn strong { color: var(--color-warn); }
+.health-bad strong { color: var(--color-danger); }
+
 .run-detail-stats {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--space-2);
 }

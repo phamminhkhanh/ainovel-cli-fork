@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"testing"
+
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
 )
 
 func TestHostAllowedLocksLoopbackBind(t *testing.T) {
@@ -54,5 +56,15 @@ func TestTryStartJobSerializesBackgroundJobs(t *testing.T) {
 	}
 	if _, ok := s.tryStartJob(); !ok {
 		t.Fatal("job should start again after endJob")
+	}
+}
+
+func TestStudioDefaultViewUsesStartupConfig(t *testing.T) {
+	got := studioDefaultView(bootstrap.Config{
+		Provider:  "openrouter",
+		ModelName: "deepseek/example",
+	})
+	if got["provider"] != "openrouter" || got["model"] != "deepseek/example" {
+		t.Fatalf("studio default = %+v", got)
 	}
 }

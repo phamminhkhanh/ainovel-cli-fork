@@ -2,10 +2,14 @@ package web
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/voocel/agentcore"
 )
 
 // TestHandleProfileGenerateRequiresIdea checks the idea guard fires before any
@@ -53,5 +57,50 @@ func TestStripCodeFence(t *testing.T) {
 		if got := stripCodeFence(c.in); got != c.want {
 			t.Fatalf("stripCodeFence(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// stubTimeoutModel emits one StreamEventError then closes, so runProfileGeneration's
+// error path can be driven without a real provider.
+type stubTimeoutModel struct{ err error }
+
+func (stubTimeoutModel) Generate(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+	return nil, errors.New("stubTimeoutModel: Generate not used")
+}
+
+func (m stubTimeoutModel) GenerateStream(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
+	ch := make(chan agentcore.StreamEvent, 1)
+	ch <- agentcore.StreamEvent{Type: agentcore.StreamEventError, Err: m.err}
+	close(ch)
+	return ch, nil
+}
+
+func (stubTimeoutModel) SupportsTools() bool { return false }
+
+// TestRunProfileGenerationClassifiesTimeout locks the F4 contract: a model-side
+// timeout (ctx deadline OR agentcore stream-idle) must surface as an error that
+// agentcore.ClassifyProvider still maps to the right sentinel AFTER
+// runProfileGeneration wraps it with "profile generate: %w". The handler's 504
+// branch depends on this classification surviving the wrap.
+func TestRunProfileGenerationClassifiesTimeout(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	for _, tc := range []struct {
+		name     string
+		err      error
+		sentinel error
+	}{
+		{"context deadline", context.DeadlineExceeded, agentcore.ErrProviderTimeout},
+		{"stream idle", agentcore.ErrProviderStreamIdle, agentcore.ErrProviderStreamIdle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.runProfileGeneration(context.Background(), stubTimeoutModel{err: tc.err}, "rough idea")
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			classified := agentcore.ClassifyProvider(err)
+			if !errors.Is(classified, tc.sentinel) {
+				t.Fatalf("ClassifyProvider(err) = %v, want %v (err=%v)", classified, tc.sentinel, err)
+			}
+		})
 	}
 }

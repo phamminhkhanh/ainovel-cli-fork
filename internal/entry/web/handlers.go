@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
@@ -280,6 +281,13 @@ type roleView struct {
 	ThinkingOptions []labelKV `json:"thinkingOptions"`
 }
 
+func studioDefaultView(cfg bootstrap.Config) map[string]string {
+	return map[string]string{
+		"provider": cfg.Provider,
+		"model":    cfg.ModelName,
+	}
+}
+
 // handleModels 汇总模型面板所需：可选 provider/model、各角色当前选择与可用推理强度。
 func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 	providers := s.eng.ConfiguredProviders()
@@ -303,6 +311,13 @@ func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 		"providers": providers,
 		"models":    models,
 		"roles":     roles,
+		// studioDefault is the provider/model Profile Studio actually inherits
+		// when "Mặc định Studio (kế thừa)" is picked. Studio builds its own
+		// ModelSet from the STARTUP config (s.cfg) and is intentionally NOT
+		// affected by runtime /api/model switches, so this reports the boot-time
+		// default (top-level provider/model) rather than the engine's current
+		// selection — otherwise the label would lie after a runtime switch.
+		"studioDefault": studioDefaultView(s.cfg),
 	})
 }
 

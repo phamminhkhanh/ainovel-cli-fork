@@ -101,3 +101,7 @@ run exists — never auto-generated implicitly inside job creation.**
 - C-full (multi-turn interview + JSON-mode + strict field validation) is deferred.
 - Studio always generates into the **project** dir on save; global/legacy remain read-only (edit =
   save-as into project).
+- Step 4 review checklist remains a **UI/human gate**, not server-side validation. This is
+  intentional: profile quality is semantic and market-specific; a hard server validator would become
+  a brittle policy engine. The safer contract is generate/copy/review → editable textarea → explicit
+  save.
