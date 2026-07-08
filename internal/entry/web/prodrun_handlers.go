@@ -51,7 +51,15 @@ func (s *server) handleProdRunsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 		return
 	}
-	writeJSON(w, http.StatusOK, s.prodRunManager.List())
+	writeJSON(w, http.StatusOK, newProdRunViews(s.prodRunManager.List()))
+}
+
+func writeProdRunView(w http.ResponseWriter, status int, run *ProdRun) {
+	if run == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("run not found"))
+		return
+	}
+	writeJSON(w, status, newProdRunView(run))
 }
 
 // handleProdRunCreate queues a new production run.
@@ -108,7 +116,7 @@ func (s *server) handleProdRunCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, status, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, run)
+	writeProdRunView(w, http.StatusCreated, run)
 }
 
 // handleProdRunGet returns a single production run.
@@ -123,7 +131,7 @@ func (s *server) handleProdRunGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("run not found"))
 		return
 	}
-	writeJSON(w, http.StatusOK, run)
+	writeProdRunView(w, http.StatusOK, run)
 }
 
 // handleProdRunStart starts the child headless process for a run.
@@ -141,7 +149,7 @@ func (s *server) handleProdRunStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.prodRunManager.Get(id))
+	writeProdRunView(w, http.StatusOK, s.prodRunManager.Get(id))
 }
 
 // handleProdRunStop hard-kills the child process for a run.
@@ -154,7 +162,7 @@ func (s *server) handleProdRunStop(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.prodRunManager.Get(id))
+	writeProdRunView(w, http.StatusOK, s.prodRunManager.Get(id))
 }
 
 // handleProdRunDelete removes a finished run and its run directory.
@@ -376,7 +384,7 @@ func (s *server) handleProdRunApprove(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, next)
+	writeProdRunView(w, http.StatusOK, next)
 }
 
 // handleProdRunReveal opens a run's seeded foundation dir in the OS file
@@ -436,7 +444,7 @@ func (s *server) handleProdRunRevise(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, status, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, next)
+	writeProdRunView(w, http.StatusOK, next)
 }
 
 // handleProdRunReject discards a run awaiting foundation review without

@@ -41,6 +41,26 @@ func newTestServerForProdruns(t *testing.T) (*server, string) {
 	return s, repoRoot
 }
 
+type prodRunViewResponse struct {
+	ID     string    `json:"id"`
+	Health runHealth `json:"health"`
+}
+
+func requireRunViewHealth(t *testing.T, body []byte) prodRunViewResponse {
+	t.Helper()
+	var view prodRunViewResponse
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.ID == "" {
+		t.Fatal("run view missing id")
+	}
+	if len(view.Health.Metrics) == 0 {
+		t.Fatalf("run view %q missing health metrics", view.ID)
+	}
+	return view
+}
+
 func TestHandleProfilesList(t *testing.T) {
 	s, _ := newTestServerForProdruns(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
@@ -155,9 +175,13 @@ func TestHandleProdRunListAndGet(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create failed: %d %s", rec.Code, rec.Body.String())
 	}
+	createdView := requireRunViewHealth(t, rec.Body.Bytes())
 	var created ProdRun
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
+	}
+	if created.ID != createdView.ID {
+		t.Fatalf("created id mismatch: run=%q view=%q", created.ID, createdView.ID)
 	}
 
 	// List.
@@ -167,12 +191,15 @@ func TestHandleProdRunListAndGet(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list failed: %d %s", rec.Code, rec.Body.String())
 	}
-	var list []*ProdRun
+	var list []prodRunViewResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
 	if len(list) != 1 {
 		t.Fatalf("expected 1 run, got %d", len(list))
+	}
+	if list[0].ID != created.ID || len(list[0].Health.Metrics) == 0 {
+		t.Fatalf("list view missing id/health: %+v", list[0])
 	}
 
 	// Get.
@@ -181,6 +208,10 @@ func TestHandleProdRunListAndGet(t *testing.T) {
 	s.mux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get failed: %d %s", rec.Code, rec.Body.String())
+	}
+	gotView := requireRunViewHealth(t, rec.Body.Bytes())
+	if gotView.ID != created.ID {
+		t.Fatalf("get id = %q, want %q", gotView.ID, created.ID)
 	}
 
 	// Missing run.

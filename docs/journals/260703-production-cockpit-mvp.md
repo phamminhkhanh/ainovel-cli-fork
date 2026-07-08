@@ -50,6 +50,20 @@ Web server  (đang giữ 1 host.Host của workspace chính)
       └── run.log             → dò marker pause (等待用户输入…) → status=paused
 ```
 
+### Health strip (added 2026-07-08)
+
+Production API responses now expose `ProdRunView`: all original `ProdRun` fields plus a computed
+`health` strip. The strip is backend-derived from the same polled fields above, so clients do not
+need to duplicate thresholds. Metrics:
+
+- `progress`: chapters/target, informational only.
+- `rewrite_rate`: idle before 3 reviews; warn above 25%, bad above 50%.
+- `cost_pace`: idle before 2 chapters; compares cost/chapter with budget/target.
+- `budget`: warn at 80% used, bad at 100%+.
+
+`create/list/get/start/stop/approve/revise` return the same wrapped shape so a client using only a
+mutation response still sees current health.
+
 ### Bố cục thư mục & ranh giới sync
 
 Chỉ có **một** host workspace (`eng.Dir()`); mỗi run là một sandbox tách biệt. Mọi trao
