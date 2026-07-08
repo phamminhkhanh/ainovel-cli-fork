@@ -212,6 +212,10 @@ Trên Windows, continue sync **không** clear/rename cả thư mục host. Nó d
 
 Toàn bộ code Production Cockpit nằm trong `internal/entry/web/` (file mới) hoặc là thêm route vào `server.go`/`run.go` — hai file upstream đã được fork sửa trước đó. Không đụng `internal/host/`, `internal/tools/`, `assets/prompts/`.
 
+### State machine (tham chiếu kỹ thuật)
+
+Vòng đời ProdRun (7 trạng thái, race analysis đầy đủ) document ở [`docs/prodrun-state-machine.md`](docs/prodrun-state-machine.md). Dùng khi cần hiểu Foundation Gate, T6/T9 kill-race, lock scope của `start()`, hay T17 sibling semantics. Phần "Hạn chế hiện tại" ở trên là bản tóm tắt rút gọn; doc kỹ thuật là nguồn sự thật.
+
 ## 4. Điểm chạm duy nhất vào file upstream
 
 Chỉ **`cmd/ainovel-cli/main.go`** bị sửa (mirror nhánh `--headless` sẵn có):

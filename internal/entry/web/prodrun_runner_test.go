@@ -721,6 +721,408 @@ func TestApproveFoundationRetriesThroughReapWindow(t *testing.T) {
 	}
 }
 
+// TestWaitReapedReturnsImmediatelyWhenSlotFree verifies waitReaped short-circuits
+// to nil when rr.running has no entry for the id (no child, or already reaped).
+func TestWaitReapedReturnsImmediatelyWhenSlotFree(t *testing.T) {
+	dir := t.TempDir()
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", t.TempDir(), t.TempDir(), bootstrap.Config{})
+
+	start := time.Now()
+	if err := runner.waitReaped("run-nonexistent", time.Second); err != nil {
+		t.Fatalf("waitReaped on empty slot: %v", err)
+	}
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Fatalf("waitReaped should not block on empty slot, took %v", took)
+	}
+}
+
+// TestWaitReapedBlocksUntilDoneClosed verifies waitReaped blocks on proc.done
+// and returns nil once the child is reaped (proc.done closed after slot freed).
+func TestWaitReapedBlocksUntilDoneClosed(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	_ = os.MkdirAll(profileDir, 0o755)
+	_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 10 * time.Second
+	finished := make(chan struct{}, 2)
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(300) }
+	runner.onCmdFinished = func(cmd *exec.Cmd, err error) {
+		select {
+		case finished <- struct{}{}:
+		default:
+		}
+	}
+
+	r, err := ps.create("reapwait", "profiles/x.md", "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.start(r.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Child still running: waitReaped should block past the helper sleep.
+	blockedDone := make(chan error, 1)
+	go func() { blockedDone <- runner.waitReaped(r.ID, 5*time.Second) }()
+	select {
+	case <-blockedDone:
+		t.Fatal("waitReaped returned before child reaped")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	<-finished // helper (300ms) exits, waitProc reaps + closes done
+	select {
+	case err := <-blockedDone:
+		if err != nil {
+			t.Fatalf("waitReaped after reap: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitReaped did not return after child reaped")
+	}
+}
+
+// TestWaitReapedTimeout verifies waitReaped returns errReapTimeout when the
+// child is still running past the budget. Used by Approve/Revise to revert/abort.
+func TestWaitReapedTimeout(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	_ = os.MkdirAll(profileDir, 0o755)
+	_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 10 * time.Second
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(10000) }
+
+	r, err := ps.create("reaptimeout", "profiles/x.md", "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.start(r.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// Cleanup: kill the child unconditionally and block until reaped so
+	// t.TempDir cleanup does not race a live process holding run.log.
+	defer func() {
+		runner.killProcess(r.ID)
+		_ = runner.waitReaped(r.ID, 5*time.Second)
+	}()
+
+	start := time.Now()
+	err = runner.waitReaped(r.ID, 50*time.Millisecond)
+	if !errors.Is(err, errReapTimeout) {
+		t.Fatalf("expected errReapTimeout, got %v", err)
+	}
+	if took := time.Since(start); took < 40*time.Millisecond || took > 500*time.Millisecond {
+		t.Fatalf("waitReaped timeout duration off: %v", took)
+	}
+}
+
+// TestWaitProcFreesSlotBeforeClosingDone is an invariant test: waitProc must
+// delete rr.running[id] BEFORE close(proc.done), so that any goroutine unblocked
+// by <-proc.done observes an already-empty single-run slot. This is what makes
+// waitReaped + start() race-free (start()'s len(rr.running)==0 check is stable
+// the moment proc.done closes).
+func TestWaitProcFreesSlotBeforeClosingDone(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	_ = os.MkdirAll(profileDir, 0o755)
+	_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 10 * time.Second
+	finished := make(chan struct{}, 1)
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(100) }
+	runner.onCmdFinished = func(cmd *exec.Cmd, err error) {
+		select {
+		case finished <- struct{}{}:
+		default:
+		}
+	}
+
+	r, err := ps.create("slotorder", "profiles/x.md", "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.start(r.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Grab the proc handle while the child is alive.
+	runner.mu.Lock()
+	proc := runner.running[r.ID]
+	runner.mu.Unlock()
+	if proc == nil {
+		t.Fatal("expected running proc")
+	}
+
+	<-finished // child exited; waitProc runs in its goroutine
+
+	// Wait for done to close (i.e. waitProc completed its cleanup).
+	<-proc.done
+
+	// Invariant: by the time proc.done is closed, the slot must already be free.
+	runner.mu.Lock()
+	_, stillThere := runner.running[r.ID]
+	runner.mu.Unlock()
+	if stillThere {
+		t.Fatal("rr.running slot must be freed BEFORE proc.done is closed")
+	}
+}
+
+// TestApproveFoundationReapTimeoutReverts verifies that when the just-killed
+// child cannot be reaped within the budget, ApproveFoundation reverts status
+// back to awaiting_review and returns errReapTimeout instead of stranding the
+// run in queued.
+func TestApproveFoundationReapTimeoutReverts(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	_ = os.MkdirAll(profileDir, 0o755)
+	_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 10 * time.Second
+	runner.reapTimeout = 50 * time.Millisecond // tight budget so the test is fast
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(10000) }
+
+	r, err := ps.create("approvetimeout", "profiles/x.md", "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progressDir := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta")
+	_ = os.MkdirAll(progressDir, 0o755)
+	_ = os.WriteFile(filepath.Join(progressDir, "progress.json"), []byte(`{"phase":"writing","completed_chapters":[]}`), 0o644)
+
+	// Start a long-sleeping child so the slot stays occupied (mimics the gate's
+	// killProcess not having reaped yet, except here the child genuinely lives).
+	if err := runner.start(r.ID); err != nil {
+		t.Fatalf("prime start: %v", err)
+	}
+	// Cleanup: kill the child unconditionally (stop() refuses non-active
+	// status, and Approve reverts to awaiting_review) and block until reaped
+	// so t.TempDir cleanup does not race a live process holding run.log.
+	defer func() {
+		runner.killProcess(r.ID)
+		_ = runner.waitReaped(r.ID, 5*time.Second)
+	}()
+	if _, err := ps.update(r.ID, func(r *ProdRun) {
+		r.Status = prodRunAwaitingReview
+		r.StopReason = stopReasonFoundationReady
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}
+	// Approve hits the reap timeout (child still running). It must revert to
+	// awaiting_review and return errReapTimeout.
+	_, approveErr := pm.ApproveFoundation(r.ID)
+	if !errors.Is(approveErr, errReapTimeout) {
+		t.Fatalf("expected errReapTimeout from ApproveFoundation, got %v", approveErr)
+	}
+	if got := ps.get(r.ID).Status; got != prodRunAwaitingReview {
+		t.Fatalf("expected revert to awaiting_review, got %s", got)
+	}
+}
+
+// TestReviseFoundationWaitsForOldReap verifies ReviseFoundation waits for the
+// OLD run's child to be reaped before creating+starting the NEW sibling. The
+// gate's killProcess is async and start() guards the GLOBAL single-run slot, so
+// the OLD child must be gone before the NEW sibling can start. On reap timeout,
+// Revise aborts without spending any Architect tokens (no NEW run created).
+func TestReviseFoundationWaitsForOldReap(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	_ = os.MkdirAll(profileDir, 0o755)
+	_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 10 * time.Second
+	runner.reapTimeout = 50 * time.Millisecond
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(10000) }
+
+	r, err := ps.create("revisewait", "profiles/x.md", "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.start(r.ID); err != nil {
+		t.Fatalf("prime start: %v", err)
+	}
+	defer func() {
+		runner.killProcess(r.ID)
+		_ = runner.waitReaped(r.ID, 5*time.Second)
+	}()
+	if _, err := ps.update(r.ID, func(r *ProdRun) {
+		r.Status = prodRunAwaitingReview
+		r.StopReason = stopReasonFoundationReady
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeCount := len(ps.list())
+	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}
+	_, reviseErr := pm.ReviseFoundation(r.ID, "make the protagonist braver")
+	if !errors.Is(reviseErr, errReapTimeout) {
+		t.Fatalf("expected errReapTimeout from ReviseFoundation, got %v", reviseErr)
+	}
+	// No NEW sibling created (no token spent).
+	if got := len(ps.list()); got != beforeCount {
+		t.Fatalf("Revise must not create a sibling when reap times out: before=%d after=%d", beforeCount, got)
+	}
+	if got := ps.get(r.ID).Status; got != prodRunAwaitingReview {
+		t.Fatalf("OLD run must stay awaiting_review on revise reap timeout, got %s", got)
+	}
+}
+
+// TestApproveFoundationDeleteDuringReapAborts verifies the queued-window fix:
+// Approve must call waitReaped BEFORE flipping to queued, so a concurrent Delete
+// during the reap wait cannot RemoveAll the runDir while the old child is still
+// alive. Here the OLD child sleeps long enough to keep the slot occupied through
+// the reap budget; a concurrent Delete must observe status awaiting_review and
+// (after the test kills the child) the run must be deletable cleanly — but
+// crucially Approve must NOT have set queued. We simulate the concurrent delete
+// by deleting right after Approve returns its reap-timeout error.
+func TestApproveFoundationDeleteDuringReapAborts(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	_ = os.MkdirAll(profileDir, 0o755)
+	_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 10 * time.Second
+	runner.reapTimeout = 50 * time.Millisecond
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(10000) }
+
+	r, err := ps.create("approvedelete", "profiles/x.md", "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progressDir := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta")
+	_ = os.MkdirAll(progressDir, 0o755)
+	_ = os.WriteFile(filepath.Join(progressDir, "progress.json"), []byte(`{"phase":"writing","completed_chapters":[]}`), 0o644)
+
+	if err := runner.start(r.ID); err != nil {
+		t.Fatalf("prime start: %v", err)
+	}
+	defer func() {
+		runner.killProcess(r.ID)
+		_ = runner.waitReaped(r.ID, 5*time.Second)
+	}()
+	if _, err := ps.update(r.ID, func(r *ProdRun) {
+		r.Status = prodRunAwaitingReview
+		r.StopReason = stopReasonFoundationReady
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}
+	// Approve times out on reap (child still alive) and must NOT have set queued.
+	_, approveErr := pm.ApproveFoundation(r.ID)
+	if !errors.Is(approveErr, errReapTimeout) {
+		t.Fatalf("expected errReapTimeout, got %v", approveErr)
+	}
+	if got := ps.get(r.ID).Status; got != prodRunAwaitingReview {
+		t.Fatalf("approve must not flip to queued during reap wait, got %s", got)
+	}
+	// A concurrent Delete during/after the reap wait must see awaiting_review
+	// (not queued), so the live-child-RemoveAll window never opens. After we
+	// kill the child, Delete succeeds and removes the run.
+	runner.killProcess(r.ID)
+	_ = runner.waitReaped(r.ID, 5*time.Second)
+	if err := pm.Delete(r.ID); err != nil {
+		t.Fatalf("delete after reap must succeed: %v", err)
+	}
+	if ps.get(r.ID) != nil {
+		t.Fatal("run should be gone after delete")
+	}
+}
+
+// TestReviseFoundationOldRejectedAborts verifies Revise re-fetches and
+// revalidates the OLD run after waitReaped: if the OLD run was deleted (reject)
+// before Revise's post-reap revalidation, Revise aborts with errDeleteRunNotFound
+// without creating a sibling or spending Architect tokens. We model the reject
+// by deleting the OLD run before invoking Revise — the slot is empty (no live
+// child) so waitReaped returns immediately, and the revalidation guard is what
+// catches the deletion. The OS-level reap race itself is covered by
+// TestReviseFoundationWaitsForOldReap; this test locks in the revalidate guard.
+func TestReviseFoundationOldRejectedAborts(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	_ = os.MkdirAll(profileDir, 0o755)
+	_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 10 * time.Second
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(100) }
+
+	r, err := ps.create("revisereject", "profiles/x.md", "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ps.update(r.ID, func(r *ProdRun) {
+		r.Status = prodRunAwaitingReview
+		r.StopReason = stopReasonFoundationReady
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}
+	// Simulate the user rejecting the OLD run before Revise's reap wait even
+	// starts: the slot is empty (no child), so Revise's waitReaped is a no-op
+	// and the post-reap revalidation must catch the deletion.
+	if err := pm.Delete(r.ID); err != nil {
+		t.Fatalf("reject (delete) old run: %v", err)
+	}
+
+	_, reviseErr := pm.ReviseFoundation(r.ID, "braver protagonist")
+	if !errors.Is(reviseErr, errDeleteRunNotFound) {
+		t.Fatalf("expected errDeleteRunNotFound when old was rejected, got %v", reviseErr)
+	}
+	// No sibling created (no tokens spent).
+	if got := len(ps.list()); got != 0 {
+		t.Fatalf("Revise must not create a sibling when old is gone: got %d", got)
+	}
+}
+
 // TestApproveFoundationResumesEvenIfProfileDeleted is a regression test for a
 // bug found during a live smoke test: prepareRunDir's fresh_profile branch
 // re-resolved and re-copied profile.md on every start, including approve-
@@ -909,7 +1311,12 @@ func TestReviseFoundationKeepsOldRunWhenNewFailsToStart(t *testing.T) {
 	if err := runner.start(blocker.ID); err != nil {
 		t.Fatal(err)
 	}
-	defer runner.stop(blocker.ID)
+	// Cleanup: stop the blocker and block until reaped so t.TempDir cleanup
+	// does not race a live process holding run.log on Windows.
+	defer func() {
+		_ = runner.stop(blocker.ID)
+		_ = runner.waitReaped(blocker.ID, 5*time.Second)
+	}()
 	time.Sleep(50 * time.Millisecond)
 
 	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}
@@ -955,7 +1362,12 @@ func TestApproveFoundationRevertsOnStartFailure(t *testing.T) {
 	if err := runner.start(blocker.ID); err != nil {
 		t.Fatal(err)
 	}
-	defer runner.stop(blocker.ID)
+	// Cleanup: stop the blocker and block until reaped so t.TempDir cleanup
+	// does not race a live process holding run.log on Windows.
+	defer func() {
+		_ = runner.stop(blocker.ID)
+		_ = runner.waitReaped(blocker.ID, 5*time.Second)
+	}()
 	time.Sleep(50 * time.Millisecond)
 
 	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}

@@ -32,6 +32,7 @@ type prodRunRunner struct {
 	mu           sync.Mutex
 	running      map[string]*runningProc
 	pollInterval time.Duration
+	reapTimeout  time.Duration
 }
 
 type runningProc struct {
@@ -50,6 +51,7 @@ func newProdRunRunner(store *prodRunStore, binPath, repoRoot, hostDir string, ba
 		cmdFactory:   exec.Command,
 		running:      make(map[string]*runningProc),
 		pollInterval: 5 * time.Second,
+		reapTimeout:  prodRunReapTimeout,
 	}
 }
 
@@ -179,16 +181,42 @@ func (rr *prodRunRunner) waitProc(id string, proc *runningProc) {
 		fmt.Fprintf(os.Stderr, "prodrun: failed to persist terminal status for %s: %v\n", id, saveErr)
 	}
 
-	close(proc.done)
 	_ = proc.logFile.Close()
 
 	if rr.onCmdFinished != nil {
 		rr.onCmdFinished(proc.cmd, err)
 	}
 
+	// Free the single-run slot before signaling done so that waitReaped,
+	// which blocks on proc.done, observes a cleared rr.running entry. Closing
+	// done first would let a waiter proceed while start() could still see the
+	// slot occupied for a brief instant.
 	rr.mu.Lock()
 	delete(rr.running, id)
 	rr.mu.Unlock()
+	close(proc.done)
+}
+
+// waitReaped blocks until the run's child has exited and its single-run slot
+// has been freed, or until timeout elapses. Returns nil when the slot is
+// already free (no child, or already reaped). Approve/Revise call this before
+// restarting so the gate's async killProcess cannot race the new start: by the
+// time waitReaped returns nil, start()'s len(rr.running)==0 check is stable.
+func (rr *prodRunRunner) waitReaped(id string, timeout time.Duration) error {
+	rr.mu.Lock()
+	proc := rr.running[id]
+	rr.mu.Unlock()
+	if proc == nil {
+		return nil
+	}
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-proc.done:
+		return nil
+	case <-t.C:
+		return errReapTimeout
+	}
 }
 
 // pollLoop reads progress from the child output directory every 5 seconds.
@@ -664,6 +692,21 @@ func (pm *prodRunManager) CreateContinue(name, model, provider string, targetCha
 // (runDirHasExistingOutput) makes the child skip startup.PrepareQuick and go
 // through native Resume() instead.
 func (pm *prodRunManager) ApproveFoundation(id string) (*ProdRun, error) {
+	// The gate's killProcess is async: the just-stopped child may still occupy
+	// the single-run slot. Block on its reap BEFORE flipping status to queued,
+	// so the run never enters a "queued while child still alive" window where a
+	// concurrent Delete (which only blocks running/paused) could RemoveAll the
+	// runDir out from under the live child. waitReaped reads the slot under
+	// rr.mu; if the run was already reaped this returns immediately.
+	reapTimeout := pm.runner.reapTimeout
+	if reapTimeout <= 0 {
+		reapTimeout = prodRunReapTimeout
+	}
+	if reapErr := pm.runner.waitReaped(id, reapTimeout); reapErr != nil {
+		return nil, reapErr
+	}
+	// Re-check status after the reap wait: the user may have rejected/deleted
+	// the run while we were waiting. Only proceed if still awaiting_review.
 	r, err := pm.store.update(id, func(r *ProdRun) {
 		if r.Status != prodRunAwaitingReview {
 			return
@@ -677,11 +720,14 @@ func (pm *prodRunManager) ApproveFoundation(id string) (*ProdRun, error) {
 		return nil, err
 	}
 	if r.Status != prodRunQueued {
-		return nil, fmt.Errorf("run %q is not awaiting review", id)
+		return nil, fmt.Errorf("run %q is no longer awaiting review (status=%s)", id, r.Status)
 	}
 	if startErr := pm.startWithReapRetry(id); startErr != nil {
 		// Don't strand the run in queued (it could no longer be rejected).
-		// Revert to awaiting_review so the user can retry or reject.
+		// Revert to awaiting_review only if start() failed before setting
+		// running (errAnotherRunActive / not-queued). If start() already
+		// markFailed the run (prepareRunDir/cmd.Start failure after the
+		// running flip), the guard below leaves that failed status intact.
 		if _, revErr := pm.store.update(id, func(r *ProdRun) {
 			if r.Status == prodRunQueued {
 				r.Status = prodRunAwaitingReview
@@ -735,6 +781,28 @@ func (pm *prodRunManager) ReviseFoundation(id, feedback string) (*ProdRun, error
 	}
 	if old.Status != prodRunAwaitingReview {
 		return nil, fmt.Errorf("run %q is not awaiting review (status=%s)", id, old.Status)
+	}
+	// The gate's killProcess is async and start() guards on the GLOBAL single-run
+	// slot (len(rr.running)==0), so the OLD run's child still blocks the NEW
+	// sibling. Wait for the OLD child to be reaped before creating+starting the
+	// new run; on timeout, abort without spending any Architect tokens.
+	reapTimeout := pm.runner.reapTimeout
+	if reapTimeout <= 0 {
+		reapTimeout = prodRunReapTimeout
+	}
+	if reapErr := pm.runner.waitReaped(id, reapTimeout); reapErr != nil {
+		return nil, reapErr
+	}
+	// Re-fetch and revalidate the OLD run after the reap wait: the user may
+	// have rejected/deleted it while we were waiting. Create the sibling only
+	// against a run that is still awaiting_review, so we don't spend Architect
+	// tokens on a revise for a run the user already discarded.
+	old = pm.store.get(id)
+	if old == nil {
+		return nil, errDeleteRunNotFound
+	}
+	if old.Status != prodRunAwaitingReview {
+		return nil, fmt.Errorf("run %q is no longer awaiting review (status=%s)", id, old.Status)
 	}
 	newRun, err := pm.store.createWithOptions(prodRunCreateOptions{
 		Kind:           prodRunKindFreshProfile,

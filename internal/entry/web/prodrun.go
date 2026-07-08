@@ -26,6 +26,10 @@ var (
 	// a fragile substring so behavior does not silently break if the message
 	// wording changes.
 	errAnotherRunActive = errors.New("another production run is already running")
+	// errReapTimeout is returned by waitReaped when the just-killed child has
+	// not exited within the budget. Approve/Revise revert/abort on this so the
+	// user can retry instead of being stranded in queued.
+	errReapTimeout = errors.New("previous child process is still stopping")
 )
 
 // Production-run lifecycle statuses.
@@ -51,6 +55,12 @@ const (
 	prodRunKindFreshProfile      = "fresh_profile"
 	prodRunKindContinueWorkspace = "continue_workspace"
 )
+
+// prodRunReapTimeout is the budget Approve/Revise wait for a just-killed child
+// to be reaped before restarting. SIGKILL/TerminateProcess reaps in tens of ms,
+// so 5s is a generous ceiling; a timeout means the OS is wedged and the caller
+// reverts/aborts rather than stranding the run in queued.
+const prodRunReapTimeout = 5 * time.Second
 
 // Stop reasons written to ProdRun.StopReason.
 const (
