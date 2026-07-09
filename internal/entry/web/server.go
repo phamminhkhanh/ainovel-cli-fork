@@ -106,6 +106,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("POST /api/prodruns/{id}/approve", s.handleProdRunApprove)
 	mux.HandleFunc("POST /api/prodruns/{id}/reject", s.handleProdRunReject)
 	mux.HandleFunc("POST /api/prodruns/{id}/revise", s.handleProdRunRevise)
+	mux.HandleFunc("POST /api/prodruns/{id}/resume", s.handleProdRunResume)
 	mux.HandleFunc("POST /api/prodruns/{id}/reveal", s.handleProdRunReveal)
 	mux.HandleFunc("GET /api/prodruns/{id}/ide-bundle", s.handleProdRunIDEBundle)
 

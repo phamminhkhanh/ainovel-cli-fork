@@ -16,6 +16,7 @@ import (
 
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // prodRunRunner spawns and polls a single headless child process per run.
@@ -744,7 +745,83 @@ func (pm *prodRunManager) ApproveFoundation(id string) (*ProdRun, error) {
 	return pm.store.get(id), nil
 }
 
-// startWithReapRetry starts a run, retrying for ~1s while the single-run slot
+// ResumeFailed cho phép tiếp tục một run đã dừng (status=failed hoặc cancelled).
+// Dùng khi run fail/cancel do lỗi transient (rule stale, rate limit, context overflow)
+// hoặc do user chủ động bấm Dừng rồi muốn nấu tiếp. prepareRunDir sẽ copy home rules
+// mới nhất (dòng 459-461) nên writer thấy rule cập nhật, và headless Resume()
+// natively từ sandbox dir có sẵn output.
+//
+// steer (tùy chọn):干预文本, ghi vào sandbox meta/run.json qua store API
+// (SetPendingSteer + AppendSteerEntry) TRƯỚC khi start child. Headless Resume()
+// (host.go:374) đọc pending_steer và inject vào Coordinator ngay chương kế — đây
+// là seam host đã có sẵn, web adapter chỉ ghi file, zero đụng host/headless.
+// Lưu ý: steer là干预 mềm (Coordinator đánh giá & áp theo coordinator.md), không
+// phải structural rule cứng. Chỉ ăn ở ranh giới resume (run đang dừng), không
+// steer được khi child đang chạy.
+//
+// KHÔNG set FoundationApproved (giữ giá trị cũ): run đã approve thì giữ, run
+// fail trước foundation gate thì vẫn cần duyệt sau.
+func (pm *prodRunManager) ResumeFailed(id, steer string) (*ProdRun, error) {
+	reapTimeout := pm.runner.reapTimeout
+	if reapTimeout <= 0 {
+		reapTimeout = prodRunReapTimeout
+	}
+	if reapErr := pm.runner.waitReaped(id, reapTimeout); reapErr != nil {
+		return nil, reapErr
+	}
+	r, err := pm.store.update(id, func(r *ProdRun) {
+		if r.Status != prodRunFailed && r.Status != prodRunCancelled {
+			return
+		}
+		r.Status = prodRunQueued
+		r.StopReason = ""
+		r.StoppedAt = time.Time{}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if r.Status != prodRunQueued {
+		return nil, fmt.Errorf("run %q is not failed or cancelled (status=%s), cannot resume", id, r.Status)
+	}
+	// Ghi steer干预 vào sandbox meta/run.json trước khi start child. Store API
+	// an toàn lock + encoding; path = runDir/output/novel (eng.Dir() của child).
+	// Gate runDirHasExistingOutput: chỉ ghi khi có output (đường Resume). Nếu run
+	// fail trước foundation (0 output) → child chạy --prompt-file (fresh
+	// StartPrepared, KHÔNG Resume) → pending_steer không được đọc, lại tạo ra
+	// run.json mồ côi trong sandbox. Lỗi ghi steer không block resume — run vẫn
+	// nấu tiếp, chỉ thiếu干预.
+	if steer = strings.TrimSpace(steer); steer != "" {
+		runDir := pm.store.runDir(id)
+		if runDirHasExistingOutput(runDir) {
+			runOutDir := filepath.Join(runDir, "output", "novel")
+			st := store.NewStore(runOutDir)
+			if err := st.RunMeta.SetPendingSteer(steer); err != nil {
+				fmt.Fprintf(os.Stderr, "prodrun: resume steer SetPendingSteer %s: %v\n", id, err)
+			} else if err := st.RunMeta.AppendSteerEntry(domain.SteerEntry{
+				Input:     steer,
+				Timestamp: time.Now().Format(time.RFC3339),
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "prodrun: resume steer AppendSteerEntry %s: %v\n", id, err)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "prodrun: resume steer skipped %s: no existing output (fresh StartPrepared, not Resume)\n", id)
+		}
+	}
+	if startErr := pm.startWithReapRetry(id); startErr != nil {
+		// Revert về failed nếu start fail trước khi set running.
+		if _, revErr := pm.store.update(id, func(r *ProdRun) {
+			if r.Status == prodRunQueued {
+				r.Status = prodRunFailed
+				r.StopReason = stopReasonError
+				r.StoppedAt = time.Now()
+			}
+		}); revErr != nil {
+			fmt.Fprintf(os.Stderr, "prodrun: resume-failed start failed and could not revert %s: %v\n", id, revErr)
+		}
+		return nil, startErr
+	}
+	return pm.store.get(id), nil
+}
 // is still occupied by a just-killed child that waitProc hasn't reaped yet
 // (the gate's killProcess is async). Any non-"active" error returns immediately.
 func (pm *prodRunManager) startWithReapRetry(id string) error {

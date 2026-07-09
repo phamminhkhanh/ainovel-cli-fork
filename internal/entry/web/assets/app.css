@@ -998,6 +998,8 @@ select:focus { outline: none; border-color: var(--color-accent); }
 .run-item-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .run-item-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-item-meta { font-size: 12px; color: var(--color-text-faint); margin-top: var(--space-1); }
+.run-health-dot { font-size: 13px; line-height: 1; flex-shrink: 0; margin-left: auto; }
+.run-item-head .run-badge { margin-left: var(--space-1); }
 
 .run-badge {
   font-size: 10px; padding: 2px var(--space-2); border-radius: var(--radius-sm);
@@ -1099,6 +1101,11 @@ select:focus { outline: none; border-color: var(--color-accent); }
 .run-manual-box { margin: var(--space-2) 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .run-manual-box .btn { align-self: flex-start; }
 .run-manual-box code { font-family: var(--font-mono); font-size: 11px; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 0 3px; }
+.run-steer-box { margin: var(--space-2) 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.run-steer-box label { font-weight: 600; font-size: 13px; }
+.run-steer-box textarea { width: 100%; resize: vertical; font: inherit; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: var(--space-2); background: var(--color-bg); }
+.run-steer-box textarea:focus { outline: none; border-color: var(--color-accent); }
+.run-steer-hint { font-size: 11px; color: var(--color-text-dim); }
 .run-review-llm-box { margin: var(--space-2) 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .run-review-llm-box .btn { align-self: flex-start; }
 .run-edit-title { font-weight: 600; font-size: 13px; margin-top: var(--space-2); }

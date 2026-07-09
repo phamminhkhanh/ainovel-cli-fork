@@ -387,7 +387,41 @@ func (s *server) handleProdRunApprove(w http.ResponseWriter, r *http.Request) {
 	writeProdRunView(w, http.StatusOK, next)
 }
 
-// handleProdRunReveal opens a run's seeded foundation dir in the OS file
+// handleProdRunResume cho phép tiếp tục run đã fail/cancel (lỗi transient đã
+// khắc phục: rule stale, rate limit... hoặc user chủ động bấm Dừng). prepareRunDir
+// copy home rules mới nhất nên writer thấy rule cập nhật; headless Resume()
+// natively từ sandbox dir.
+//
+// body.steer (tùy chọn):干预文本, ghi vào sandbox meta/run.json trước start →
+// headless Resume inject vào Coordinator ngay chương kế. Steer mềm, không cứng.
+func (s *server) handleProdRunResume(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	run := s.prodRunManager.Get(id)
+	if run == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("run not found"))
+		return
+	}
+	if run.Status != prodRunFailed && run.Status != prodRunCancelled {
+		writeErr(w, http.StatusConflict, fmt.Errorf("run %q is not failed or cancelled (status=%s), cannot resume", id, run.Status))
+		return
+	}
+	var body struct {
+		Steer string `json:"steer"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	next, err := s.prodRunManager.ResumeFailed(id, body.Steer)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeProdRunView(w, http.StatusOK, next)
+}
 // manager so the user can hand-edit premise/outline/characters before Approve.
 // Loopback-only (same guard as handleReveal); the dir is derived server-side
 // from the validated run id — no client-supplied path.

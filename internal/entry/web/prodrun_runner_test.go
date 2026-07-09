@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -1462,5 +1463,190 @@ func TestApproveFoundationRevertsOnStartFailure(t *testing.T) {
 	}
 	if got := pm.Get(r.ID).Status; got != prodRunAwaitingReview {
 		t.Fatalf("approve failure must revert to awaiting_review, got %s", got)
+	}
+}
+
+// seedCancelledRunWithOutput tạo một run cancelled đã có output/novel (giả lập
+// run đã viết vài chương rồi user bấm Dừng). Trả về run để test assert meta/run.json.
+// profilePath phải là path relative trong repoRoot/profiles (prepareRunDir resolve).
+func seedCancelledRunWithOutput(t *testing.T, ps *prodRunStore, profilePath string) *ProdRun {
+	t.Helper()
+	r, err := ps.create("steer-test", profilePath, "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fake existing output: progress.json present → runDirHasExistingOutput=true
+	// → ResumeFailed ghi steer; child sẽ vào đường Resume (không --prompt-file).
+	progressDir := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta")
+	if err := os.MkdirAll(progressDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(progressDir, "progress.json"), []byte(`{"phase":"writing","completed_chapters":[1,2,3]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ps.update(r.ID, func(r *ProdRun) {
+		r.Status = prodRunCancelled
+		r.StopReason = stopReasonCancelled
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// TestResumeFailedWithSteerPersisted verifies ResumeFailed(id, steer) ghi
+// pending_steer + steer_history vào sandbox meta/run.json trước khi start child,
+// khi run có output (đường Resume). Đây là seam steer-on-resume: headless
+// Resume() sẽ đọc pending_steer và inject vào Coordinator.
+func TestResumeFailedWithSteerPersisted(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 200 * time.Millisecond
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd {
+		return helperCommand(200)
+	}
+	finished := make(chan struct{})
+	runner.onCmdFinished = func(cmd *exec.Cmd, err error) { close(finished) }
+	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}
+
+	r := seedCancelledRunWithOutput(t, ps, "profiles/x.md")
+	steerText := "them nh nip sung cu the, giam im lang"
+
+	if _, err := pm.ResumeFailed(r.ID, steerText); err != nil {
+		t.Fatalf("ResumeFailed: %v", err)
+	}
+
+	// Wait for the helper child to finish so the poll loop does not race the
+	// assertion. The steer is written BEFORE start, so it is already on disk.
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait goroutine did not finish")
+	}
+
+	runJSON := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta", "run.json")
+	data, err := os.ReadFile(runJSON)
+	if err != nil {
+		t.Fatalf("read run.json: %v", err)
+	}
+	var meta domain.RunMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("parse run.json: %v", err)
+	}
+	if meta.PendingSteer != steerText {
+		t.Errorf("pending_steer = %q, want %q", meta.PendingSteer, steerText)
+	}
+	if len(meta.SteerHistory) != 1 || meta.SteerHistory[0].Input != steerText {
+		t.Errorf("steer_history = %+v, want 1 entry %q", meta.SteerHistory, steerText)
+	}
+}
+
+// TestResumeFailedEmptySteerDoesNotWriteRunJSON verifies ResumeFailed(id, "")
+// không ghi pending_steer — steer rỗng là no-op, run.json giữ nguyên (hoặc không
+// tạo nếu chưa có). Đảm bảo resume không-steer không tạo side-effect file mồ côi.
+func TestResumeFailedEmptySteerDoesNotWriteRunJSON(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 200 * time.Millisecond
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd {
+		return helperCommand(200)
+	}
+	finished := make(chan struct{})
+	runner.onCmdFinished = func(cmd *exec.Cmd, err error) { close(finished) }
+	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}
+
+	r := seedCancelledRunWithOutput(t, ps, "profiles/x.md")
+
+	if _, err := pm.ResumeFailed(r.ID, "   "); err != nil {
+		t.Fatalf("ResumeFailed: %v", err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait goroutine did not finish")
+	}
+
+	// run.json must NOT exist — empty steer must not create a side-effect file.
+	runJSON := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta", "run.json")
+	if _, err := os.Stat(runJSON); err == nil {
+		t.Fatal("run.json should not be created when steer is empty")
+	}
+}
+
+// TestResumeFailedSteerSkippedWhenNoOutput verifies the guard: if a run is
+// cancelled but has NO output/novel (fail before foundation), ResumeFailed must
+// NOT write pending_steer — the child will run --prompt-file (fresh
+// StartPrepared, not Resume), so pending_steer would never be read and would
+// leave an orphan run.json.
+func TestResumeFailedSteerSkippedWhenNoOutput(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 200 * time.Millisecond
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd {
+		return helperCommand(200)
+	}
+	finished := make(chan struct{})
+	runner.onCmdFinished = func(cmd *exec.Cmd, err error) { close(finished) }
+	pm := &prodRunManager{store: ps, runner: runner, hostDir: t.TempDir()}
+
+	// cancelled run WITHOUT output (simulates fail before foundation).
+	r, err := ps.create("no-output", "profiles/x.md", "", "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ps.update(r.ID, func(r *ProdRun) {
+		r.Status = prodRunCancelled
+		r.StopReason = stopReasonCancelled
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pm.ResumeFailed(r.ID, "should be skipped"); err != nil {
+		t.Fatalf("ResumeFailed: %v", err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait goroutine did not finish")
+	}
+
+	runJSON := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta", "run.json")
+	if _, err := os.Stat(runJSON); err == nil {
+		t.Fatal("run.json should NOT be written when run has no output (fresh StartPrepared path, steer would be orphaned)")
 	}
 }
