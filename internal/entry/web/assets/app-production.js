@@ -5,6 +5,9 @@
 let productionSelectedRunId = null;
 let productionPollTimer = null;
 let productionRunsCache = [];
+// Guard toast persist-error: chỉ toast 1 lần/run khi persist chuyển sang bad,
+// reset khi khoẻ lại → tránh spam mỗi 5s poll.
+let lastPersistToastRun = null;
 let productionProfilesCache = [];
 let productionCreateMode = 'fresh_profile';
 let productionWorkspaceSnapshot = null;
@@ -322,9 +325,11 @@ function bindProductionEvents() {
     else if (btn.dataset.action === 'sync') syncProductionRun(id);
     else if (btn.dataset.action === 'approve') approveProductionRun(id);
     else if (btn.dataset.action === 'reject') rejectProductionRun(id);
+    else if (btn.dataset.action === 'resume') resumeProductionRun(id);
     else if (btn.dataset.action === 'revise') reviseProductionRun(id);
     else if (btn.dataset.action === 'reveal') revealFoundationFolder(id);
     else if (btn.dataset.action === 'copyReview') copyFoundationForReview(id);
+    else if (btn.dataset.action === 'copyIde') copyFoundationForIDE(id);
   });
 }
 
@@ -1278,6 +1283,18 @@ async function profileLibDelete() {
 async function loadProductionData() {
   await Promise.all([loadProductionRuns(), populateProfileSelect()]);
   renderProductionRuns();
+  // Toast persist-error cho mọi run (không cần mở detail): user thấy ngay trên
+  // list view có run bị file lock. Guard per-run chống spam mỗi 5s poll.
+  if (Array.isArray(productionRunsCache)) {
+    const badRun = productionRunsCache.find((r) => r && r.health && Array.isArray(r.health.metrics) &&
+      r.health.metrics.some((m) => m && m.key === 'persist' && m.level === 'bad'));
+    if (badRun && lastPersistToastRun !== badRun.id) {
+      lastPersistToastRun = badRun.id;
+      toast('File b\u1ecb kh\u00f3a b\u1edfi IDE/editor (jobs.json). T\u1eaft editor \u0111ang m\u1edf output/jobs, m\u1edf l\u1ea1i Web UI.', 'error');
+    } else if (!badRun) {
+      lastPersistToastRun = null; // không còn run bad → reset để toast lại nếu lỗi tái diễn
+    }
+  }
   if (productionSelectedRunId) {
     const run = productionRunsCache.find((r) => r.id === productionSelectedRunId);
     renderProductionDetail(run || null);
@@ -1357,6 +1374,18 @@ async function approveProductionRun(id) {
   const res = await post(`/api/prodruns/${id}/approve`, {});
   if (res) {
     toast('\u0110\u00e3 duy\u1ec7t n\u1ec1n m\u00f3ng, ti\u1ebfp t\u1ee5c vi\u1ebft', 'ok');
+    await loadProductionData();
+  }
+}
+
+async function resumeProductionRun(id) {
+  const steerEl = document.getElementById('runSteerInput');
+  const steer = steerEl ? steerEl.value.trim() : '';
+  const hint = steer ? ` k\u00e8m steer "${steer.slice(0, 60)}${steer.length > 60 ? '\u2026' : ''}"` : '';
+  if (!confirm(`Ti\u1ebfp t\u1ee5c job${hint}? Engine copy rule m\u1edbi nh\u1ea5t + resume t\u1eeb ch\u01b0\u01a1ng \u0111\u00e3 vi\u1ebft${steer ? ', steer s\u1ebd inject \u1edf ch\u01b0\u01a1ng k\u1ebf' : ''}.`)) return;
+  const res = await post(`/api/prodruns/${id}/resume`, { steer });
+  if (res) {
+    toast('\u0110\u00e3 ti\u1ebfp t\u1ee5c job' + (steer ? ' + steer' : ''), 'ok');
     await loadProductionData();
   }
 }
@@ -1481,6 +1510,23 @@ async function loadFoundationPreview(id) {
   }
 }
 
+// Fetch profile gốc (yêu cầu ban đầu) để reviewer/IDE agent phát hiện Architect
+// drift (đổi nhân vật/thể loại/tone/lời hứa trong foundation so với ý đồ gốc).
+// continue_workspace run không có profile → trả ''. Fetch fail = non-fatal
+// (review/edit không profile). Dùng chung cho copyFoundationForReview và
+// copyFoundationForIDE — tránh lặp 9 dòng fetch logic.
+async function fetchProfileText(profilePath) {
+  if (!profilePath) return '';
+  try {
+    const r = await fetch('/api/profiles/content?path=' + encodeURIComponent(profilePath));
+    if (r.ok) {
+      const data = await r.json();
+      return (data.content || '').trim();
+    }
+  } catch (_) { /* non-fatal */ }
+  return '';
+}
+
 // Foundation Gate review: copy foundation + prompt review s\u1eb5n cho LLM ngo\u00e0i soi.
 // Kh\u00e1c loadFoundationPreview (xu\u1ea5t HTML), h\u00e0m n\u00e0y xu\u1ea5t PLAIN TEXT markdown \u0111\u1ec3
 // d\u00e1n th\u1eb3ng v\u00e0o GPT/Claude. Prompt \u00e9p LLM xu\u1ea5t 5-10 d\u00f2ng revision note ng\u1eafn
@@ -1501,19 +1547,7 @@ async function copyFoundationForReview(id) {
     toast('Ch\u01b0a \u0111\u1ecdc \u0111\u01b0\u1ee3c n\u1ec1n m\u00f3ng \u0111\u1ec3 review', 'error');
     return;
   }
-  // Profile g\u1ed1c (y\u00eau c\u1ea7u ban \u0111\u1ea7u) \u2014 reviewer c\u1ea7n \u0111\u1ec3 ph\u00e1t hi\u1ec7n Architect drift
-  // kh\u1ecfi \u00fd \u0111\u1ed3 (\u0111\u1ed5i nh\u00e2n v\u1eadt/th\u1ec3 lo\u1ea1i/tone/l\u1eddi h\u1ee9a trong outline). continue_workspace
-  // run kh\u00f4ng c\u00f3 profile \u2192 review ch\u1ec9 so\u00e1t n\u1ed9i b\u1ed9 foundation. Fetch fail = non-fatal.
-  let profileText = '';
-  if (run?.profile) {
-    try {
-      const r = await fetch('/api/profiles/content?path=' + encodeURIComponent(run.profile));
-      if (r.ok) {
-        const data = await r.json();
-        profileText = (data.content || '').trim();
-      }
-    } catch (_) { /* non-fatal: review kh\u00f4ng profile */ }
-  }
+  const profileText = await fetchProfileText(run?.profile);
   const payload = buildFoundationReviewPrompt(foundationText, {
     profile: profileText,
     // Header n: ưu tiên quy mô thực của foundation (compass.estimated_scale
@@ -1528,6 +1562,113 @@ async function copyFoundationForReview(id) {
     toast(`\u0110\u00e3 copy ${what} + prompt review. D\u00e1n v\u00e0o GPT/Claude \u2192 nh\u1eadn revision note ng\u1eafn \u2192 d\u00e1n v\u00e0o \u00f4 "Nh\u1edd AI vi\u1ebft l\u1ea1i".`, 'ok');
   } catch (e) {
     toast('L\u1ed7i clipboard: ' + e, 'error');
+  }
+}
+
+// Copy một bundle "IDE Review & Edit" ra clipboard. Khác copyReview (LLM ngoài
+// chỉ output revision note → paste Revise → Architect regenerate, tốn token +
+// drift), IDE agent làm 2 việc: (1) REVIEW foundation theo trục chết người +
+// so profile gốc, (2) EDIT trực tiếp 5 file trên disk (surgical, không
+// regenerate). Bundle gồm: persona + dự án + 2-step workflow (review axes +
+// edit rules) + địa danh (job/dir/files) + profile gốc + foundation hiện tại.
+// Xem handleProdRunIDEBundle (backend) cho dir/files, buildReviewAxes cho trục.
+async function copyFoundationForIDE(id) {
+  const run = productionRunsCache.find((r) => r.id === id);
+  let bundle;
+  let profileText = ''; // hoisted ra function scope — toast ở dưới cần đọc
+  try {
+    const [dirRes, built] = await Promise.all([
+      fetch(`/api/prodruns/${id}/ide-bundle`),
+      buildFoundationText(id),
+    ]);
+    const info = dirRes.ok ? await dirRes.json() : null;
+    if (!info || !info.dir) {
+      toast('Không đọc được thư mục nền móng của run', 'error');
+      return;
+    }
+    const foundationText = built?.text || '';
+    if (!foundationText) {
+      toast('Chưa đọc được nền móng để copy', 'error');
+      return;
+    }
+    // Profile gốc — IDE agent cần để phát hiện Architect drift ở bước review.
+    // continue_workspace run không có profile → review chỉ soát nội bộ.
+    profileText = await fetchProfileText(run?.profile);
+    const files = Array.isArray(info.files) && info.files.length
+      ? info.files
+      : ['premise.md', 'meta/compass.json', 'layered_outline.json', 'world_rules.json', 'characters.json'];
+    const year = new Date().getFullYear();
+    const axes = buildReviewAxes(year, !!profileText);
+    const n = built.scale || run?.targetChapters || '(chưa rõ)';
+    const name = run?.name || id;
+
+    const lines = [];
+    lines.push('[IDE — Foundation Review & Edit]');
+    lines.push('');
+    lines.push('## BẠN LÀ AI / LÀM GÌ');
+    lines.push('Bạn là biên tập viên kỳ cựu chuyên tiểu thuyết mạng dài kỳ VÀ đồng thời là IDE agent (có quyền đọc/sửa file trực tiếp). Bạn làm 2 việc mà LLM ngoài chỉ làm 1:');
+    lines.push('1. REVIEW: soi foundation theo các trục chết người (so cả profile gốc để phát hiện Architect drift).');
+    lines.push('2. EDIT: sửa trực tiếp 5 file foundation trên disk (surgical, không regenerate).');
+    lines.push('');
+    lines.push('Khác biệt với LLM ngoài: LLM ngoài chỉ output revision note → người dùng paste vào "Nhờ AI viết lại" → Architect regenerate toàn bộ (tốn token, có drift mới). Bạn sửa file trực tiếp → nhanh, chính xác, không drift, không tốn token regenerate.');
+    lines.push('');
+    lines.push('## DỰ ÁN (đọc trước khi làm)');
+    lines.push('ainovel-cli (fork) — engine viết tiểu thuyết AI bằng Go. "Foundation" = bản thiết kế truyện (premise + cấu trúc + nhân vật + luật thế giới) do module Architect sinh, Writer/Editor dùng làm ngữ cảnh khi viết từng chương.');
+    lines.push(`Cuốn đang xử lý: ${name}. Quy mô: ${n} chương. Thời điểm: ${year}.`);
+    lines.push('Workflow: bạn review → sửa file → người dùng bấm "Duyệt" → engine đọc lại foundation TỪ DISK → Writer chạy.');
+    lines.push('');
+    lines.push('## BƯỚC 1 — REVIEW (soi TRƯỚC khi sửa)');
+    lines.push('Sai ở foundation nhân lên thành hàng trăm chương — nghiêm khắc. Soi nhanh theo các trục chết người (truyện dài):');
+    axes.forEach((a) => lines.push(a));
+    lines.push('');
+    lines.push('Mục tiêu bước 1: xác định ĐÍCH XÁC vấn đề + file nào cần sửa + sửa gì. KHÔNG sửa bừa — chỉ sửa những gì review phát hiện.');
+    lines.push('');
+    lines.push('## BƯỚC 2 — EDIT (sửa file trực tiếp)');
+    lines.push('Dựa trên review ở bước 1, đọc & sửa trực tiếp 5 file foundation trên disk bằng edit tool.');
+    lines.push('');
+    lines.push('**PHẠM VI SỬA — chốt cứng, KHÔNG HỎI người dán:**');
+    lines.push('- CHỈ sửa 5 file foundation OUTPUT trong DIR (premise.md, meta/compass.json, layered_outline.json, world_rules.json, characters.json). Profile (profiles/*.md) là INPUT của user — KHÔNG sửa, chỉ dùng để so drift ở BƯỚC 1.');
+    lines.push('- KHI ĐỌC: đọc .md (render, dễ hiểu nội dung) + .json (để biết schema/key thật) — cả hai đều tồn tại trên disk. KHI SỬA: premise.md → sửa .md; 4 file còn lại → sửa .json (.md là render, engine bỏ qua, sửa vô tác dụng).');
+    lines.push('- Không hỏi "sửa profile hay output?", "sửa .md hay .json?" — quy tắc trên đã chốt. Nếu thấy 2 lựa chọn, tự quyết theo quy tắc, không hỏi ngược.');
+    lines.push('');
+    lines.push('Nguyên tắc:');
+    lines.push('1. SỬA SURGICAL: chỉ sửa nội dung/prose theo phát hiện review. KHÔNG regenerate toàn bộ file, KHÔNG đổi cấu trúc, KHÔNG thêm/bớt field JSON.');
+    lines.push('2. FILE GỐC (source of truth) — sửa đúng file:');
+    lines.push('   - premise.md          → sửa file .md này (markdown LÀ gốc, không có .json)');
+    lines.push('   - meta/compass.json   → sửa .json (KHÔNG có .md)');
+    lines.push('   - layered_outline.json→ sửa .json (.md kia chỉ là render, ENGINE BỎ QUA → sửa .md vô tác dụng)');
+    lines.push('   - world_rules.json    → sửa .json (.md là render)');
+    lines.push('   - characters.json     → sửa .json (.md là render)');
+    lines.push('3. NGÔN NGỮ: giữ nguyên tiếng Việt (theo rule lang-vi). KHÔNG "sửa" sang Trung/Anh dù engine core chạy prompt tiếng Trung — đó là by design, foundation output Việt là cấu hình đúng.');
+    lines.push('4. SCHEMA: KHÔNG rename key JSON (engine phụ thuộc field name: ending_direction, estimated_scale, open_threads, volumes/arcs/estimated_chapters, rules[], characters[]...). Nếu cần thêm luật/nhân vật → thêm phần tử vào mảng hiện có, giữ key cũ.');
+    lines.push('5. KHÔNG thêm/bớt chương/arc — chỉ sửa nội dung prose bên trong (theme/goal/twist/character fields). Việc này giữ outline ⇔ layered_outline ⇔ progress khớp tự nhiên.');
+    lines.push('');
+    lines.push('Nếu review thấy foundation ĐẠY chất lượng, KHÔNG sửa gì — báo "ĐẠY — không cần sửa" và dừng.');
+    lines.push('');
+    lines.push('## ĐỊA DANH');
+    lines.push(`JOB: ${info.jobId || id}`);
+    lines.push(`DIR: ${info.dir}`);
+    lines.push('FILES (đọc & sửa theo nguyên tắc #2 ở bước 2):');
+    files.forEach((f) => lines.push(`  ${f}`));
+    if (profileText) {
+      lines.push('');
+      lines.push('--- PROFILE GỐC (yêu cầu ban đầu — so foundation vs profile để phát hiện Architect drift ở bước 1) ---');
+      lines.push(profileText);
+    }
+    lines.push('');
+    lines.push('--- FOUNDATION HIỆN TẠI (để bạn review & biết đang sửa gì) ---');
+    lines.push(foundationText);
+    bundle = lines.join('\n').trim();
+  } catch (e) {
+    toast('Lỗi tạo bundle IDE: ' + e, 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(bundle);
+    const what = profileText ? '(có profile gốc)' : '(không profile — review nội bộ)';
+    toast(`Đã copy bundle Review & Edit ${what}. Dán cho agent IDE → agent soi foundation + sửa file trực tiếp.`, 'ok');
+  } catch (e) {
+    toast('Lỗi clipboard: ' + e, 'error');
   }
 }
 
@@ -1653,6 +1794,40 @@ function estimateScale(outline) {
   return sum;
 }
 
+// Trục soi chất lượng foundation (truyện dài) — source of truth dùng chung cho
+// cả copyReview (LLM ngoài) và copyIde (agent IDE). Sai ở foundation nhân lên
+// thành hàng trăm chương → nghiêm khắc. Khi sửa foundation, agent bám các trục
+// này để đảm bảo edit không phá chất lượng.
+//
+// AI-tell tách riêng (AI_TELL_AXIS) thay vì nằm trong mảng — luôn push cuối
+// trong buildReviewAxes, không phụ thuộc số lượng trục tĩnh. Trước đây dùng
+// splice(7,0,...) hardcoded vị trí → ai thêm/xóa trục thì vị trí 7 sai.
+const FOUNDATION_REVIEW_AXES = [
+  '- Nh\u00e2n v\u1eadt: want + wound + m\u00e2u thu\u1eabn r\u00f5, t\u00ean nh\u1ea5t qu\u00e1n, gi\u1ecdng ph\u00e2n bi\u1ec7t? T\u00e0i n\u0103ng l\u00f5i c\u00f3 GI\u1edaI H\u1ea0N (kh\u00f4ng "th\u00e1nh")?',
+  '- C\u00e1i gi\u00e1 th\u1eadt r\u1ea3i d\u1ecdc truy\u1ec7n, kh\u00f4ng ch\u1ec9 1 c\u00fa v\u1ea5p gi\u1eefa?',
+  '- Ph\u1ea3n di\u1ec7n C\u1ee4 TH\u1ec2, x\u1ee9ng t\u1ea7m, l\u1eb7p l\u1ea1i, m\u01b0u ri\u00eang \u2014 kh\u00f4ng "b\u1ed9 m\u00e1y v\u00f4 danh"?',
+  '- C\u01a1 ch\u1ebf l\u00f5i c\u00f3 LU\u1eacT + gi\u00e1 + gi\u1edbi h\u1ea1n? M\u01a1 h\u1ed3 \u2192 deus ex machina?',
+  '- Mid-pivot C\u1ee4 TH\u1ec2 ~40-60%, bu\u1ed9c \u0111\u1ed5i chi\u1ebfn l\u01b0\u1ee3c?',
+  '- Th\u1ec3 lo\u1ea1i ch\u00ednh \u0111\u01b0\u1ee3c c\u1ea5u tr\u00fac ph\u1ee5c v\u1ee5, kh\u00f4ng b\u1ecb nh\u00e1nh kh\u00e1c l\u1ea5n \u2192 l\u1ec7ch mood?',
+  '- K\u1ebft = c\u00e2u h\u1ecfi ch\u1ee7 \u0111\u1ec1 + c\u00f3 c\u00e1i gi\u00e1, kh\u00f4ng utopia?',
+];
+
+// Luôn ở cuối danh sách trục — tách khỏi mảng tĩnh để tránh splice hardcoded.
+const AI_TELL_AXIS = '- AI-tell: purple prose, "kh\u00f4ng ph\u1ea3i X m\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p, nh\u1ecbp \u0111\u1ec1u \u0111\u1ec1u?';
+
+// Xây danh sách trục đầy đủ: axes tĩnh + thị trường (dynamic theo năm) + AI-tell
+// (luôn cuối) + TRUNG THÀNH PROFILE (chỉ khi có profile, sau AI-tell). Dùng
+// chung cho 2 prompt (copyReview + copyIde).
+function buildReviewAxes(year, hasProfile) {
+  const axes = FOUNDATION_REVIEW_AXES.slice();
+  axes.push(`- H\u1ee3p gu th\u1ecb tr\u01b0\u1eddng m\u1ee5c ti\u00eau ${year}+ (m\u00e3 trope b\u1ea3n \u0111\u1ecba vs ngo\u1ea1i nh\u1eadp, k\u1ef3 v\u1ecdng c\u1ea3m x\u00fac, ng\u01b0\u1ee1ng 18+/ki\u1ec3m duy\u1ec7t)?`);
+  axes.push(AI_TELL_AXIS);
+  if (hasProfile) {
+    axes.push('- TRUNG TH\u00c0NH PROFILE: foundation c\u00f3 drift kh\u1ecfi \u00fd \u0111\u1ed3 g\u1ed1c kh\u00f4ng? \u0110\u1ed5i nh\u00e2n v\u1eadt/th\u1ec3 lo\u1ea1i/tone/l\u1eddi h\u1ee9a? L\u1eddi h\u1ee9a trong profile c\u00f3 \u0111\u01b0\u1ee3c reflect trong outline kh\u00f4ng?');
+  }
+  return axes;
+}
+
 // Prompt template \u00e9p LLM ngo\u00e0i xu\u1ea5t revision note ng\u1eafn (5-10 d\u00f2ng ch\u1ec9 th\u1ecb),
 // KH\u00d4NG ph\u00e2n t\u00edch d\u00e0i \u2014 v\u00ec output d\u00e1n v\u00e0o \u00f4 Revise, append v\u00e0o profile prompt
 // cho Architect. Architect c\u1ea7n ch\u1ec9 th\u1ecb r\u00f5, kh\u00f4ng c\u1ea7n l\u00fd do.
@@ -1664,21 +1839,7 @@ function buildFoundationReviewPrompt(foundation, opts) {
   const profileBlock = profile
     ? `\n\n--- PROFILE G\u1ed0C (y\u00eau c\u1ea7u ban \u0111\u1ea7u \u2014 so foundation vs profile \u0111\u1ec3 ph\u00e1t hi\u1ec7n Architect drift) ---\n${profile}\n`
     : '';
-  const faithAxis = profile
-    ? '- TRUNG TH\u00c0NH PROFILE: foundation c\u00f3 drift kh\u1ecfi \u00fd \u0111\u1ed3 g\u1ed1c kh\u00f4ng? \u0110\u1ed5i nh\u00e2n v\u1eadt/th\u1ec3 lo\u1ea1i/tone/l\u1eddi h\u1ee9a? L\u1eddi h\u1ee9a trong profile c\u00f3 \u0111\u01b0\u1ee3c reflect trong outline kh\u00f4ng?'
-    : '';
-  const axes = [
-    '- Nh\u00e2n v\u1eadt: want + wound + m\u00e2u thu\u1eabn r\u00f5, t\u00ean nh\u1ea5t qu\u00e1n, gi\u1ecdng ph\u00e2n bi\u1ec7t? T\u00e0i n\u0103ng l\u00f5i c\u00f3 GI\u1edaI H\u1ea0N (kh\u00f4ng "th\u00e1nh")?',
-    '- C\u00e1i gi\u00e1 th\u1eadt r\u1ea3i d\u1ecdc truy\u1ec7n, kh\u00f4ng ch\u1ec9 1 c\u00fa v\u1ea5p gi\u1eefa?',
-    '- Ph\u1ea3n di\u1ec7n C\u1ee4 TH\u1ec2, x\u1ee9ng t\u1ea7m, l\u1eb7p l\u1ea1i, m\u01b0u ri\u00eang \u2014 kh\u00f4ng "b\u1ed9 m\u00e1y v\u00f4 danh"?',
-    '- C\u01a1 ch\u1ebf l\u00f5i c\u00f3 LU\u1eacT + gi\u00e1 + gi\u1edbi h\u1ea1n? M\u01a1 h\u1ed3 \u2192 deus ex machina?',
-    '- Mid-pivot C\u1ee4 TH\u1ec2 ~40-60%, bu\u1ed9c \u0111\u1ed5i chi\u1ebfn l\u01b0\u1ee3c?',
-    '- Th\u1ec3 lo\u1ea1i ch\u00ednh \u0111\u01b0\u1ee3c c\u1ea5u tr\u00fac ph\u1ee5c v\u1ee5, kh\u00f4ng b\u1ecb nh\u00e1nh kh\u00e1c l\u1ea5n \u2192 l\u1ec7ch mood?',
-    '- K\u1ebft = c\u00e2u h\u1ecfi ch\u1ee7 \u0111\u1ec1 + c\u00f3 c\u00e1i gi\u00e1, kh\u00f4ng utopia?',
-    `- H\u1ee3p gu th\u1ecb tr\u01b0\u1eddng m\u1ee5c ti\u00eau ${year}+ (m\u00e3 trope b\u1ea3n \u0111\u1ecba vs ngo\u1ea1i nh\u1eadp, k\u1ef3 v\u1ecdng c\u1ea3m x\u00fac, ng\u01b0\u1ee1ng 18+/ki\u1ec3m duy\u1ec7t)?`,
-    '- AI-tell: purple prose, "kh\u00f4ng ph\u1ea3i X m\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p, nh\u1ecbp \u0111\u1ec1u \u0111\u1ec1u?',
-  ];
-  if (faithAxis) axes.push(faithAxis);
+  const axes = buildReviewAxes(year, !!profile);
   return `B\u1ea1n l\u00e0 bi\u00ean t\u1eadp vi\u00ean k\u1ef3 c\u1ef1u chuy\u00ean ti\u1ec3u thuy\u1ebft m\u1ea1ng d\u00e0i k\u1ef3. Nhi\u1ec7m v\u1ee5: SO\u00c1T m\u1ed9t "n\u1ec1n m\u00f3ng" (foundation: premise + outline + nh\u00e2n v\u1eadt + world rules) m\u00e0 m\u1ed9t cu\u1ed1n ${n} ch\u01b0\u01a1ng s\u1ebd tri\u1ec3n khai. Sai \u1edf \u0111\u00e2y nh\u00e2n l\u00ean th\u00e0nh h\u00e0ng tr\u0103m ch\u01b0\u01a1ng \u2014 nghi\u00eam kh\u1eafc.
 
 Cu\u1ed1n: ${name}. Th\u1eddi \u0111i\u1ec3m: ${year}.
@@ -1761,10 +1922,17 @@ function renderProductionRuns() {
   }
   ul.innerHTML = productionRunsCache.map((r) => {
     const selected = r.id === productionSelectedRunId ? ' selected' : '';
+    // Health dot trong list item: chỉ hiện khi overall ≠ idle/good để tránh
+    // nhiễu cho run khỏe. bad → đỏ, warn → vàng.
+    let dot = '';
+    if (r.health && HEALTH_LEVELS.includes(r.health.overall) && r.health.overall !== 'idle' && r.health.overall !== 'good') {
+      const o = HEALTH_OVERALL[r.health.overall];
+      dot = `<span class="run-health-dot health-${r.health.overall}" title="${escapeHtml(o.text)}">${o.icon}</span>`;
+    }
     return `<li class="run-item${selected}" data-run-id="${escapeHtml(r.id)}" tabindex="0">
       <div class="run-item-head">
         <span class="run-item-name">${escapeHtml(r.name || r.id)}</span>
-        <span class="run-badge run-badge-${r.status}">${escapeHtml(statusLabel(r.status))}</span>
+        ${dot}<span class="run-badge run-badge-${r.status}">${escapeHtml(statusLabel(r.status))}</span>
       </div>
       <div class="run-item-meta">${escapeHtml(productionRunKindLabel(r))} \u00b7 ${r.chapters || 0}/${r.targetChapters} ch\u01b0\u01a1ng \u00b7 $${(r.costUsd || 0).toFixed(2)}</div>
     </li>`;
@@ -1809,6 +1977,7 @@ async function renderProductionDetail(run) {
   const canSync = run.chapters > 0 && run.status !== 'running' && run.status !== 'paused';
   const canApprove = run.status === 'awaiting_review';
   const canReject = run.status === 'awaiting_review';
+  const canResume = run.status === 'failed' || run.status === 'cancelled';
 
   const previewInner = foundationPreviewCache[run.id] || '\u0110ang t\u1ea3i\u2026';
   const foundationHtml = run.status === 'awaiting_review'
@@ -1826,6 +1995,15 @@ async function renderProductionDetail(run) {
       + '<div class="run-edit-title">📋 Copy cho LLM ngoài soi</div>'
       + '<p class="muted">Copy foundation + profile gốc + prompt đã sẵn → dán vào GPT/Claude → nhận <strong>5-10 dòng revision note ngắn</strong> → dán vào ô "Nhờ AI viết lại" bên dưới. Prompt ép LLM so foundation vs profile (bắt drift) + xuất chỉ thị ngắn, không phân tích dài.</p>'
       + `<button class="btn" data-action="copyReview" data-run-id="${escapeHtml(run.id)}">📋 Copy foundation + prompt review</button>`
+      + '</div>'
+      // Cách 1c: copy bundle Review & Edit cho agent IDE (Kilo/Cursor) — agent
+      // soi foundation theo các tiêu chí then chốt + so profile, RỒI sửa file
+      // trực tiếp (surgical). Khác copyReview (LLM ngoài chỉ output note →
+      // regenerate), khác Revise (regenerate toàn bộ). IDE = review + edit 1 bước.
+      + '<div class="run-review-llm-box">'
+      + '<div class="run-edit-title">📋 Copy cho IDE soi & sửa file (review + edit)</div>'
+      + '<p class="muted">Agent IDE soi foundation theo các tiêu chí then chốt (nhân vật, cái giá, phản diện, mid-pivot, kết cục…) + so profile gốc → phát hiện vấn đề → sửa trực tiếp 5 file JSON/MD (surgical, không regenerate). Nhanh hơn "Nhờ AI viết lại", chính xác hơn sửa tay.</p>'
+      + `<button class="btn" data-action="copyIde" data-run-id="${escapeHtml(run.id)}">📋 Copy bundle Review & Edit cho IDE</button>`
       + '</div>'
       // Cách 2: nhờ AI viết lại (KHÔNG phải sửa từng dòng).
       + '<div class="run-revise-box">'
@@ -1860,11 +2038,13 @@ async function renderProductionDetail(run) {
         <button class="btn primary" data-action="start" data-run-id="${escapeHtml(run.id)}" ${!canStart ? 'disabled' : ''}>\u25b6 B\u1eaft \u0111\u1ea7u</button>
         <button class="btn primary" data-action="approve" data-run-id="${escapeHtml(run.id)}" ${!canApprove ? 'disabled' : ''}>\u2713 Duy\u1ec7t, ti\u1ebfp t\u1ee5c vi\u1ebft</button>
         <button class="btn danger" data-action="reject" data-run-id="${escapeHtml(run.id)}" ${!canReject ? 'disabled' : ''}>\u2715 T\u1eeb ch\u1ed1i</button>
+        <button class="btn primary" data-action="resume" data-run-id="${escapeHtml(run.id)}" ${!canResume ? 'disabled' : ''}>\u21bb Ti\u1ebfp t\u1ee5c</button>
         <button class="btn danger" data-action="stop" data-run-id="${escapeHtml(run.id)}" ${!canStop ? 'disabled' : ''}>\u25a0 D\u1eebng</button>
         <button class="btn" data-action="export" data-run-id="${escapeHtml(run.id)}" ${!canExport ? 'disabled' : ''}>\u2b07 Xu\u1ea5t TXT</button>
         <button class="btn" data-action="sync" data-run-id="${escapeHtml(run.id)}" ${!canSync ? 'disabled' : ''}>\ud83d\udd04 \u0110\u1ed3ng b\u1ed9</button>
         <button class="btn danger" data-action="delete" data-run-id="${escapeHtml(run.id)}" ${!canDelete ? 'disabled' : ''}>\ud83d\uddd1 X\u00f3a</button>
       </div>
+      ${canResume ? '<div class="run-steer-box"><label for="runSteerInput">Steer khi ti\u1ebfp t\u1ee5c (t\u00f9y ch\u1ecdn)</label><textarea id="runSteerInput" rows="3" placeholder="vd: t\u1eeb ch\u01b0\u01a1ng t\u1edbi, m\u1ed7i 4-5 ch\u01b0\u01a1ng ch\u00e8n 1 nh\u1ecbp s\u1ee7ng c\u1ee5 th\u1ec3 + \u0111a d\u1ea1ng nh\u1ecbp c\u00e2u, gi\u1ea3m bond n\u1ec1n \u1ea5m \u0111\u1ec1u"></textarea><div class="run-steer-hint">Ghi v\u00e0o sandbox tr\u01b0\u1edbc start \u2192 headless Resume inject v\u00e0o Coordinator ngay ch\u01b0\u01a1ng k\u1ebf. Steer m\u1ec1m, kh\u00f4ng c\u1ee9ng.</div></div>' : ''}
       ${run.possiblyOrphaned ? '<div class="run-orphan-warning">\u26a0 Job n\u00e0y c\u00f3 th\u1ec3 c\u00f2n ti\u1ebfn tr\u00ecnh con m\u1ed3 c\u00f4i. Ki\u1ec3m tra PID ' + (run.childPid || '\u2014') + '.</div>' : ''}
       ${foundationHtml}
       <h4>Nh\u1eadt k\u00fd</h4>
@@ -1889,6 +2069,7 @@ const HEALTH_METRIC_LABELS = {
   rewrite_rate: 'Vi\u1ebft l\u1ea1i',
   cost_pace: 'Chi ph\u00ed/ch\u01b0\u01a1ng',
   budget: 'Ng\u00e2n s\u00e1ch',
+  persist: 'L\u01b0u tr\u1eef',
 };
 
 const HEALTH_OVERALL = {
