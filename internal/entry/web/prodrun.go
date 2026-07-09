@@ -99,6 +99,11 @@ type ProdRun struct {
 	LogPath          string    `json:"logPath,omitempty"`
 	PossiblyOrphaned bool      `json:"possiblyOrphaned"`
 	SeededFrom       *SeedMeta `json:"seededFrom,omitempty"`
+	// PersistError ghi lỗi lần persist jobs.json gần nhất (thường do Windows
+	// file lock khi IDE/editor mở jobs.json). Rỗng khi persist OK. UI health
+	// strip dùng field này để hiện chip đỏ + toast báo user tắt editor.
+	PersistError   string    `json:"persistError,omitempty"`
+	PersistErrorAt time.Time `json:"persistErrorAt,omitempty"`
 	// FoundationApproved is set once the user approves an awaiting_review run
 	// (Foundation Gate). Without this, poll()'s foundation-ready
 	// check would re-fire on every restart: right after approve-resume,
@@ -149,6 +154,10 @@ type prodRunStore struct {
 	jobsDir string
 	runs    map[string]*ProdRun
 	nextID  int
+	// persistFailForTest, khi != nil, làm saveLocked trả error này thay vì persist
+	// thật. Chỉ để test inject (unexported, nil ở production). Dùng cho regression
+	// test P0: verify killProcess vẫn chạy khi persist fail.
+	persistFailForTest error
 }
 
 // newProdRunStore creates or loads the store at jobsDir/jobs.json.
@@ -196,6 +205,11 @@ func (ps *prodRunStore) load() error {
 			r.PossiblyOrphaned = true
 			r.StoppedAt = time.Now()
 		}
+		// Restart = fresh start: clear PersistError từ session cũ. Lỗi file
+		// lock có thể đã hết (editor đóng), và run terminal không còn poll để
+		// tự clear. Nếu lock vẫn còn, poll tiếp theo sẽ set lại PersistError.
+		r.PersistError = ""
+		r.PersistErrorAt = time.Time{}
 	}
 	ps.nextID = max + 1
 	// Persist the unclean-shutdown recovery so the UI sees it after restart.
@@ -221,7 +235,10 @@ func (ps *prodRunStore) save() error {
 }
 
 func (ps *prodRunStore) saveLocked() error {
-	if err := os.MkdirAll(ps.jobsDir, 0o755); err != nil {
+	if ps.persistFailForTest != nil {
+		return ps.persistFailForTest
+	}
+	if err := os.MkdirAll(filepath.Dir(ps.path), 0o755); err != nil {
 		return fmt.Errorf("create jobs dir: %w", err)
 	}
 	list := ps.listLocked()
@@ -233,7 +250,19 @@ func (ps *prodRunStore) saveLocked() error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("write prodrun store tmp: %w", err)
 	}
-	return os.Rename(tmp, ps.path)
+	// Rename có retry: Windows lock khi IDE/editor mở jobs.json (Access is denied).
+	// safeWriteFile (prodrun_runner.go) đã dùng cùng pattern cho workspace files;
+	// jobs.json dễ bị lock nhất nên cũng cần retry. Linux/Mac rename atomic,
+	// retry thành công lần đầu → không hại cross-platform.
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		if lastErr = os.Rename(tmp, ps.path); lastErr == nil {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = os.Remove(tmp)
+	return lastErr
 }
 
 type prodRunCreateOptions struct {
@@ -330,7 +359,9 @@ func (ps *prodRunStore) listLocked() []*ProdRun {
 
 // update calls fn with the run locked, persists the store, and returns a snapshot.
 // The underlying run is mutated even if persistence fails, so the in-memory state
-// does not get stuck.
+// does not get stuck. Khi saveLocked fail, PersistError/PersistErrorAt được ghi
+// vào run (in-memory) để UI health strip báo user; persist lại best-effort (không
+// đệ quy vô tận: nếu lại fail thì bỏ qua, lỗi cũ vẫn còn trong memory).
 func (ps *prodRunStore) update(id string, fn func(*ProdRun)) (*ProdRun, error) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
@@ -340,8 +371,17 @@ func (ps *prodRunStore) update(id string, fn func(*ProdRun)) (*ProdRun, error) {
 		return nil, fmt.Errorf("run %q not found", id)
 	}
 	fn(r)
+	if err := ps.saveLocked(); err != nil {
+		r.PersistError = err.Error()
+		r.PersistErrorAt = time.Now()
+		_ = ps.saveLocked() // best-effort ghi luôn lỗi; lại fail thì thôi
+		cp := *r
+		return &cp, err
+	}
+	r.PersistError = ""
+	r.PersistErrorAt = time.Time{}
 	cp := *r
-	return &cp, ps.saveLocked()
+	return &cp, nil
 }
 
 // delete removes a terminal run from the store and optionally its run directory.

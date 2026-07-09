@@ -333,6 +333,81 @@ func TestRunnerTargetChaptersKillsProcess(t *testing.T) {
 	}
 }
 
+// TestRunnerTargetChaptersKillsDespitePersistFail là regression test cho P0:
+// khi saveLocked fail (Windows file lock), killProcess VẪN phải chạy để child
+// process không tiếp tục tiêu tiền sau khi đã đạt target-chapters. Trước fix,
+// dòng `return` trong nhánh err bỏ qua killProcess → process sống sót.
+//
+// Inject lỗi qua persistFailForTest (field unexported, nil ở production) thay
+// vì phụ thuộc Windows file lock thật (flaky cross-platform).
+func TestRunnerTargetChaptersKillsDespitePersistFail(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	_ = os.MkdirAll(profileDir, 0o755)
+	_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 200 * time.Millisecond
+	finished := make(chan struct{})
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd {
+		return helperCommand(30000)
+	}
+	runner.onCmdFinished = func(cmd *exec.Cmd, err error) { close(finished) }
+
+	r, err := ps.create("target-persist-fail", "profiles/x.md", "", "", 1, 1)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := runner.start(r.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Inject persist fail SAU start (start cũng persist để set running). Từ đây
+	// mọi saveLocked fail → mô phỏng Windows lock xuất hiện giữa chừng run.
+	ps.persistFailForTest = errors.New("simulated file lock")
+	time.Sleep(50 * time.Millisecond)
+
+	progressDir := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta")
+	if err := os.MkdirAll(progressDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(progressDir, "progress.json"), []byte(`{"completed_chapters":[1]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Poll cho đến khi child process bị kill (finished close) HOẶC target-reached
+	// in-memory được set. Vì persist fail, disk stale, nhưng in-memory phải
+	// completed + PersistError được surface.
+	for i := 0; i < 200; i++ {
+		if ps.get(r.ID).StopReason == stopReasonTargetReached {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	select {
+	case <-finished:
+		// Child process đã bị kill — đây là assertion cốt lõi của P0.
+	case <-time.After(5 * time.Second):
+		t.Fatal("child process NOT killed after target-reached despite persist fail — P0 regression")
+	}
+
+	run := ps.get(r.ID)
+	if run.Status != prodRunCompleted || run.StopReason != stopReasonTargetReached {
+		t.Fatalf("expected in-memory completed/target_reached, got status=%s reason=%s", run.Status, run.StopReason)
+	}
+	// PersistError phải được surface (update() ghi khi saveLocked fail) để UI
+	// health strip báo user.
+	if run.PersistError == "" {
+		t.Fatal("expected PersistError to be surfaced after persist fail, got empty")
+	}
+}
+
 func TestRunnerPollReadsProgressAndReviews(t *testing.T) {
 	dir := t.TempDir()
 	repoRoot := t.TempDir()

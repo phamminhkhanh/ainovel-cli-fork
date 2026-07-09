@@ -1,6 +1,9 @@
 package web
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Health strip for a production run: a compact, at-a-glance answer to "is this
 // run on track / should I review it?" It is 100% derived from fields the runner
@@ -80,6 +83,7 @@ func computeRunHealth(r *ProdRun) runHealth {
 		rewriteRateMetric(r),
 		costPaceMetric(r),
 		budgetMetric(r),
+		persistMetric(r),
 	}
 
 	overall := healthIdle
@@ -178,6 +182,25 @@ func budgetMetric(r *ProdRun) healthMetric {
 	return healthMetric{
 		Key:   "budget",
 		Value: fmt.Sprintf("%d%%", int(used*100+0.5)),
+		Level: level,
+	}
+}
+
+// persistMetric báo trạng thái lưu jobs.json. Khi persist OK → idle (ẩn chip,
+// không nhiễu). Khi có PersistError (thường Windows file lock do IDE mở jobs.json)
+// → bad (đỏ) nếu lỗi mới (<5 phút), warn (vàng) nếu lỗi cũ không tái diễn.
+func persistMetric(r *ProdRun) healthMetric {
+	if r.PersistError == "" {
+		return healthMetric{Key: "persist", Value: "ok", Level: healthIdle}
+	}
+	age := time.Since(r.PersistErrorAt)
+	level := healthBad
+	if age > 5*time.Minute {
+		level = healthWarn
+	}
+	return healthMetric{
+		Key:   "persist",
+		Value: "file lock",
 		Level: level,
 	}
 }

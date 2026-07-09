@@ -304,7 +304,10 @@ func (rr *prodRunRunner) poll(id string) {
 		}
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "prodrun: failed to persist target-reached status for %s: %v\n", id, err)
-		return
+		// Không return: process vẫn phải bị kill để không tiếp tục tiêu tiền
+		// sau khi đã đạt target-chapters. In-memory đã set targetReached=true
+		// trong closure (chạy trước saveLocked), nên killProcess phải chạy.
+		// PersistError đã được update() ghi nội bộ → UI health strip sẽ báo.
 	}
 	if targetReached {
 		rr.killProcess(id)
