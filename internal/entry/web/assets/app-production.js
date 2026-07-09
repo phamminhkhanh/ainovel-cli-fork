@@ -296,7 +296,7 @@ function bindProductionEvents() {
   $('#profileLibItems')?.addEventListener('click', (e) => {
     const li = e.target.closest('[data-profile-path]');
     if (!li) return;
-    if (!confirmDiscardProfileDraft()) return;
+    if (!confirmDiscardProfileDraft('Chọn profile')) return;
     profileLibLoad(li.dataset.profilePath, li.dataset.profileSource);
   });
 
@@ -324,6 +324,7 @@ function bindProductionEvents() {
     else if (btn.dataset.action === 'reject') rejectProductionRun(id);
     else if (btn.dataset.action === 'revise') reviseProductionRun(id);
     else if (btn.dataset.action === 'reveal') revealFoundationFolder(id);
+    else if (btn.dataset.action === 'copyReview') copyFoundationForReview(id);
   });
 }
 
@@ -990,20 +991,77 @@ async function generateProfileFromIdea() {
   btn.disabled = true;
   btn.textContent = '\u23f3 \u0110ang sinh...';
   hint.textContent = '';
+  const out = $('#studioOutput');
+  out.value = '';
   try {
-    const res = await post('/api/profiles/generate', body);
-    if (res && res.content) {
-      $('#studioOutput').value = res.content;
+    const r = await fetch('/api/profiles/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      toast(data.error || ('HTTP ' + r.status), 'error');
+      return;
+    }
+    // SSE stream: data: {type:profileDelta|profileDone|profileError, text:...}
+    // Read deltas live so the textarea fills as the model writes, and so the
+    // connection stays active (no 504 from the LTN proxy on a stalled response).
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let final = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const line = frame.startsWith('data: ') ? frame.slice(6) : frame;
+        if (!line) continue;
+        let m;
+        try { m = JSON.parse(line); } catch { continue; }
+        if (m.type === 'profileDelta' && m.text) {
+          out.value += m.text;
+          out.scrollTop = out.scrollHeight;
+        } else if (m.type === 'profileThinking') {
+          // Reasoning model is in its thinking phase; show a live status so the
+          // user knows it isn't stalled, but keep reasoning text out of the
+          // profile textarea (only final content belongs there).
+          if (!hint.textContent.startsWith('🧠')) {
+            hint.textContent = '🧠 Đang suy nghĩ... (model thinking, chưa ra nội dung)';
+          }
+        } else if (m.type === 'profileDone') {
+          final = m.text || '';
+          out.value = final;
+        } else if (m.type === 'profileError') {
+          throw new Error(m.text || 'profile generate failed');
+        }
+      }
+    }
+    if (final) {
       hint.textContent = '\u2705 \u0110\u00e3 sinh xong! S\u1eeda n\u1ebfu c\u1ea7n r\u1ed3i b\u1ea5m "L\u01b0u Profile".';
       toast('\u0110\u00e3 sinh profile th\u00e0nh c\u00f4ng', 'ok');
-      // Auto-fill name from content title
-      const match = res.content.match(/^#\s+(.+)/m);
+      const match = final.match(/^#\s+(.+)/m);
       if (match && !$('#profileLibName').value.trim()) {
         $('#profileLibName').value = match[1].replace(/[^\w\-]/g, '-').toLowerCase().slice(0, 40);
       }
+    } else if (!out.value.trim()) {
+      throw new Error('model returned empty profile');
+    } else {
+      // Stream bị cắt giữa chừng: có nội dung nhưng chưa nhận profileDone. Ném
+      // vào catch để hiện "Dịch bị cắt ... (giữ nội dung đã nhận)" thay vì lặng
+      // lẽ thoát (user tưởng gen xong).
+      throw new Error('stream interrupted before completion');
     }
   } catch (e) {
-    hint.textContent = '\u274c L\u1ed7i: ' + e;
+    if (out.value.trim()) {
+      hint.textContent = '\u274c D\u1ecbch b\u1ecb c\u1eaft: ' + e + ' (gi\u1eef n\u1ed9i dung \u0111\u00e3 nh\u1eadn)';
+    } else {
+      hint.textContent = '\u274c L\u1ed7i: ' + e;
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = prev;
@@ -1423,6 +1481,223 @@ async function loadFoundationPreview(id) {
   }
 }
 
+// Foundation Gate review: copy foundation + prompt review s\u1eb5n cho LLM ngo\u00e0i soi.
+// Kh\u00e1c loadFoundationPreview (xu\u1ea5t HTML), h\u00e0m n\u00e0y xu\u1ea5t PLAIN TEXT markdown \u0111\u1ec3
+// d\u00e1n th\u1eb3ng v\u00e0o GPT/Claude. Prompt \u00e9p LLM xu\u1ea5t 5-10 d\u00f2ng revision note ng\u1eafn
+// (m\u1ed7i d\u00f2ng 1 ch\u1ec9 th\u1ecb c\u1ee5 th\u1ec3 cho Architect), KH\u00d4NG ph\u00e2n t\u00edch d\u00e0i \u2014 v\u00ec output
+// s\u1ebd d\u00e1n v\u00e0o \u00f4 "Nh\u1edd AI vi\u1ebft l\u1ea1i" (Revise), \u0111\u01b0\u1ee3c append v\u00e0o profile prompt cho
+// Architect \u0111\u1ecdc. Architect c\u1ea7n ch\u1ec9 th\u1ecb r\u00f5, kh\u00f4ng c\u1ea7n l\u00fd do.
+async function copyFoundationForReview(id) {
+  const run = productionRunsCache.find((r) => r.id === id);
+  let built;
+  try {
+    built = await buildFoundationText(id);
+  } catch (e) {
+    toast('L\u1ed7i t\u1ea3i n\u1ec1n m\u00f3ng: ' + e, 'error');
+    return;
+  }
+  const foundationText = built?.text || '';
+  if (!foundationText) {
+    toast('Ch\u01b0a \u0111\u1ecdc \u0111\u01b0\u1ee3c n\u1ec1n m\u00f3ng \u0111\u1ec3 review', 'error');
+    return;
+  }
+  // Profile g\u1ed1c (y\u00eau c\u1ea7u ban \u0111\u1ea7u) \u2014 reviewer c\u1ea7n \u0111\u1ec3 ph\u00e1t hi\u1ec7n Architect drift
+  // kh\u1ecfi \u00fd \u0111\u1ed3 (\u0111\u1ed5i nh\u00e2n v\u1eadt/th\u1ec3 lo\u1ea1i/tone/l\u1eddi h\u1ee9a trong outline). continue_workspace
+  // run kh\u00f4ng c\u00f3 profile \u2192 review ch\u1ec9 so\u00e1t n\u1ed9i b\u1ed9 foundation. Fetch fail = non-fatal.
+  let profileText = '';
+  if (run?.profile) {
+    try {
+      const r = await fetch('/api/profiles/content?path=' + encodeURIComponent(run.profile));
+      if (r.ok) {
+        const data = await r.json();
+        profileText = (data.content || '').trim();
+      }
+    } catch (_) { /* non-fatal: review kh\u00f4ng profile */ }
+  }
+  const payload = buildFoundationReviewPrompt(foundationText, {
+    profile: profileText,
+    // Header n: ưu tiên quy mô thực của foundation (compass.estimated_scale
+    // hoặc sum arc.chapterCount) — targetChapters hay rơi default 30, gây
+    // reviewer confuse "30 vs 300" khi Architect plan 300 chương.
+    chapters: built.scale || run?.targetChapters || 0,
+    name: run?.name || id,
+  });
+  try {
+    await navigator.clipboard.writeText(payload);
+    const what = profileText ? 'foundation + profile' : 'foundation (kh\u00f4ng c\u00f3 profile g\u1ed1c)';
+    toast(`\u0110\u00e3 copy ${what} + prompt review. D\u00e1n v\u00e0o GPT/Claude \u2192 nh\u1eadn revision note ng\u1eafn \u2192 d\u00e1n v\u00e0o \u00f4 "Nh\u1edd AI vi\u1ebft l\u1ea1i".`, 'ok');
+  } catch (e) {
+    toast('L\u1ed7i clipboard: ' + e, 'error');
+  }
+}
+
+// Gom 3 section foundation (outline/world/characters) th\u00e0nh 1 plain text block.
+// Reuse field shapes c\u1ee7a loadFoundationPreview. B\u1ecf HTML escape \u2014 text clipboard.
+async function buildFoundationText(id) {
+  const [outlineRes, worldRes, charRes] = await Promise.all([
+    fetch(`/api/prodruns/${id}/foundation`),
+    fetch(`/api/prodruns/${id}/foundation?section=world`),
+    fetch(`/api/prodruns/${id}/foundation?section=characters`),
+  ]);
+  const outline = outlineRes.ok ? await outlineRes.json() : null;
+  const world = worldRes.ok ? await worldRes.json() : null;
+  const chars = charRes.ok ? await charRes.json() : null;
+  if (!outline && !world && !chars) return '';
+
+  const lines = [];
+  lines.push('# PREMISE');
+  lines.push(outline?.premise || '(ch\u01b0a c\u00f3 premise)');
+  lines.push('');
+
+  // Compass (ending_direction / open_threads / estimated_scale / last_updated)
+  // n\u1ebfu c\u00f3 \u2014 anchor "truy\u1ec7n \u0111i v\u1ec1 \u0111\u00e2u / thread n\u00e0o ph\u1ea3i thu",
+  // gi\u00fap reviewer soi b\u00e1m \u0111\u00edch v\u00e0 ph\u00e1t hi\u1ec7n drift \u0111\u1ed3nh nh\u1ea5t.
+  // Field theo domain.StoryCompass (story.go:54-59), KH\u00d4NG goal/theme/genre.
+  const cmp = outline?.compass;
+  if (cmp && typeof cmp === 'object') {
+    const parts = [];
+    if (cmp.ending_direction) parts.push('H\u01b0\u1edbng k\u1ebft: ' + cmp.ending_direction);
+    if (cmp.estimated_scale) parts.push('Quy m\u00f4 \u01b0\u1edbc t\u00ednh: ' + cmp.estimated_scale);
+    if (Array.isArray(cmp.open_threads) && cmp.open_threads.length) parts.push('Thread m\u1edf: ' + cmp.open_threads.join('; '));
+    if (typeof cmp.last_updated === 'number') parts.push('C\u1eadp nh\u1eadt @ ch' + cmp.last_updated);
+    if (parts.length) {
+      lines.push('# COMPASS');
+      lines.push(parts.join('\n'));
+      lines.push('');
+    }
+  }
+
+  const volumes = Array.isArray(outline?.layered) ? outline.layered : [];
+  if (volumes.length) {
+    lines.push('# C\u1ea4U TR\u00daC TRUY\u1ec6N (volume/arc \u2014 theme/twist)');
+    volumes.forEach((v) => {
+      const vnum = v.index != null ? v.index : '?';
+      lines.push(`## Volume ${vnum}: ${v.title || ''}${v.final ? ' [\u0111\u1ee9c k\u1ebft]' : ''}`);
+      if (v.theme) lines.push('Theme: ' + v.theme);
+      const arcs = Array.isArray(v.arcs) ? v.arcs : [];
+      arcs.forEach((a) => {
+        const at = a.title || '';
+        const goal = a.goal || a.theme || '';
+        const est = a.estimated_chapters ? ` (${a.estimated_chapters} ch\u01b0\u01a1ng)` : '';
+        lines.push(`- Arc ${a.index != null ? a.index : '?'}: ${at}${est}${goal ? ' \u2014 ' + goal : ''}`);
+      });
+      lines.push('');
+    });
+  }
+
+  const outlineList = Array.isArray(outline?.outline) ? outline.outline : [];
+  if (outlineList.length) {
+    lines.push(`# CH\u01af\u01a0NG \u0110\u00c3 TRI\u1ec2N KHAI (${outlineList.length})`);
+    outlineList.forEach((c) => {
+      const num = c.chapter != null ? c.chapter : (c.index != null ? c.index : '?');
+      const title = c.title || c.core_event || c.event || '';
+      lines.push(`${num}. ${title}`);
+    });
+    lines.push('');
+  }
+
+  const charList = Array.isArray(chars?.characters) ? chars.characters : [];
+  const supporting = Array.isArray(chars?.supporting) ? chars.supporting : [];
+  if (charList.length || supporting.length) {
+    const all = charList.concat(supporting);
+    lines.push(`# NH\u00c2N V\u1eacT (${all.length})`);
+    all.forEach((c) => {
+      const name = c.name || c.id || '?';
+      const bits = [];
+      if (Array.isArray(c.aliases) && c.aliases.length) bits.push('aka: ' + c.aliases.join(', '));
+      if (c.role) bits.push('Role: ' + c.role);
+      if (c.tier) bits.push('Tier: ' + c.tier);
+      if (c.description) bits.push('Desc: ' + c.description);
+      if (c.arc) bits.push('Arc: ' + c.arc);
+      if (Array.isArray(c.traits) && c.traits.length) bits.push('Traits: ' + c.traits.join(', '));
+      lines.push(bits.length ? `- ${name} \u2014 ${bits.join(' | ')}` : `- ${name}`);
+    });
+    lines.push('');
+  }
+
+  const rules = Array.isArray(world?.rules) ? world.rules : [];
+  if (rules.length) {
+    lines.push(`# WORLD RULES (${rules.length})`);
+    rules.forEach((r) => {
+      const t = typeof r === 'string' ? r : (r.rule || r.description || r.name || JSON.stringify(r));
+      lines.push('- ' + t);
+    });
+    lines.push('');
+  }
+
+  return { text: lines.join('\n').trim(), scale: estimateScale(outline) };
+}
+
+// Ước tính quy mô thực của foundation (chương), ưu tiên:
+// 1) compass.estimated_scale (vd "5-6 卷" / "300 chương") — Architect tự chốt
+// 2) sum chương trong layered outline: arc.estimated_chapters (chưa展开) +
+//    arc.chapters.length (đã 展开) — theo domain.ArcOutline (story.go:62-68)
+// 3) 0 = không rõ. Dùng cho header prompt khi conflict với run.targetChapters
+// (targetChapters hay rơi về default 30, gây reviewer confuse "30 vs 300").
+function estimateScale(outline) {
+  const cmp = outline?.compass;
+  if (cmp?.estimated_scale) {
+    const m = String(cmp.estimated_scale).match(/(\d{2,4})/);
+    if (m) return parseInt(m[1], 10);
+  }
+  const volumes = Array.isArray(outline?.layered) ? outline.layered : [];
+  let sum = 0;
+  volumes.forEach((v) => {
+    const arcs = Array.isArray(v?.arcs) ? v.arcs : [];
+    arcs.forEach((a) => {
+      const est = parseInt(a?.estimated_chapters || 0, 10);
+      if (est > 0) sum += est;
+      else if (Array.isArray(a?.chapters)) sum += a.chapters.length;
+    });
+  });
+  return sum;
+}
+
+// Prompt template \u00e9p LLM ngo\u00e0i xu\u1ea5t revision note ng\u1eafn (5-10 d\u00f2ng ch\u1ec9 th\u1ecb),
+// KH\u00d4NG ph\u00e2n t\u00edch d\u00e0i \u2014 v\u00ec output d\u00e1n v\u00e0o \u00f4 Revise, append v\u00e0o profile prompt
+// cho Architect. Architect c\u1ea7n ch\u1ec9 th\u1ecb r\u00f5, kh\u00f4ng c\u1ea7n l\u00fd do.
+function buildFoundationReviewPrompt(foundation, opts) {
+  const n = opts?.chapters || '(ch\u01b0a r\u00f5)';
+  const name = opts?.name || '(ch\u01b0a r\u00f5)';
+  const profile = (opts?.profile || '').trim();
+  const year = new Date().getFullYear();
+  const profileBlock = profile
+    ? `\n\n--- PROFILE G\u1ed0C (y\u00eau c\u1ea7u ban \u0111\u1ea7u \u2014 so foundation vs profile \u0111\u1ec3 ph\u00e1t hi\u1ec7n Architect drift) ---\n${profile}\n`
+    : '';
+  const faithAxis = profile
+    ? '- TRUNG TH\u00c0NH PROFILE: foundation c\u00f3 drift kh\u1ecfi \u00fd \u0111\u1ed3 g\u1ed1c kh\u00f4ng? \u0110\u1ed5i nh\u00e2n v\u1eadt/th\u1ec3 lo\u1ea1i/tone/l\u1eddi h\u1ee9a? L\u1eddi h\u1ee9a trong profile c\u00f3 \u0111\u01b0\u1ee3c reflect trong outline kh\u00f4ng?'
+    : '';
+  const axes = [
+    '- Nh\u00e2n v\u1eadt: want + wound + m\u00e2u thu\u1eabn r\u00f5, t\u00ean nh\u1ea5t qu\u00e1n, gi\u1ecdng ph\u00e2n bi\u1ec7t? T\u00e0i n\u0103ng l\u00f5i c\u00f3 GI\u1edaI H\u1ea0N (kh\u00f4ng "th\u00e1nh")?',
+    '- C\u00e1i gi\u00e1 th\u1eadt r\u1ea3i d\u1ecdc truy\u1ec7n, kh\u00f4ng ch\u1ec9 1 c\u00fa v\u1ea5p gi\u1eefa?',
+    '- Ph\u1ea3n di\u1ec7n C\u1ee4 TH\u1ec2, x\u1ee9ng t\u1ea7m, l\u1eb7p l\u1ea1i, m\u01b0u ri\u00eang \u2014 kh\u00f4ng "b\u1ed9 m\u00e1y v\u00f4 danh"?',
+    '- C\u01a1 ch\u1ebf l\u00f5i c\u00f3 LU\u1eacT + gi\u00e1 + gi\u1edbi h\u1ea1n? M\u01a1 h\u1ed3 \u2192 deus ex machina?',
+    '- Mid-pivot C\u1ee4 TH\u1ec2 ~40-60%, bu\u1ed9c \u0111\u1ed5i chi\u1ebfn l\u01b0\u1ee3c?',
+    '- Th\u1ec3 lo\u1ea1i ch\u00ednh \u0111\u01b0\u1ee3c c\u1ea5u tr\u00fac ph\u1ee5c v\u1ee5, kh\u00f4ng b\u1ecb nh\u00e1nh kh\u00e1c l\u1ea5n \u2192 l\u1ec7ch mood?',
+    '- K\u1ebft = c\u00e2u h\u1ecfi ch\u1ee7 \u0111\u1ec1 + c\u00f3 c\u00e1i gi\u00e1, kh\u00f4ng utopia?',
+    `- H\u1ee3p gu th\u1ecb tr\u01b0\u1eddng m\u1ee5c ti\u00eau ${year}+ (m\u00e3 trope b\u1ea3n \u0111\u1ecba vs ngo\u1ea1i nh\u1eadp, k\u1ef3 v\u1ecdng c\u1ea3m x\u00fac, ng\u01b0\u1ee1ng 18+/ki\u1ec3m duy\u1ec7t)?`,
+    '- AI-tell: purple prose, "kh\u00f4ng ph\u1ea3i X m\u00e0 Y", n\u1ed9i t\u00e2m l\u1eb7p, nh\u1ecbp \u0111\u1ec1u \u0111\u1ec1u?',
+  ];
+  if (faithAxis) axes.push(faithAxis);
+  return `B\u1ea1n l\u00e0 bi\u00ean t\u1eadp vi\u00ean k\u1ef3 c\u1ef1u chuy\u00ean ti\u1ec3u thuy\u1ebft m\u1ea1ng d\u00e0i k\u1ef3. Nhi\u1ec7m v\u1ee5: SO\u00c1T m\u1ed9t "n\u1ec1n m\u00f3ng" (foundation: premise + outline + nh\u00e2n v\u1eadt + world rules) m\u00e0 m\u1ed9t cu\u1ed1n ${n} ch\u01b0\u01a1ng s\u1ebd tri\u1ec3n khai. Sai \u1edf \u0111\u00e2y nh\u00e2n l\u00ean th\u00e0nh h\u00e0ng tr\u0103m ch\u01b0\u01a1ng \u2014 nghi\u00eam kh\u1eafc.
+
+Cu\u1ed1n: ${name}. Th\u1eddi \u0111i\u1ec3m: ${year}.
+
+So\u00e1t nhanh theo c\u00e1c tr\u1ee5c ch\u1ebft ng\u01b0\u1eddi (truy\u1ec7n d\u00e0i):
+${axes.join('\n')}
+
+OUTPUT B\u1eaeT BU\u1ed8C \u2014 ch\u1ec9 \u0111\u00fang d\u1ea1ng sau, KH\u00d4NG gi\u1ea3i th\u00edch, KH\u00d4NG ph\u00e2n t\u00edch d\u00e0i:
+- 5-10 d\u00f2ng revision note ng\u1eafn.
+- M\u1ed7i d\u00f2ng = 1 ch\u1ec9 th\u1ecb C\u1ee4 TH\u1ec2 cho Architect s\u1eeda (vd: "\u0110\u1ed5i t\u00ean Tr\u1ea7n H\u1ea1o \u2192 B\u1ea1ch D\u1ea1", "R\u00fat c\u00f2n 2 volume", "Th\u00eam gi\u1edbi h\u1ea1n: mate bond d\u00f9ng qu\u00e1 3 l\u1ea7n/ng\u00e0y \u2192 \u0111au \u0111\u1ea7u", "Mid-pivot \u0111\u1ea9y t\u1eeb ch150 l\u00ean ch120").
+- KH\u00d4NG gi\u1ea3i th\u00edch t\u1ea1i sao. Architect ch\u1ec9 c\u1ea7n ch\u1ec9 th\u1ecb, kh\u00f4ng c\u1ea7n l\u00fd do.
+- KH\u00d4NG h\u1ecfi ng\u01b0\u1ee3c. N\u1ebfu th\u1ea5y 2 l\u1ef1a ch\u1ecdn (vd "30 hay 300 ch\u01b0\u01a1ng?", "mid-pivot ch120 hay ch150?", "vi\u1ebft ti\u1ebfp V3-5 hay r\u00fat v\u1ec1 30?"), CH\u1eccN H\u1ed8 1 c\u00e1i v\u00e0 ghi ch\u1ec9 th\u1ecb \u2014 kh\u00f4ng \u0111\u01b0a c\u00e2u h\u1ecfi cho ng\u01b0\u1eddi d\u00e1n.
+- Foundation vi\u1ebft b\u1eb1ng ti\u1ebfng Trung l\u00e0 \u0110\u00daNG (engine core ch\u1ea1y prompt ti\u1ebfng Trung upstream, Architect ch\u1ec9 \u0111\u1ecdc ti\u1ebfng Trung). KH\u00d4NG y\u00eau c\u1ea7u \u0111\u1ed5i ng\u00f4n ng\u1eef foundation sang Vi\u1ec7t \u2014 \u0111\u1ed5i = engine h\u1ecfng. Ch\u1ec9 ch\u00ea ti\u00eau \u0111\u1ec1 m\u1ee5c/nh\u00e2n v\u1eadt n\u1ebfu l\u1eabn ti\u1ebfng Trung m\u00e0 KH\u00d4NG c\u1ea7n thi\u1ebft, c\u00f2n n\u1ed9i dung premise/outline/world rules ti\u1ebfng Trung = by design.
+- N\u1ebfu n\u1ec1n m\u00f3ng \u0110\u1ea0Y ch\u1ea5t l\u01b0\u1ee3ng, ghi "\u0110\u1ea0Y \u2014 kh\u00f4ng c\u1ea7n revise" v\u00e0 d\u1eebng.${profileBlock}
+
+--- N\u1ec0N M\u00d3NG C\u1ea6N SO\u00c1T ---
+${foundation}`;
+}
+
 async function exportProductionRun(id) {
   const res = await post(`/api/prodruns/${id}/export`, { format: 'txt' });
   if (!res) return;
@@ -1544,6 +1819,13 @@ async function renderProductionDetail(run) {
       + '<div class="run-edit-title">\u270f\ufe0f S\u1eeda ch\u00ednh x\u00e1c b\u1eb1ng tay (khuy\u00ean d\u00f9ng)</div>'
       + '<p class="muted">M\u1edf th\u01b0 m\u1ee5c, s\u1eeda file r\u1ed3i b\u1ea5m <strong>Duy\u1ec7t</strong>. An to\u00e0n: <code>premise.md</code>, <code>characters.json</code>, <code>world_rules.json</code>, goal/theme trong <code>layered_outline.json</code>. \u26a0 \u0110\u1eebng th\u00eam/b\u1edbt l\u1ebb s\u1ed1 ch\u01b0\u01a1ng \u2014 <code>outline.json</code> \u21d4 <code>layered_outline.json</code> \u21d4 <code>progress.json</code> ph\u1ea3i kh\u1edbp.</p>'
       + `<button class="btn" data-action="reveal" data-run-id="${escapeHtml(run.id)}">\ud83d\udcc2 M\u1edf th\u01b0 m\u1ee5c n\u1ec1n m\u00f3ng</button>`
+      + '</div>'
+      // Cách 1b: copy foundation + prompt review sẵn cho LLM ngoài soi → nhận
+      // revision note ngắn → dán vào ô "Nhờ AI viết lại" bên dưới. Tránh tự soi 4+ file.
+      + '<div class="run-review-llm-box">'
+      + '<div class="run-edit-title">📋 Copy cho LLM ngoài soi</div>'
+      + '<p class="muted">Copy foundation + profile gốc + prompt đã sẵn → dán vào GPT/Claude → nhận <strong>5-10 dòng revision note ngắn</strong> → dán vào ô "Nhờ AI viết lại" bên dưới. Prompt ép LLM so foundation vs profile (bắt drift) + xuất chỉ thị ngắn, không phân tích dài.</p>'
+      + `<button class="btn" data-action="copyReview" data-run-id="${escapeHtml(run.id)}">📋 Copy foundation + prompt review</button>`
       + '</div>'
       // Cách 2: nhờ AI viết lại (KHÔNG phải sửa từng dòng).
       + '<div class="run-revise-box">'

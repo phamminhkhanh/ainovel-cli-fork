@@ -55,6 +55,19 @@
         </div>
       </section>
 
+      <!-- Công cụ phụ: import / simulate / diag (cũng có trong palette /) -->
+      <section class="card" id="toolsCard">
+        <details class="collapsible">
+          <summary>Công cụ</summary>
+          <div class="actions-stack">
+            <button class="btn" id="toolImport" title="Phản suy truyện ngoài để viết tiếp (engine rảnh)">📥 Nhập truyện</button>
+            <button class="btn" id="toolSimulate" title="Đọc ./simulate dựng hồ sơ văn phong (engine rảnh)">🎭 Mô phỏng</button>
+            <button class="btn" id="toolImportSim" title="Nhập hồ sơ văn phong .json (engine rảnh)">📋 Nhập hồ sơ</button>
+            <button class="btn" id="toolDiag" title="Báo cáo chẩn đoán sáng tác + runtime">🩺 Chẩn đoán</button>
+          </div>
+        </details>
+      </section>
+
       <!-- Chapter list with status icons (chi tiết cấp chương) -->
       <section class="card" id="chapterCard">
         <h3>Chương</h3>
@@ -78,10 +91,12 @@
         <p class="steer-text" id="steerText"></p>
       </section>
 
-      <!-- Hidden card — Agents chưa có thiết kế UI riêng, JS vẫn viết vào cho an toàn -->
-      <section class="card" hidden>
-        <h3>Agents</h3>
-        <ul class="agents" id="agents"><li class="muted">—</li></ul>
+      <!-- Agents: Snapshot live; auto-mở khi có agent đang chạy -->
+      <section class="card" id="agentsCard">
+        <details class="collapsible" id="agentsDetails">
+          <summary>Agents</summary>
+          <ul class="agents" id="agents"><li class="muted">—</li></ul>
+        </details>
       </section>
 
       <!-- Chi phí & bối cảnh — người viết dài hơi cần biết đang tốn bao nhiêu -->

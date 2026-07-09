@@ -501,6 +501,16 @@ function bootStudio() {
   if (onNovelDir) onNovelDir.addEventListener('click', () => revealDir('novel'));
   const onPromptsDir = $('#openPromptsDir');
   if (onPromptsDir) onPromptsDir.addEventListener('click', () => revealDir('prompts'));
+
+  // Sidebar Công cụ → cùng handler với command palette
+  const toolImport = $('#toolImport');
+  if (toolImport) toolImport.addEventListener('click', () => openImport());
+  const toolSimulate = $('#toolSimulate');
+  if (toolSimulate) toolSimulate.addEventListener('click', () => runSimulate());
+  const toolImportSim = $('#toolImportSim');
+  if (toolImportSim) toolImportSim.addEventListener('click', () => openImportSim());
+  const toolDiag = $('#toolDiag');
+  if (toolDiag) toolDiag.addEventListener('click', () => openDiag());
 }
 
 // revealDir yêu cầu server mở thư mục đã biết (novel|prompts) trong file manager.

@@ -12,6 +12,7 @@ let pendingMode = null; // 'steer' | 'continue' | null — override send() dispa
 let roundHasContent = false; // round stream hiện tại đã có chữ chưa (để chèn divider khi clear)
 let streamIsThinking = false; // Host uses \x02 to toggle thinking; route it to the thinking pane.
 let lastSnapshot = null;     // snapshot mới nhất — app-studio.js đọc để biết tiến độ/trạng thái (Phase 3)
+let prevAnyActive = false;   // agentsDetails: chỉ auto-mở khi vừa chuyển idle→active, không ép mở lại nếu user đã đóng
 const logIndex = new Map();  // Event.ID -> <li> (cập nhật tại chỗ: đang chạy -> hoàn thành)
 
 // ── Dispatch khung SSE ──
@@ -171,22 +172,37 @@ function renderSnapshot(s) {
   $('#progressFill').style.width = (tot ? Math.min(100, Math.round((done / tot) * 100)) : 0) + '%';
 
   const ag = $('#agents');
-  ag.innerHTML = '';
-  const agents = s.Agents || [];
-  if (!agents.length) {
-    ag.innerHTML = '<li class="muted">—</li>';
-  } else {
-    agents.forEach((a) => {
-      const li = document.createElement('li');
-      const dot = document.createElement('span');
-      dot.className = 'agent-dot';
-      dot.dataset.on = (a.State && a.State !== 'idle') ? 'true' : 'false';
-      const nm = document.createElement('span'); nm.className = 'agent-name'; nm.textContent = a.Name || '?';
-      const tk = document.createElement('span'); tk.className = 'agent-task';
-      tk.textContent = a.Tool || a.Summary || a.State || '';
-      li.append(dot, nm, tk);
-      ag.appendChild(li);
-    });
+  if (ag) {
+    ag.innerHTML = '';
+    const agents = s.Agents || [];
+    let anyActive = false;
+    if (!agents.length) {
+      ag.innerHTML = '<li class="muted">—</li>';
+    } else {
+      agents.forEach((a) => {
+        const active = !!(a.State && a.State !== 'idle');
+        if (active) anyActive = true;
+        const li = document.createElement('li');
+        const dot = document.createElement('span');
+        dot.className = 'agent-dot';
+        dot.dataset.on = active ? 'true' : 'false';
+        const nm = document.createElement('span'); nm.className = 'agent-name'; nm.textContent = a.Name || '?';
+        const tk = document.createElement('span'); tk.className = 'agent-task';
+        const bits = [];
+        if (a.Tool) bits.push(a.Tool);
+        else if (a.Summary) bits.push(a.Summary);
+        else if (a.State) bits.push(a.State);
+        if (a.Turn) bits.push('T' + a.Turn);
+        tk.textContent = bits.join(' · ');
+        li.append(dot, nm, tk);
+        ag.appendChild(li);
+      });
+    }
+    const details = $('#agentsDetails');
+    // Chỉ auto-mở khi vừa chuyển idle→active (edge) — tránh reopen mỗi snapshot
+    // khi agent đang chạy, để user có thể đóng thủ công mà không bị ép lại.
+    if (details && anyActive && !prevAnyActive) details.open = true;
+    prevAnyActive = anyActive;
   }
 
   $('#ctx').textContent = s.ContextWindow

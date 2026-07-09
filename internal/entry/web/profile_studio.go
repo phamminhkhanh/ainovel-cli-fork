@@ -264,46 +264,140 @@ func (s *server) handleProfileGenerate(w http.ResponseWriter, r *http.Request) {
 	// target market as of now, not its training-cutoff sense of "current".
 	fmt.Fprintf(&b, "Current year (fit market tastes to this moment): %d\n", time.Now().Year())
 
-	content, err := s.runProfileGeneration(r.Context(), model, b.String())
-	if err != nil {
-		// Map every timeout flavor to 504, not just our own 150s context
-		// deadline. A provider-side timeout (HTTP client "timeout"/"timed out",
-		// or the override model's 5m stream-idle watchdog) does not unwrap to
-		// context.DeadlineExceeded, so a bare errors.Is would leak a raw 500.
-		// agentcore.ClassifyProvider is the single source of truth for both
-		// error-chain and message-pattern timeout matching.
-		classified := agentcore.ClassifyProvider(err)
-		if errors.Is(classified, agentcore.ErrProviderTimeout) || errors.Is(classified, agentcore.ErrProviderStreamIdle) {
-			writeErr(w, http.StatusGatewayTimeout, fmt.Errorf("profile generate timed out; try a faster Studio model or a shorter brief"))
+	// Stream the profile back to the browser as SSE so data keeps flowing through
+	// the LTN proxy (3-min timeout) instead of stalling until the full brief is
+	// ready. A non-streaming response gets 504'd when generation exceeds the
+	// proxy timeout; SSE deltas arrive continuously and reset that clock.
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// No streaming support (e.g. httptest without flushing): fall back to the
+		// old single-shot JSON so the request still completes.
+		content, err := s.runProfileGeneration(r.Context(), model, b.String())
+		if err != nil {
+			classified := agentcore.ClassifyProvider(err)
+			if errors.Is(classified, agentcore.ErrProviderTimeout) || errors.Is(classified, agentcore.ErrProviderStreamIdle) {
+				writeErr(w, http.StatusGatewayTimeout, fmt.Errorf("profile generate timed out; try a faster Studio model or a shorter brief"))
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeJSON(w, http.StatusOK, map[string]any{"content": content})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"content": content})
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	streamCh, err := s.runProfileStream(r.Context(), model, b.String())
+	if err != nil {
+		classified := agentcore.ClassifyProvider(err)
+		if errors.Is(classified, agentcore.ErrProviderTimeout) || errors.Is(classified, agentcore.ErrProviderStreamIdle) {
+			writeSSE(w, flusher, sseMessage{Type: "profileError", Text: "profile generate timed out; try a faster Studio model or a shorter brief"})
+		} else {
+			writeSSE(w, flusher, sseMessage{Type: "profileError", Text: err.Error()})
+		}
+		flusher.Flush()
+		return
+	}
+
+	var out strings.Builder
+	var thinking strings.Builder
+	var streamed bool
+	for ev := range streamCh {
+		switch ev.Type {
+		case agentcore.StreamEventThinkingDelta:
+			// Reasoning models (glm-5.2 etc.) emit a long reasoning_content phase
+			// before the final answer. Forward a heartbeat so the browser knows the
+			// model is still working (not stalled) — but do NOT pour the raw
+			// reasoning into the profile textarea; only the final content goes there.
+			thinking.WriteString(ev.Delta)
+			if !writeSSE(w, flusher, sseMessage{Type: "profileThinking"}) {
+				return // client disconnected
+			}
+		case agentcore.StreamEventTextDelta:
+			streamed = true
+			out.WriteString(ev.Delta)
+			if !writeSSE(w, flusher, sseMessage{Type: "profileDelta", Text: ev.Delta}) {
+				return // client disconnected
+			}
+		case agentcore.StreamEventDone:
+			if !streamed {
+				out.WriteString(ev.Message.TextContent())
+			}
+		case agentcore.StreamEventError:
+			if ev.Err != nil {
+				classified := agentcore.ClassifyProvider(ev.Err)
+				if errors.Is(classified, agentcore.ErrProviderTimeout) || errors.Is(classified, agentcore.ErrProviderStreamIdle) {
+					writeSSE(w, flusher, sseMessage{Type: "profileError", Text: "profile generate timed out; try a faster Studio model or a shorter brief"})
+				} else {
+					writeSSE(w, flusher, sseMessage{Type: "profileError", Text: ev.Err.Error()})
+				}
+				flusher.Flush()
+				return
+			}
+			writeSSE(w, flusher, sseMessage{Type: "profileError", Text: "profile generate failed"})
+			flusher.Flush()
+			return
+		}
+	}
+
+	text := strings.TrimSpace(out.String())
+	// Reasoning-model fallback: a model can write its whole answer into
+	// reasoning_content and never switch to the final-answer channel (see the
+	// same guard in internal/host/cocreate.go). Salvage thinking as the profile
+	// so the user still gets output instead of an empty-profile error.
+	if text == "" {
+		if t := strings.TrimSpace(thinking.String()); t != "" {
+			text = t
+		}
+	}
+	text = stripCodeFence(text)
+	if text == "" {
+		writeSSE(w, flusher, sseMessage{Type: "profileError", Text: "model returned empty profile"})
+		flusher.Flush()
+		return
+	}
+	writeSSE(w, flusher, sseMessage{Type: "profileDone", Text: text})
+	flusher.Flush()
 }
 
-// runProfileGeneration does one non-streaming LLM call (drains the stream
-// server-side) and returns the trimmed markdown.
-func (s *server) runProfileGeneration(ctx context.Context, model agentcore.ChatModel, userMsg string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 150*time.Second)
-	defer cancel()
+// runProfileStream opens the streaming LLM call and returns the raw stream
+// channel. It sets NO fixed deadline: callers bound it via the passed context
+// (the SSE handler uses r.Context(), so a browser abort cancels the stream)
+// plus the model's stream-idle watchdog. This lets SSE deltas flow without a
+// hard Go deadline cutting a long generation short.
+func (s *server) runProfileStream(ctx context.Context, model agentcore.ChatModel, userMsg string) (<-chan agentcore.StreamEvent, error) {
 	msgs := []agentcore.Message{
 		agentcore.SystemMsg(profileStudioSystemPrompt),
 		agentcore.UserMsg(userMsg),
 	}
-	// Profiles are Vietnamese Markdown with dense world-building; VI text costs
-	// far more tokens than EN, so 4096 truncated mid-section. 8192 fits a full
-	// detailed brief while staying within the 150s timeout above.
 	streamCh, err := model.GenerateStream(ctx, msgs, nil, agentcore.WithMaxTokens(studioMaxTokens))
 	if err != nil {
-		return "", fmt.Errorf("profile generate: %w", err)
+		return nil, fmt.Errorf("profile generate: %w", err)
+	}
+	return streamCh, nil
+}
+
+// runProfileGeneration does one LLM call (drains the stream server-side) and
+// returns the trimmed markdown. Used by the non-SSE fallback path; the SSE path
+// drains runProfileStream directly to forward deltas to the browser.
+func (s *server) runProfileGeneration(ctx context.Context, model agentcore.ChatModel, userMsg string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	defer cancel()
+	streamCh, err := s.runProfileStream(ctx, model, userMsg)
+	if err != nil {
+		return "", err
 	}
 
 	var out strings.Builder
+	var thinking strings.Builder
 	var streamed bool
 	for ev := range streamCh {
 		switch ev.Type {
+		case agentcore.StreamEventThinkingDelta:
+			thinking.WriteString(ev.Delta)
 		case agentcore.StreamEventTextDelta:
 			streamed = true
 			out.WriteString(ev.Delta)
@@ -320,6 +414,11 @@ func (s *server) runProfileGeneration(ctx context.Context, model agentcore.ChatM
 	}
 
 	text := strings.TrimSpace(out.String())
+	if text == "" {
+		if t := strings.TrimSpace(thinking.String()); t != "" {
+			text = t
+		}
+	}
 	// Strip an accidental ```markdown fence if the model wrapped the output.
 	text = stripCodeFence(text)
 	if text == "" {

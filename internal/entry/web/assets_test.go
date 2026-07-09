@@ -254,7 +254,9 @@ func TestEmbeddedHTMLBootCriticalSelectors(t *testing.T) {
 		"settingsBtn", "cmdBtn", "jobBar", "log", "input",
 		"novelName", "stateBadge", "progressFill",
 		"chapters", "completed", "words", "phase", "flow",
-		"agents", "ctx", "ctxFill", "model", "cost",
+		"agents", "agentsDetails", "toolsCard",
+		"toolImport", "toolSimulate", "toolImportSim", "toolDiag",
+		"ctx", "ctxFill", "model", "cost",
 	} {
 		if !strings.Contains(text, `id="`+id+`"`) {
 			t.Fatalf("index.html missing boot-critical selector #%s", id)

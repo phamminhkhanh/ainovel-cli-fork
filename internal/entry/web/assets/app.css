@@ -22,6 +22,8 @@
   --color-warn: #e0a23c;
   --color-danger: #e0584f;
   --color-running: #6fb0ff;
+  --color-on-accent: #fff;          /* chữ trên nền accent/success — contrast sáng */
+  --color-warn-faint: rgba(224, 162, 60, 0.08); /* nền mờ warn cho hint/tint */
 
   /* typography */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", sans-serif;
@@ -173,7 +175,7 @@ html, body {
   font-size: 12px; line-height: 1.35; transition: background 0.15s;
 }
 .chapter-item:hover { background: var(--color-surface-2); }
-.chapter-item.selected { background: var(--color-accent); color: #fff; }
+.chapter-item.selected { background: var(--color-accent); color: var(--color-on-accent); }
 .chapter-item.selected:hover { background: var(--color-accent-strong); }
 .chapter-item.is-writing { color: var(--color-running); }
 .chapter-icon { flex-shrink: 0; width: 16px; text-align: center; font-size: 12px; }
@@ -196,7 +198,7 @@ html, body {
 .rewrite-hint {
   font-size: 12px; color: var(--color-warn); margin-top: var(--space-2);
   padding: var(--space-1) var(--space-2);
-  background: rgba(224, 162, 60, 0.08); border-radius: var(--radius-sm);
+  background: var(--color-warn-faint); border-radius: var(--radius-sm);
 }
 
 /* ── Compact progress summary ── */
@@ -1097,6 +1099,8 @@ select:focus { outline: none; border-color: var(--color-accent); }
 .run-manual-box { margin: var(--space-2) 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .run-manual-box .btn { align-self: flex-start; }
 .run-manual-box code { font-family: var(--font-mono); font-size: 11px; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 0 3px; }
+.run-review-llm-box { margin: var(--space-2) 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.run-review-llm-box .btn { align-self: flex-start; }
 .run-edit-title { font-weight: 600; font-size: 13px; margin-top: var(--space-2); }
 .run-revise-warn {
   font-size: 12px; padding: var(--space-2); border-radius: var(--radius-sm);
