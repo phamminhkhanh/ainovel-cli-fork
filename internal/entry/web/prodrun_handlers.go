@@ -417,6 +417,59 @@ func (s *server) handleProdRunReveal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dir": dir})
 }
 
+// ideFoundationFiles are the source-of-truth foundation files an IDE agent
+// (Kilo/Cursor) should edit when hand-patching a run's foundation before
+// Approve. Listed relative to the run's output/novel dir.
+var ideFoundationFiles = []string{
+	"premise.md",
+	"meta/compass.json",
+	"layered_outline.json",
+	"world_rules.json",
+	"characters.json",
+}
+
+// handleProdRunIDEBundle returns the run's foundation dir (absolute) plus the
+// list of foundation files that currently exist on disk. The frontend uses
+// this to compose a clipboard bundle ("Copy cho IDE") that an IDE agent pastes
+// to read and surgically edit the foundation files directly — no regenerate,
+// no external LLM round-trip. Read-only, no side effects (unlike /reveal which
+// opens the file manager).
+//
+// dir must be ABSOLUTE: an IDE agent (Kilo/Cursor) runs with its own CWD,
+// which may differ from this server's CWD. RunDir() derives from jobsDir which
+// is filepath.Join(eng dir parent, "jobs") — can be relative if the engine dir
+// is relative. filepath.Abs() resolves against the server's CWD and is
+// cross-platform (Windows C:\…, Unix /…). Without this, the agent may pass a
+// relative path to view_file/edit and fail or hit the wrong file.
+func (s *server) handleProdRunIDEBundle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	id := r.PathValue("id")
+	run := s.prodRunManager.Get(id)
+	if run == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("run not found"))
+		return
+	}
+	dir, err := filepath.Abs(filepath.Join(s.prodRunManager.RunDir(id), "output", "novel"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("resolve run dir: %w", err))
+		return
+	}
+	existing := make([]string, 0, len(ideFoundationFiles))
+	for _, f := range ideFoundationFiles {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			existing = append(existing, f)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"jobId": id,
+		"dir":   dir,
+		"files": existing,
+	})
+}
+
 // handleProdRunRevise regenerates an awaiting_review run's foundation with a
 // user steering note appended to the profile prompt. See ReviseFoundation.
 func (s *server) handleProdRunRevise(w http.ResponseWriter, r *http.Request) {

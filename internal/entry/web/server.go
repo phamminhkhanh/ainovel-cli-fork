@@ -107,6 +107,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("POST /api/prodruns/{id}/reject", s.handleProdRunReject)
 	mux.HandleFunc("POST /api/prodruns/{id}/revise", s.handleProdRunRevise)
 	mux.HandleFunc("POST /api/prodruns/{id}/reveal", s.handleProdRunReveal)
+	mux.HandleFunc("GET /api/prodruns/{id}/ide-bundle", s.handleProdRunIDEBundle)
 
 	// 共创 / 导出 / 导入 / 仿写 / 诊断（Phase 3）
 	mux.HandleFunc("/api/cocreate/send", s.handleCoCreateSend)

@@ -437,3 +437,56 @@ func TestHandleProdRunRevealBlockedOnPublicBind(t *testing.T) {
 		t.Fatal("public bind must not open file manager")
 	}
 }
+
+func TestHandleProdRunIDEBundleReturnsDirAndFiles(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	run := createAwaitingReviewRun(t, s) // seeds premise.md
+
+	req := httptest.NewRequest(http.MethodGet, "/api/prodruns/"+run.ID+"/ide-bundle", nil)
+	req.SetPathValue("id", run.ID)
+	rec := httptest.NewRecorder()
+	s.handleProdRunIDEBundle(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		JobID string   `json:"jobId"`
+		Dir   string   `json:"dir"`
+		Files []string `json:"files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.JobID != run.ID {
+		t.Fatalf("jobId = %q, want %q", out.JobID, run.ID)
+	}
+	if !strings.Contains(filepath.ToSlash(out.Dir), "output/novel") {
+		t.Fatalf("dir must point at output/novel, got %q", out.Dir)
+	}
+	// dir must be absolute — an IDE agent runs with its own CWD, which may
+	// differ from this server's. Guards the filepath.Abs() call in the handler.
+	if !filepath.IsAbs(out.Dir) {
+		t.Fatalf("dir must be absolute (IDE agent resolves against its own CWD), got %q", out.Dir)
+	}
+	// createAwaitingReviewRun seeds premise.md only.
+	found := false
+	for _, f := range out.Files {
+		if f == "premise.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("files must include premise.md (seeded by helper), got %v", out.Files)
+	}
+}
+
+func TestHandleProdRunIDEBundleMissingRun(t *testing.T) {
+	s, _ := newTestServerForProdruns(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/prodruns/nope/ide-bundle", nil)
+	req.SetPathValue("id", "nope")
+	rec := httptest.NewRecorder()
+	s.handleProdRunIDEBundle(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing run must 404, got %d", rec.Code)
+	}
+}

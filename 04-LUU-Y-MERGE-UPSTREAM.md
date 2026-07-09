@@ -156,4 +156,5 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 - Journal Production Cockpit MVP (kèm sơ đồ tương tác + state machine): [`docs/journals/260703-production-cockpit-mvp.md`](docs/journals/260703-production-cockpit-mvp.md)
 - Journal Foundation Gate (best-effort gate, revise/reveal, race, bug đã fix): [`docs/journals/260705-foundation-gate.md`](docs/journals/260705-foundation-gate.md)
 - Journal Profile Library & Studio (tạo/sinh/lưu profile trong UI): [`docs/journals/260705-profile-library-studio.md`](docs/journals/260705-profile-library-studio.md)
+- Journal Health strip + Profile review gate + prompt polish (2026-07-09): [`docs/journals/260709-prodrun-profile-review-gate.md`](docs/journals/260709-prodrun-profile-review-gate.md)
 - Hướng dẫn dùng Production Cockpit: [`docs/production-cockpit.md`](docs/production-cockpit.md)
