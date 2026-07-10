@@ -259,11 +259,17 @@ func (s *server) handleProdRunExport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if body.Format != "txt" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("unsupported export format %q (only txt is supported)", body.Format))
+	var path string
+	var err error
+	switch body.Format {
+	case "txt":
+		path, err = s.prodRunManager.ExportTXT(id)
+	case "epub":
+		path, err = s.prodRunManager.ExportEPUB(id)
+	default:
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("unsupported export format %q (txt / epub)", body.Format))
 		return
 	}
-	path, err := s.prodRunManager.ExportTXT(id)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, errExportRunNotFound) {
@@ -302,6 +308,38 @@ func (s *server) handleProdRunExportDownload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// handleProdRunExportEPUBDownload builds and serves the run's EPUB as a download.
+// Mirrors handleProdRunExportDownload but uses the web-side EPUB 3 builder (see
+// exportRunEPUB — uses the writer's own chapter headings, not exp.Run's
+// hardcoded Chinese labels). Windows-safe, no chapter-file rename.
+func (s *server) handleProdRunExportEPUBDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	id := r.PathValue("id")
+	path, err := s.prodRunManager.ExportEPUB(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errExportRunNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, errExportNoChaptersDir) || errors.Is(err, errExportNoChapters) {
+			status = http.StatusBadRequest
+		}
+		writeErr(w, status, err)
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/epub+zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)

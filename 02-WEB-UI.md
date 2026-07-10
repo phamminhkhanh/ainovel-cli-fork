@@ -158,8 +158,9 @@ Cockpit có 2 kiểu job:
 | POST | `/api/prodruns/{id}/stop` | — | `ProdRunView` |
 | POST | `/api/prodruns/{id}/sync` | `{force?: boolean}` | `{copiedFiles, mode, fastForward}` |
 | GET | `/api/prodruns/{id}/log` | — | text/plain tail |
-| POST | `/api/prodruns/{id}/export` | `{format}` | `{path}` |
+| POST | `/api/prodruns/{id}/export` | `{format:"txt"\|"epub"}` | `{path}` |
 | GET | `/api/prodruns/{id}/export.txt` | — | `text/plain` download |
+| GET | `/api/prodruns/{id}/export.epub` | — | `application/epub+zip` download (EPUB 3 build web-side trong `prodrun_export_epub.go`) |
 | POST | `/api/prodruns/{id}/resume` | — | `ProdRunView` — chỉ khi status `failed` (vd sau unclean shutdown / persist fail), khởi động lại run dir |
 | GET | `/api/prodruns/{id}/foundation` | `?section=world\|characters` | premise/outline/world/characters của run (Foundation Gate preview) |
 | POST | `/api/prodruns/{id}/approve` | — | duyệt nền móng (`awaiting_review`) → resume native headless |
@@ -245,7 +246,7 @@ Profile là gốc — sai ở đây nhân lên hàng trăm chương. Step 4 có 
 - Không cho continue run nếu workspace chưa có chương hoàn thành hoặc đã `phase=complete`.
 - Không hẹn giờ, không chạy song song nhiều job.
 - Pause là read-only: hiện thông báo, chỉ có thể Dừng hoặc xuất file; không có nút Tiếp tục.
-- Chỉ xuất TXT; EPUB deferred.
+- Xuất **TXT + EPUB 3** (`prodrun_export_epub.go` — build EPUB web-side dùng **header gốc của writer** làm nhãn chương, không dùng `internal/host/exp` vì nó hardcode "第 N 章"/`zh-CN` → nhãn đúng ngôn ngữ VN/EN/ES, đọc sạch trên điện thoại). Format khác chưa.
 - Khi Web UI crash/restart, các job đang `running` bị đánh dấu `failed`/`unclean_shutdown` + `PossiblyOrphaned`; user cần tự kill PID cũ nếu còn sót, rồi `POST /api/prodruns/{id}/resume` để chạy lại.
 - Chưa có review profile bằng AI ngay trong app (mới có checklist + copy cho LLM ngoài).
 

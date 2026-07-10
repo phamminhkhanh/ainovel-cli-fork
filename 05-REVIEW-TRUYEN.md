@@ -31,7 +31,12 @@ workspace/<tên>/output/jobs/run-XXX/output/novel/   ← hoặc ./output/jobs/..
 
 > ⚠ **Source of truth (quan trọng khi sửa file):** `premise.md` → markdown LÀ gốc (không có .json). `compass.json`, `layered_outline.json`, `world_rules.json`, `characters.json` → **JSON là gốc**, file `.md` cùng tên chỉ là render — engine bỏ qua .md → sửa .md vô tác dụng. KHÔNG rename key JSON (engine phụ thuộc field name). Giữ nguyên ngôn ngữ hiện tại của foundation.
 
-Profile gốc (SSOT): `<cwd>/.ainovel/profiles/*.md` (hoặc `~/.ainovel/profiles/`, legacy `./profiles/`).
+**📁 Chuẩn nơi lưu (SSOT layout) — chỉ cần nhớ ĐÚNG 2 NƠI:**
+- **Global `~/.ainovel/`** = đồ dùng chung mọi truyện, ít đổi: `config.json` (key/model) · `rules/*.md` (luật văn phong phổ quát — đây là **chỗ DUY NHẤT** rule tới được run Cockpit) · `profiles/*.md` (profile **MẪU** tái dùng, hiện trong thư viện của mọi truyện).
+- **Per-truyện `workspace/<tên>/`** = đồ sinh riêng cho truyện đó: `.ainovel/profiles/<tên>.md` (profile viết riêng cho truyện — Web UI tự ghi vào đây) · `output/novel/` (chương/review/meta).
+- Nguyên tắc: *dùng chung → global; sinh cho riêng truyện này → per-truyện.*
+- ⚠ Repo-root `.ainovel/` đã **bỏ** (nó gitignored + chỉ hiện ở chế độ "(dự án gốc)" nên gây rối). Đừng đặt profile/rule ở đó nữa.
+- Vì sao thư viện chỉ hiện profile của 1 truyện: `start-web.sh` `cd` vào thư mục truyện rồi mới chạy engine → `repoRoot = cwd = workspace/<tên>` → thư viện = profile của truyện đó + mẫu global.
 
 **Quy trình đọc để review nhanh (dùng `read_files`, KHÔNG dùng shell — tránh lỗi cú pháp + encoding):**
 1. Profile gốc + `premise.md` + `world_rules.md` + `characters.md` + `meta/compass.json` → nắm nền móng.
@@ -109,6 +114,9 @@ Profile gốc (SSOT): `<cwd>/.ainovel/profiles/*.md` (hoặc `~/.ainovel/profile
     - `fatigue_words: map[string]int` → **từ thường chỉ xấu khi lặp dày**, đặt ngưỡng/chương (vd `{"im": 3, "khẽ": 2, "dường như": 2}`) — không cấm hẳn.
     - `forbidden_chars: []string` → ký tự cấm.
   - Hoặc dùng **steer-on-resume** nếu run đang chạy dở (§5).
+- 🔴 **Nhịp câu / văn băm vụn (staccato)** — trục RIÊNG, **phải soi thủ công vì engine KHÔNG có metric độ dài câu**. Checker cơ học chỉ bắt cấm-từ/cụm-từ/số-chữ (`internal/rules/types.go`); `style_stats` chỉ đo `ending.short_ratio` (câu ngắn ở CUỐI chương), **không** đo băm vụn giữa cảnh. Prompt `writer.md` chỉ nhắc `短句斩断` như một kiểu kết chương để xoay vòng, không cấm băm chuỗi hành động giữa cảnh → model (Grok/DeepSeek) mặc định băm câu ở nhịp căng, profile càng "nghẹt thở" càng nặng, và **tự lặp lại qua các chương** vì không có tín hiệu sửa. Word-level guard tạo ảo giác "đã phủ" — reviewer là người bắt duy nhất.
+  - Dấu hiệu: chuỗi động tác tách mỗi động tác thành 1 câu ("Vặn vòi. Xối tay. Chà. Xối lại."); đoạn toàn câu 3–7 chữ cùng độ dài; dấu chấm dùng để ngắt từng động tác thay vì ngắt ý.
+  - Sửa: **KHÔNG dùng `forbidden_words`** (không biểu diễn được "độ dài câu"). Dùng **rule ngôn ngữ tự nhiên** — text rơi vào `user_rules.preferences`, writer + editor đọc mỗi chương. Đã có mẫu: `prose-rhythm-vi.md`. **QUAN TRỌNG — đặt đúng chỗ (xem §5.4):** run Cockpit (headless) chỉ đọc `~/.ainovel/rules/` (được copy vào sandbox), KHÔNG đọc `<repo>/.ainovel/rules/`. Với run đang chạy dở → **steer** (§5). Lưu ý: đây là guidance **MỀM** (editor đọc rồi tự xử), không phải hard-gate như `forbidden_phrases`; muốn hard-gate phải thêm checker ở `internal/rules/` (upstream) hoặc lint web-side ở Cockpit.
 
 **K. Thị trường mục tiêu** (đối chiếu với **BƯỚC 0** ở §2 — nước/văn hóa/năm đã xác định)
 - Truyện có thật sự khớp gu nước đích không: mã trope bản địa vs ngoại nhập, kỳ vọng cảm xúc đặc trưng ("sủng" VN / fated-mate-longing EN / dark-romance-kịch-tính ES), ngưỡng 18+/kiểm duyệt nền tảng.
@@ -134,7 +142,14 @@ Cockpit là **automation-first**, chỉ 1 hard-gate:
    - **Edge**: steer-on-resume **KHÔNG** tác dụng nếu run chưa có output (fail trước Foundation Gate) — child chạy `--prompt-file` (fresh `StartPrepared`, không `Resume`) → `pending_steer` không được đọc. Chỉ steer-resume được khi run đã viết ≥1 chương.
    - Mỗi steer ghi vào `steer_history` (`meta/run.json`) → reviewer xem đây để biết truyện đã bị can thiệp mấy lần, nội dung gì. `pending_steer` bị xóa ngay sau khi inject (1 lần, không lặp).
 3. **Model theo vai**: Writer nên model mạnh nhất; đổi trong ⚙ Model hoặc field `roles` config. Đổi giữa truyện → coi §4.
-4. **Rules**: `meta/user_rules.json` / `~/.ainovel/rules/*.md` nắn **cấu trúc** (số từ/cấm từ), KHÔNG ép được "thêm romance".
+4. **Rules** (2 tầng nội dung): `meta/user_rules.json` (snapshot đã build của sách) + file `.md` nguồn.
+   - **structured** (số từ / cấm từ / cấm cụm) → hard-check cơ học khi `commit_chapter`.
+   - **preferences** (văn xuôi tự nhiên) → nắn **nhịp câu / phong cách**, MỀM, writer+editor đọc mỗi chương qua `user_rules.preferences`. Đây là chỗ trị "băm vụn / độ dài câu" vì `forbidden_words` không biểu diễn được độ dài câu.
+   - ⚠ **File .md nguồn đặt ở đâu — khác nhau theo cách chạy** (đã verify `prodrun_runner.go` `prepareRunDir` + `internal/rules/loader.go`):
+     - **Cockpit headless**: child chạy cwd = sandbox `run-XXX/`; `prepareRunDir` chỉ copy `~/.ainovel/rules/*.md` (global) vào sandbox. → **Chỉ `~/.ainovel/rules/` có tác dụng cho run Cockpit.** `<repo>/.ainovel/rules/` KHÔNG được đọc.
+     - **CLI chạy từ repo root**: cwd = repo → `<repo>/.ainovel/rules/` (project) > `~/.ainovel/rules/` (global) > built-in.
+     - **Profile thì ngược lại**: web UI đọc cả 3 root (project/global/legacy) và copy profile đã chọn vào sandbox làm seed → profile trong repo DÙNG được để tạo run; chỉ *rules* trong repo là không tới headless.
+   - Giới hạn: rules KHÔNG ép được đổi cốt / "thêm romance" (việc của architect / steer). Rule mới chỉ vào snapshot lúc mở/refresh sách; run đang chạy phải **steer** (`save_user_rules`) mới ăn ngay chương kế.
 
 ---
 

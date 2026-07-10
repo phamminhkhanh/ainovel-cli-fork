@@ -300,7 +300,8 @@ func TestEmbeddedJSProductionHooksExist(t *testing.T) {
 		"/api/profiles",
 		"/api/prodruns",
 		"/api/prodruns/",
-		"export.txt",
+		"export.${ext}",
+		"exportEpub",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("app-production.js missing hook or endpoint %q", want)

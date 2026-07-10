@@ -351,7 +351,15 @@ func (ps *prodRunStore) listLocked() []*ProdRun {
 		cp := *r
 		list = append(list, &cp)
 	}
+	// Deterministic order: by CreatedAt, tie-broken by ID. Tiebreak is required
+	// because `list` is built from a map (random iteration order) — back-to-back
+	// creates can share a CreatedAt (coarse clock on Windows), and plain
+	// sort.Slice is not stable, so ties would surface in random order. IDs are
+	// sequential + unique (run-001, run-002…) so they fully disambiguate.
 	sort.Slice(list, func(i, j int) bool {
+		if list[i].CreatedAt.Equal(list[j].CreatedAt) {
+			return list[i].ID < list[j].ID
+		}
 		return list[i].CreatedAt.Before(list[j].CreatedAt)
 	})
 	return list

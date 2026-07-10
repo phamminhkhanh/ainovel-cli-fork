@@ -101,6 +101,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("GET /api/prodruns/{id}/log", s.handleProdRunLog)
 	mux.HandleFunc("POST /api/prodruns/{id}/export", s.handleProdRunExport)
 	mux.HandleFunc("GET /api/prodruns/{id}/export.txt", s.handleProdRunExportDownload)
+	mux.HandleFunc("GET /api/prodruns/{id}/export.epub", s.handleProdRunExportEPUBDownload)
 	mux.HandleFunc("POST /api/prodruns/{id}/sync", s.handleProdRunSync)
 	mux.HandleFunc("GET /api/prodruns/{id}/foundation", s.handleProdRunFoundation)
 	mux.HandleFunc("POST /api/prodruns/{id}/approve", s.handleProdRunApprove)

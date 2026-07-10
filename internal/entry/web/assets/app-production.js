@@ -322,6 +322,7 @@ function bindProductionEvents() {
     else if (btn.dataset.action === 'stop') stopProductionRun(id);
     else if (btn.dataset.action === 'delete') deleteProductionRun(id);
     else if (btn.dataset.action === 'export') exportProductionRun(id);
+    else if (btn.dataset.action === 'exportEpub') exportProductionRunEPUB(id);
     else if (btn.dataset.action === 'sync') syncProductionRun(id);
     else if (btn.dataset.action === 'approve') approveProductionRun(id);
     else if (btn.dataset.action === 'reject') rejectProductionRun(id);
@@ -1859,16 +1860,41 @@ OUTPUT B\u1eaeT BU\u1ed8C \u2014 ch\u1ec9 \u0111\u00fang d\u1ea1ng sau, KH\u00d4
 ${foundation}`;
 }
 
+// Tải file export bằng MỘT lần build: GET /export.{ext} tự build + serve.
+// (Trước đây gọi POST /export build rồi <a href> build lại — lãng phí.)
+// fetch → blob để bắt lỗi (400 khi chưa có chương) + lấy tên file từ header.
+async function downloadRunExport(id, ext, okMsg) {
+  try {
+    const r = await fetch(`/api/prodruns/${id}/export.${ext}`);
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || ('HTTP ' + r.status), 'error');
+      return;
+    }
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = m ? m[1] : `novel.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(okMsg, 'ok');
+  } catch (e) {
+    toast('L\u1ed7i xu\u1ea5t: ' + e, 'error');
+  }
+}
+
 async function exportProductionRun(id) {
-  const res = await post(`/api/prodruns/${id}/export`, { format: 'txt' });
-  if (!res) return;
-  const a = document.createElement('a');
-  a.href = `/api/prodruns/${id}/export.txt`;
-  a.download = '';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  toast('\u0110\u00e3 xu\u1ea5t TXT', 'ok');
+  return downloadRunExport(id, 'txt', '\u0110\u00e3 xu\u1ea5t TXT');
+}
+
+// EPUB 3 (builder web-side dùng header gốc của writer → nhãn đúng ngôn ngữ).
+async function exportProductionRunEPUB(id) {
+  return downloadRunExport(id, 'epub', '\u0110\u00e3 xu\u1ea5t EPUB');
 }
 
 async function syncProductionRun(id, force) {
@@ -2041,6 +2067,7 @@ async function renderProductionDetail(run) {
         <button class="btn primary" data-action="resume" data-run-id="${escapeHtml(run.id)}" ${!canResume ? 'disabled' : ''}>\u21bb Ti\u1ebfp t\u1ee5c</button>
         <button class="btn danger" data-action="stop" data-run-id="${escapeHtml(run.id)}" ${!canStop ? 'disabled' : ''}>\u25a0 D\u1eebng</button>
         <button class="btn" data-action="export" data-run-id="${escapeHtml(run.id)}" ${!canExport ? 'disabled' : ''}>\u2b07 Xu\u1ea5t TXT</button>
+        <button class="btn" data-action="exportEpub" data-run-id="${escapeHtml(run.id)}" ${!canExport ? 'disabled' : ''}>\ud83d\udcd5 Xu\u1ea5t EPUB</button>
         <button class="btn" data-action="sync" data-run-id="${escapeHtml(run.id)}" ${!canSync ? 'disabled' : ''}>\ud83d\udd04 \u0110\u1ed3ng b\u1ed9</button>
         <button class="btn danger" data-action="delete" data-run-id="${escapeHtml(run.id)}" ${!canDelete ? 'disabled' : ''}>\ud83d\uddd1 X\u00f3a</button>
       </div>

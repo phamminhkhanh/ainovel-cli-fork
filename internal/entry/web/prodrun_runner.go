@@ -1028,48 +1028,51 @@ func safeWriteFile(path string, data []byte) error {
 	return lastErr
 }
 
-// sanitizeFileName strips unsafe characters from a run name for use as a file name.
+// sanitizeFileName makes a run name safe to use as a file name while keeping
+// non-ASCII letters (Vietnamese diacritics, CJK, etc.) intact. Only characters
+// that are actually illegal in file paths on Windows/Unix are replaced; spaces
+// are collapsed to single underscores for cleaner names.
 func sanitizeFileName(s string) string {
+	// Reserved/illegal characters on Windows (superset of Unix rules).
+	const illegal = `/\:*?"<>|`
 	var b strings.Builder
 	for _, r := range s {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
-			r == '-', r == '_', r == '.', r == ' ':
-			b.WriteRune(r)
-		default:
+		case r < 0x20: // drop control characters
+			continue
+		case strings.ContainsRune(illegal, r):
 			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
 		}
 	}
-	name := strings.TrimSpace(b.String())
+	// Fields splits on any whitespace run and drops empties, so joining with
+	// "_" collapses runs of spaces/tabs into a single underscore.
+	name := strings.Join(strings.Fields(b.String()), "_")
 	if name == "" {
 		return "export"
 	}
-	return strings.ReplaceAll(name, " ", "_")
+	return name
 }
 
-// stringSliceToInts parses chapter numbers from file names for sorting.
-func stringSliceToInts(ss []string) ([]int, error) {
-	out := make([]int, len(ss))
-	for i, s := range ss {
-		s = strings.TrimSuffix(s, filepath.Ext(s))
-		n, err := strconv.Atoi(s)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = n
-	}
-	return out, nil
-}
-
-// sortChapterFiles sorts chapter file names numerically when possible.
+// sortChapterFiles sorts chapter file names numerically ("2.md" < "10.md").
+// Parses each name's number INSIDE the comparator (per-element) — the previous
+// version precomputed a parallel `nums` slice then let sort.Slice permute
+// `files` without permuting `nums`, so after the first swap the comparator read
+// mismatched indices and produced a wrong order. Non-numeric names fall back to
+// lexical comparison so a stray file never panics the sort.
 func sortChapterFiles(files []string) {
-	nums, err := stringSliceToInts(files)
-	if err != nil {
-		sort.Strings(files)
-		return
+	chapNum := func(name string) (int, bool) {
+		n, err := strconv.Atoi(strings.TrimSuffix(name, filepath.Ext(name)))
+		return n, err == nil
 	}
 	sort.Slice(files, func(i, j int) bool {
-		return nums[i] < nums[j]
+		ni, oki := chapNum(files[i])
+		nj, okj := chapNum(files[j])
+		if oki && okj {
+			return ni < nj
+		}
+		return files[i] < files[j]
 	})
 }
 
