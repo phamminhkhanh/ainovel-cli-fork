@@ -2,6 +2,7 @@
 
 > Bản tóm tắt tiếng Việt: **dự án là gì · triết lý thiết kế · flow hoạt động**. Đọc file này là đủ nắm cốt lõi, khỏi đọc lại toàn bộ source.
 > Chi tiết kỹ thuật đầy đủ: [README.md](README.md) (中文) · [docs/architecture.md](docs/architecture.md).
+> Review truyện engine sinh ra (nền móng/prose/11 trục/định khung thể loại+nước+văn hóa/can thiệp): [05-REVIEW-TRUYEN.md](05-REVIEW-TRUYEN.md).
 
 ---
 

@@ -28,6 +28,9 @@ workspace/<tên>/output/jobs/run-XXX/output/novel/   ← hoặc ./output/jobs/..
   chapters/NN.md                  # bản final
   foreshadow_ledger.* relationship_state.* timeline.*
 ```
+
+> ⚠ **Source of truth (quan trọng khi sửa file):** `premise.md` → markdown LÀ gốc (không có .json). `compass.json`, `layered_outline.json`, `world_rules.json`, `characters.json` → **JSON là gốc**, file `.md` cùng tên chỉ là render — engine bỏ qua .md → sửa .md vô tác dụng. KHÔNG rename key JSON (engine phụ thuộc field name). Giữ nguyên ngôn ngữ hiện tại của foundation.
+
 Profile gốc (SSOT): `<cwd>/.ainovel/profiles/*.md` (hoặc `~/.ainovel/profiles/`, legacy `./profiles/`).
 
 **Quy trình đọc để review nhanh (dùng `read_files`, KHÔNG dùng shell — tránh lỗi cú pháp + encoding):**
@@ -36,7 +39,7 @@ Profile gốc (SSOT): `<cwd>/.ainovel/profiles/*.md` (hoặc `~/.ainovel/profile
 3. `reviews/*.json` → Editor tự chấm (điểm 0-100/chiều, verdict `polish`/`accept`/`rewrite`). Trung thực, đọc trước để tiết kiệm.
 4. Đọc trực tiếp prose: **chương 1** (giữ chân) + **1 chương giữa** + **chương mới nhất** (bắt drift). Nếu đổi model giữa chừng → đọc chương ngay trước + ngay sau mốc đổi.
 
-**Wordcount:** engine đếm **rune**. VN/Latin ~9-15k rune/chương ≈ 2000-3500 từ (chuẩn webnovel). Nếu chương ngắn bất thường (~1-1.5k từ) → cap CJK-centric chưa fix; xem `docs/journals/260709-non-cjk-wordcount-mode.md` (workaround: `meta/user_rules.json` field `chapter_words`).
+**Wordcount:** engine đếm **rune** (Unicode codepoint) — đúng cho CJK (1 rune ≈ 1 chữ), **sai mật độ** cho VN/Latin (1 từ ≈ 5-7 rune). Cap mặc định `chapter_words: {min:3000, max:6000}` calibrate cho tiếng Trung; áp cho tiếng Việt → chương chỉ ~1000-1500 từ (quá ngắn). **Fix:** override `chapter_words` trong `meta/user_rules.json` — VN đề xuất `min:9000, max:15000` rune (≈ 2000-3500 từ, chuẩn webnovel). Tương tự cho Spanish/English/Latin alphabet. Dài hạn: engine cần word-count mode cho non-CJK (upstream feature request).
 
 ---
 
@@ -44,8 +47,19 @@ Profile gốc (SSOT): `<cwd>/.ainovel/profiles/*.md` (hoặc `~/.ainovel/profile
 
 - **Sai ở nền móng nhân lên hàng trăm chương** → review profile/foundation nghiêm nhất.
 - **Genre-agnostic**: áp cho mọi thể loại, chỉ đổi từ vựng.
-- **Định khung trước khi soi**: thể loại & sub-genre? đã **đại trà** chưa (cliché phải tránh) / niche (phải nail gì cho fan cứng)? đặc trưng độc giả kỳ vọng? thị trường mục tiêu + năm hiện tại?
 - **Phản biện thẳng, trích dẫn nguyên văn, không khen xã giao.** Kết bằng "3 việc phải sửa trước tiên" xếp theo mức sát thương truyện dài.
+
+> ⚠️ **BƯỚC 0 — BẮT BUỘC trước mọi review hay sinh profile. Xác định rõ 4 thứ, mọi nhận xét sau phải bám vào đây:**
+> 1. **Thể loại & sub-genre** chính xác (romance / werewolf / cultivation / mystery / LitRPG…). Tôn trọng đúng thứ user muốn, không trôi về genre mặc định.
+> 2. **Đặc thù thể loại**: payoff/beat/khế ước ngầm mà độc giả thể loại này coi là bắt buộc (thiếu = hụt). Đã **đại trà** chưa → cliché phải tránh; nếu niche → phải nail gì cho fan cứng.
+> 3. **Nhu cầu độc giả của thể loại đó**: họ đọc để lấy cảm giác gì (đấu trí thắng lợi? "sủng"? longing? leo cấp? giải đố?), nhịp và độ dài kỳ vọng.
+> 4. **Quốc gia mục tiêu + VĂN HÓA nước đó + năm hiện tại** — quyết định mã trope, ngưỡng 18+/bạo lực, điều cấm kỵ, gu cảm xúc. **Cùng một thể loại nhưng khác nước là khác truyện.**
+>
+> **Dự án viết đa ngôn ngữ (VN · EN · ES) → thị trường/văn hóa KHÁC NHAU rõ rệt, không suy từ nước này sang nước khác:**
+> - **VN** (NovelToon/Dreame VN/Waka/WebNovel): mã ngôn tình Hoa-hoá (xuyên không, cung đấu, trọng sinh, tổng tài); **"sủng" gần như bắt buộc**; werewolf/Alpha là mã ngoại nhập kén hơn; 18+ bị kiểm duyệt (giữ "suggestive").
+> - **EN / Anglo** (Royal Road, Amazon KDP, WebNovel EN, Wattpad): fated-mate/longing cho werewolf; progression/LitRPG mạnh; slow-burn chấp nhận; ngưỡng spice cao hơn tùy nền tảng.
+> - **ES / Mỹ Latinh** (Booknet, Dreame ES, Wattpad ES): dark romance / mafia / werewolf rất mạnh; nhịp cảm xúc cao, kịch tính gia đình; taboo văn hóa-tôn giáo riêng; kỳ vọng độ dài/nhịp khác EN.
+> - Nếu **không chắc gu nước đích ở năm hiện tại** → nói rõ + khuyên kiểm chứng bằng bảng bestseller/đề xuất đang chạy của chính nền tảng nước đó, đừng đoán.
 
 ---
 
@@ -85,14 +99,20 @@ Profile gốc (SSOT): `<cwd>/.ainovel/profiles/*.md` (hoặc `~/.ainovel/profile
 
 **I. Ensemble & duy trì**
 - ≥3 nhân vật phụ có tên + arc riêng; hồ sơ nhân vật đồng bộ với diễn biến thật (vd sự kiện bị đẩy sớm/muộn so plan → cần sync).
+- 🔴 **Nhân vật tự sinh**: Writer có thể tạo nhân vật mới không có trong `characters.json` (vd "Tuấn" — beta trẻ bảo vệ An Nhiên). Không phải lỗi, nhưng nếu nhân vật tự sinh đóng vai quan trọng mà không có arc trong foundation → sẽ bị bỏ rơi hoặc inconsistent. **Kiểm tra:** grep tên lạ trong chapters, đối chiếu `characters.json`. Nếu quan trọng → thêm vào foundation.
 
 **J. AI-tell (soi kỹ prose)**
-- 🔴 **cấu trúc "không phải X mà là Y" / "Không phải… Mà là…"** (kể cả trong worldbuilding) — lỗi phổ biến nhất, nhiều model vi phạm; purple prose; nội tâm lặp một vòng; nhịp câu đều đều; câu văn mẫu; **văn quá vụn** (câu cụt không động từ thành register mặc định → đọc như sổ tay); **recap độn** (điểm lại cả arc thay vì dựng cảnh); từ khoá lặp máy móc (vd "bond nền ấm đều" 20+ lần).
+- 🔴 **cấu trúc "không phải X mà là Y" / "Không phải… Mà là…"** (kể cả trong worldbuilding/premise) — lỗi phổ biến nhất, nhiều model vi phạm; purple prose; nội tâm lặp một vòng; nhịp câu đều đều; câu văn mẫu; **văn quá vụn** (câu cụt không động từ thành register mặc định → đọc như sổ tay); **recap độn** (điểm lại cả arc thay vì dựng cảnh).
+- 🔴 **Từ/cụm khoá lặp máy móc** — grep toàn bộ chapters: nếu 1 cụm xuất hiện >10 lần → cờ đỏ. Ví dụ thực tế: `"bond nền ấm đều"` (Grok 4.5 lặp gần như mỗi chương mở đầu), `"không khỏi"`, `"dường như"`.
+  - Sửa qua `meta/user_rules.json` (schema `internal/rules/types.go`), phân biệt đúng field:
+    - `forbidden_phrases: []string` → **cụm cấm tuyệt đối** (vd `"bond nền ấm đều"`, `"không phải X mà là Y"` nếu cụ thể hoá được).
+    - `fatigue_words: map[string]int` → **từ thường chỉ xấu khi lặp dày**, đặt ngưỡng/chương (vd `{"im": 3, "khẽ": 2, "dường như": 2}`) — không cấm hẳn.
+    - `forbidden_chars: []string` → ký tự cấm.
+  - Hoặc dùng **steer-on-resume** nếu run đang chạy dở (§5).
 
-**K. Thị trường mục tiêu (năm hiện tại)**
-- Mã trope **bản địa vs ngoại nhập** (vd werewolf/Alpha là mã Tây, không phải mã ngôn tình Hoa quen với độc giả Việt); kỳ vọng cảm xúc đặc trưng (VN: yếu tố "sủng"; werewolf quốc tế: fated-mate/longing); ngưỡng 18+/kiểm duyệt nền tảng.
-- Lựa chọn đi **ngược trend đang thắng** = risk có chủ đích, phải bù đắp — không coi là "điểm mới lạ an toàn".
-- Không chắc xu hướng năm nay → nói rõ + khuyên kiểm chứng bằng bảng bestseller nền tảng đích.
+**K. Thị trường mục tiêu** (đối chiếu với **BƯỚC 0** ở §2 — nước/văn hóa/năm đã xác định)
+- Truyện có thật sự khớp gu nước đích không: mã trope bản địa vs ngoại nhập, kỳ vọng cảm xúc đặc trưng ("sủng" VN / fated-mate-longing EN / dark-romance-kịch-tính ES), ngưỡng 18+/kiểm duyệt nền tảng.
+- 🔴 Lựa chọn đi **ngược trend đang thắng** mà không bù đắp → coi là "điểm mới lạ an toàn" (thực ra kén độc giả). Phải gọi tên là risk có chủ đích + cách bù.
 
 ---
 
