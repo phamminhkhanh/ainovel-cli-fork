@@ -90,6 +90,10 @@ function renderProductionTab() {
                   <button class="chip-btn" data-template="trinh-tham">Trinh thám</button>
                   <button class="chip-btn" data-template="xuyen-khong">Xuyên không</button>
                 </div>
+                <div id="customTemplateSection" hidden>
+                  <div class="step-hint" style="margin-bottom:4px">Profile templates <span class="muted">(từ ~/.ainovel/profiles hoặc .ainovel/profiles)</span></div>
+                  <div id="customTemplateChips" class="genre-template-chips"></div>
+                </div>
                 <textarea id="studioBriefTemplate" rows="6" placeholder="M\u1eabu brief markdown... (click template \u0111\u1ec3 \u0111i\u1ec1n)"></textarea>
               </div>
 
@@ -823,6 +827,53 @@ function applyGenreTemplate(genre) {
   $('#studioHint').textContent = 'Template "' + genre + '" đã điền. Bổ sung ý tưởng ở Step 2 nếu muốn.';
 }
 
+// Load custom profile .md files as a separate chip row below the 10 built-in
+// genre templates. Profiles live in project (.ainovel/profiles/) or
+// global (~/.ainovel/profiles/); both are listed by GET /api/profiles.
+// Naming convention for humans: {lang}-{genre}-{variant}.md (e.g. es-dark-romance.md).
+async function loadCustomTemplateChips() {
+  const container = $('#customTemplateChips');
+  const section = $('#customTemplateSection');
+  if (!container || !section) return;
+  try {
+    const res = await fetch('/api/profiles');
+    if (!res.ok) return;
+    const items = await res.json();
+    if (!items.length) { section.hidden = true; container.innerHTML = ''; return; }
+    section.hidden = false;
+    container.innerHTML = items.map((p) => {
+      const label = p.name.replace(/\.md$/i, '').replace(/-/g, ' ');
+      const srcTag = p.source === 'project' ? '' : ' <span class="muted">(' + escapeHtml(p.source) + ')</span>';
+      return `<button class="chip-btn chip-custom" data-custom-path="${escapeHtml(p.path)}" title="${escapeHtml(p.path)}">${escapeHtml(label)}${srcTag}</button>`;
+    }).join('');
+    container.querySelectorAll('.chip-custom').forEach((btn) => {
+      btn.addEventListener('click', () => applyCustomTemplate(btn.dataset.customPath));
+    });
+  } catch (_) { /* silent — built-in chips still work */ }
+}
+
+async function applyCustomTemplate(profilePath) {
+  try {
+    const res = await fetch('/api/profiles/content?path=' + encodeURIComponent(profilePath));
+    if (!res.ok) { const d = await res.json().catch(() => ({})); toast(d.error || ('HTTP ' + res.status), 'error'); return; }
+    const data = await res.json();
+    const content = data.content || '';
+    const existing = $('#studioBriefTemplate').value.trim();
+    const isPristine = existing === ''
+      || existing === PROFILE_TEMPLATE.trim()
+      || Object.values(GENRE_TEMPLATES).some(t => existing === t.trim());
+    if (!isPristine && !confirm('Ghi đè brief hiện tại?')) return;
+    $('#studioBriefTemplate').value = content;
+    document.querySelectorAll('.chip-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.chip-custom').forEach(b => {
+      if (b.dataset.customPath === profilePath) b.classList.add('active');
+    });
+    $('#studioHint').textContent = 'Custom template đã điền. Bổ sung ý tưởng ở Step 2 nếu muốn.';
+  } catch (e) {
+    toast('Lỗi tải template: ' + e, 'error');
+  }
+}
+
 // Khung profile chuẩn (khớp các chiều Architect cần để sinh Premise mạnh).
 // Điền tay trong UI, hoặc copy ra LLM ngoài. Gợi ý trong ngoặc — thay bằng nội dung thật.
 const PROFILE_TEMPLATE = `# [Tên truyện]
@@ -876,6 +927,7 @@ async function openProfileLibrary() {
   $('#profileLibOverlay').hidden = false;
   profileLibNew();
   await refreshProfileLibList();
+  await loadCustomTemplateChips();
 }
 
 function profileLibNewWithConfirm() {
