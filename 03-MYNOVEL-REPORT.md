@@ -618,5 +618,88 @@ Nếu bạn quyết định thử MyNovel.pro hoặc bất kỳ nền tảng m�
 
 ---
 
+## 11. Hiểm Nguy Thật Cho AI Production — Lầm Tưởng vs Thực Tế
+
+> Nguồn: đối chiếu một tài liệu chiến lược "vận hành AI kiếm tiền trên
+> MyNovel" phổ biến với dữ liệu thực tế trong báo cáo này (100 sách phân
+> tích + Terms of Use + so sánh nền tảng). Phần này chốt lại để tác giả
+> dùng AI mass-production không nhầm mô hình kinh doanh.
+
+### 11.1 Lầm tưởng phổ biến — áp dụng nhầm mô hình Dreame/WebNovel cho MyNovel
+
+Nhiều tài liệu chiến lược mô tả MyNovel như nền tảng coin-per-chapter +
+exclusive contract (kiểu Dreame/GoodNovel). **Thực tế MyNovel là nền tảng
+bán sách completed ebook $1.49–$3.49, non-exclusive** (xem §1.1, §10).
+Bảng đối chiếu:
+
+| Claim phổ biến | Thực tế MyNovel | Bằng chứng trong báo cáo |
+|---|---|---|
+| "Werewolf/Vampire = 70% doanh thu" | **SAI** — chỉ 7/100 sách (blue ocean) | §10.2: Contemporary Romance 47, Erotic 27, Billionaire 16, Romantasy/Werewolf 7 |
+| "Chương 1000-1200 từ, bẫy xu mở khóa VIP" | **SAI** — ebook completed, 2500-4000 từ/chương | §10: 85% sách là completed; `06-ES` §3.1 |
+| "Chạy KPI chuyên cần 2 chương/ngày, nhận thưởng" | **KHÔNG TỒN TẠI** — MyNovel không có bonus | §5.1: Signing Bonus None, Monthly Bonus None |
+| "Chia 50/50, trừ 30% phí, thực nhận 20-25%" | **SAI** — quảng bá 80% royalty (vấn đề là "80% của cái gì") | §6.1 |
+| "Phạt bỏ truyện, thuê ghostwriter viết tiếp" | **Điều khoản DREAME**, không phải MyNovel | `06-ES` §1.1, §8: ghost-writing clause = Dreame |
+| "Hạn mức rút $100-$200" | **KHÔNG XÁC NHẬN** — Terms không đề cập | §5.1: Payment Threshold = Unknown; §7.7 |
+
+→ Các con số/thưởng/phạt trên là đặc trưng **Dreame/WebNovel/GoodNovel**,
+không phải MyNovel. Áp dụng nhầm → sai funnel, sai wordcount, sai kỳ vọng
+thu nhập.
+
+### 11.2 Bẫy THẬT cho AI mass-production (theo thứ tự nguy hiểm)
+
+Với AI production, "mất bản quyền" không đau (sinh lại được), nhưng bẫy
+chuyển sang thu nhập + rủi ro pháp lý:
+
+**1. MyNovel LỌC AI content — rủi ro tồn tại trên platform (bẫy #1).**
+App description ghi: *"editors filter out hundreds of clumsy AI-generated
+books submitted every month"* (§1.4.3). Truyện AI thô bị reject/gỡ sau
+khi đã tốn công + token. Đây là rủi ro vận hành, không phải điều khoản —
+không có clause nào bảo vệ bạn.
+
+**2. Indemnification + Liability cap €100 — rủi ro pháp lý lớn nhất khi
+dùng AI (§2.5, §7.6).**
+AI dễ sinh nội dung sao chép/plagiarism, phỉ báng, content nhạy cảm.
+Hợp đồng: tác giả bồi thường đầy đủ, platform chỉ chịu €100. Ai kiện vì
+AI copy content → bạn chịu 100% chi phí pháp lý. Mass-produce càng nhiều
+→ bề mặt rủi ro càng rộng.
+
+**3. Monetization Without Payment (Section 3.6, §2.3) — vắt doanh thu
+ngầm.**
+Platform chạy quảng cáo + bán premium reader feature trên truyện bạn,
+không chia xu. AI production ra nhiều sách = nhiều mặt hàng để họ
+monetize, bạn chỉ nhận royalty bán sách.
+
+**4. Terminate 7 ngày + giữ quyền perpetual (§2.4, §7.5).**
+Không tiếc content AI, nhưng mất kênh phân phối đột ngột → mất thu nhập
+đang chạy. Quyền perpetual: họ vẫn bán/dịch/audiobook truyện đã gỡ → mất
+cả thu nhập lẫn kênh.
+
+**5. Trọng tài Cyprus + từ bỏ class action (§2.6).**
+Platform không thanh toán/đóng cửa → kiện cá nhân tại Cyprus, chi phí >
+tiền tranh chấp. AI production từng cuốn vài chục USD/tháng → bất khả
+thi đòi.
+
+**6. Quy mô quá nhỏ cho AI economics (§7.1, §6.3).**
+4.7K app downloads, không iOS, không Semrush data. AI mass-production cần
+volume reader — truyện chìm, conversion không đủ. Break-even cần 200-500
+cuốn/tháng/cuốn → không thực tế cho 1 tác giả mới trên platform này.
+
+### 11.3 Khuyến nghị cho AI production
+
+| Mục tiêu | Nền tảng | Lý do |
+|---|---|---|
+| Kênh CHÍNH (EN) | Dreame / Amazon KDP | Traffic lớn, cơ chế thưởng có thật |
+| Kênh CHÍNH (ES) | **Booknet** | `06-ES` #1: license không perpetual, rút được, dark romance chủ đạo |
+| Kênh PHỤ | MyNovel | **Chỉ non-exclusive, sách CŨ đã xuất bản nơi khác** (§9.2, `06-ES` §1.4) |
+
+**Don't cho MyNovel:** mass-produce sách mới, exclusive, kỳ vọng thu nhập
+chính, kỳ vọng thưởng chuyên cần.
+
+**Do cho MyNovel:** upload sách đã hoàn thành ở nơi khác, non-exclusive,
+test thị trường niche (Dark Romance + Mystery, Romantasy — blue ocean
+theo §10.6).
+
+---
+
 *Disclaimer: Báo cáo này dựa trên nghiên cứu công khai và phân tích các nguồn thông tin có sẵn tại thời điểm tháng 7/2026. Các điều khoản và điều kiện của nền tảng có thể thay đổi. Tác giả báo cáo không chịu trách nhiệm cho bất kỳ quyết định kinh doanh nào được đưa ra dựa trên thông tin này. Các tác giả nên tự đọc kỹ Terms of Use và tư vấn pháp lý nếu cần thiết trước khi ký kết bất kỳ hợp đồng nào.*
 

@@ -28,6 +28,7 @@ cmd/ainovel-cli/main.go   ← only upstream file we touch
 | [02-WEB-UI.md](02-WEB-UI.md) | **Deep dive**: Web UI architecture, file map, API endpoints, content workspace tabs, i18n strategy, upstream merge workflow |
 | [03-MYNOVEL-REPORT.md](03-MYNOVEL-REPORT.md) | Phân tích nền tảng MyNovel (mynovel.net/pro): pháp lý, traffic, rủi ro, so sánh platform |
 | [05-REVIEW-TRUYEN.md](05-REVIEW-TRUYEN.md) | **Playbook review truyện engine sinh ra**: đọc file này là đủ để review 1 cuốn (nền móng/prose/11 trục/can thiệp). Mở thread mới review → đọc 05 trước |
+| [06-ES-BEST-PRACTICES.md](06-ES-BEST-PRACTICES.md) | **Best practices novel tiếng Tây Ban Nha**: platforms (Booknet/Wattpad/Dreame/MyNovel), tropes ES, español neutro, anti-AI prose, chapter conventions, checklist production |
 | [docs/production-cockpit.md](docs/production-cockpit.md) | Production Cockpit (tab Sản xuất): hướng dẫn dùng + [journal MVP kèm sơ đồ tương tác](docs/journals/260703-production-cockpit-mvp.md) |
 | [start-web.sh](start-web.sh) | How to run the web UI locally |
 
