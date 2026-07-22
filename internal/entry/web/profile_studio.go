@@ -245,6 +245,9 @@ func (s *server) handleProfileGenerate(w http.ResponseWriter, r *http.Request) {
 	if lang == "" {
 		lang = "Vietnamese"
 	}
+	// Canonical code embedded as a marker in the output so a production run can
+	// recover the language later (see detectProfileLang / prodrun_rules.go).
+	langCode := normalizeLangCode(lang)
 	var b strings.Builder
 	fmt.Fprintf(&b, "Rough idea:\n%s\n\n", strings.TrimSpace(body.Idea))
 	fmt.Fprintf(&b, "Output language: %s\n", lang)
@@ -282,7 +285,7 @@ func (s *server) handleProfileGenerate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"content": content})
+		writeJSON(w, http.StatusOK, map[string]any{"content": withLangMarker(content, langCode)})
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -359,8 +362,23 @@ func (s *server) handleProfileGenerate(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return
 	}
-	writeSSE(w, flusher, sseMessage{Type: "profileDone", Text: text})
+	writeSSE(w, flusher, sseMessage{Type: "profileDone", Text: withLangMarker(text, langCode)})
 	flusher.Flush()
+}
+
+// withLangMarker prepends the "<!-- ainovel:lang=xx -->" marker to a generated
+// profile when a language code is known and the marker isn't already present.
+// The marker is an HTML comment: invisible in rendered Markdown, preserved on
+// save, and later read by detectProfileLang to pick the run's rule language.
+func withLangMarker(content, langCode string) string {
+	marker := profileLangComment(langCode)
+	if marker == "" {
+		return content
+	}
+	if profileLangMarker.MatchString(content) {
+		return content
+	}
+	return marker + "\n\n" + strings.TrimLeft(content, "\n")
 }
 
 // runProfileStream opens the streaming LLM call and returns the raw stream

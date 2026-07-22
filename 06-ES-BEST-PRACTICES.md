@@ -226,10 +226,31 @@ Xem `~/.ainovel/rules/prose-rhythm-es.md` cho rules đầy đủ.
 ~/.ainovel/rules/
   lang-es.md           ← ngôn ngữ, wordcount, frases prohibidas, frequency
   prose-rhythm-es.md   ← staccato anti-pattern
+  lang-vi.md           ← (VN) — VẪN được load kể cả khi viết ES!
+  prose-rhythm-vi.md   ← (VN) — VẪN được load kể cả khi viết ES!
 ```
 
-**Cách dùng:** khi tạo novel ES, engine tự load `lang-es.md` nếu profile ghi
-`español`. File `prose-rhythm-es.md` load qua `~/.ainovel/rules/` (toàn cục).
+> ✅ **Đã có auto-select theo ngôn ngữ (từ bản vá per-language rules).** Bạn
+> **giữ tất cả rule của mọi ngôn ngữ trong `~/.ainovel/rules/`** như thường —
+> mỗi run tự chọn đúng bộ:
+>
+> - Mỗi production run mang một **mã ngôn ngữ** (`vi`/`es`/`en`). Khi tạo run,
+>   `prepareRunDir` **chỉ copy** rule trung tính + rule khớp mã đó vào sandbox;
+>   bộ ngôn ngữ khác bị bỏ qua.
+> - Child headless được **re-root HOME về sandbox**, nên đường "global rules"
+>   của engine (`~/.ainovel/rules`) trỏ vào bản đã lọc — **không còn lây nhiễm
+>   chéo** (run ES không nạp `lang-vi.md` nữa).
+> - Run lưu `language` + `ruleFiles` (danh sách file thực sự nạp), hiện ngay ở
+>   panel chi tiết run trong Cockpit → **trực quan, khỏi đoán**.
+>
+> **Quy ước đặt tên (load-bearing):** rule theo ngôn ngữ phải kết thúc bằng
+> `-<mã>.md` (`lang-es.md`, `prose-rhythm-es.md`, `lang-vi.md`…). Rule **trung
+> tính** (không hậu tố mã) nạp cho **mọi** run. Mã hỗ trợ: `vi`, `es`, `en`.
+>
+> **Cách chọn ngôn ngữ cho run:**
+> 1. Chọn ô "Ngôn ngữ viết" trong modal tạo run (Tiếng Việt / Español / English), **hoặc**
+> 2. Để "Tự động" — hệ thống đọc marker `<!-- ainovel:lang=xx -->` (Studio tự
+>    chèn khi sinh profile) rồi tới hậu tố tên file profile (`*-es.md`, `*-vn.md`).
 
 ### 6.2 Profile mẫu (tạo per-novel)
 
@@ -248,6 +269,30 @@ Khi viết novel ES, tạo profile theo template VN hiện có nhưng:
 - [ ] `chapter_words` override: min 14000, max 22000 rune.
 - [ ] Bối cảnh nhất quán (España hoặc Latinoamérica, không trộn).
 - [ ] Español neutro: tú/ustedes, pretérito simple, vocab universal.
+- [ ] Chọn "Ngôn ngữ viết = Español" (hoặc để Tự động với profile `*-es.md`) khi
+      tạo run; sau khi start, kiểm tra "Rule đã nạp" ở panel run chỉ gồm
+      `lang-es.md` + `prose-rhythm-es.md` + rule trung tính.
+
+### 6.4 Chuẩn hóa rule/profile (ĐÃ vá)
+
+Phân loại theo phạm vi để hết "rối":
+
+| Loại | Phạm vi | Cơ chế |
+|---|---|---|
+| **Profile** (title, tropes, nhân vật, wordcount của 1 cuốn) | **Per-project** — `<repo>/.ainovel/profiles/*.md` | Sinh/lưu tại Studio; là SSOT của 1 cuốn, không tái dùng cross-book |
+| **Rule trung tính** (không hậu tố mã ngôn ngữ) | **Global** — `~/.ainovel/rules/` | Nạp cho MỌI run |
+| **Rule ngôn ngữ** (`lang-<mã>.md`, `prose-rhythm-<mã>.md`) | **Global, chọn theo run** | Vẫn để trong `~/.ainovel/rules/`; run chỉ nạp bộ khớp `language` |
+
+**Đã implement (all additive, chỉ trong `internal/entry/web/`):**
+1. `ProdRun.Language` + `ProdRun.RuleFiles` — set khi tạo run (UI chọn hoặc
+   auto-detect từ profile marker/tên file), lọc tại `prepareRunDir`.
+2. `copyLangFilteredRules` — copy rule trung tính + rule khớp mã, bỏ bộ khác.
+3. Child re-root HOME về sandbox (`withSandboxHome`) → engine không đọc được
+   `~/.ainovel/rules` thật, chỉ thấy bản đã lọc. Hết lây nhiễm chéo.
+4. Studio chèn `<!-- ainovel:lang=xx -->` vào profile sinh ra để tự khai báo.
+5. Cockpit hiện `language` + "Rule đã nạp" ở panel run.
+
+Chi tiết code/flow: xem [02-WEB-UI.md](02-WEB-UI.md) §"Language-aware rule selection".
 - [ ] Female gaze + consent cho romance scenes.
 - [ ] Cliffhanger mỗi chương.
 - [ ] Slow burn — không rush chemistry trước chương 10.

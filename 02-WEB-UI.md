@@ -59,7 +59,8 @@ Frontend = **JS thuần, 0 dependency**, nhúng vào binary bằng `go:embed` �
 | `phase3.go` | cocreate / export / import / diag (Phase 3) |
 | `content.go` | read-only content endpoints: chapters, outline, world, characters |
 | `content_reviews.go` | read-only: đánh giá 7 chiều của Editor (`/api/reviews`) + sổ 伏笔 (`/api/foreshadow`) |
-| `prodrun.go` | `ProdRun` model (`SeededFrom`/`FoundationApproved`/`RevisionNote`/`PersistError`) + JSON store `jobs.json` (persist có retry chống Windows lock) |
+| `prodrun.go` | `ProdRun` model (`SeededFrom`/`FoundationApproved`/`RevisionNote`/`PersistError`/`Language`/`RuleFiles`) + JSON store `jobs.json` (persist có retry chống Windows lock) |
+| `prodrun_rules.go` | Language-aware rule selection: mã ngôn ngữ (`vi`/`es`/`en`), `ruleFileLang`, `detectProfileLang` (marker→tên file), `copyLangFilteredRules`, `withLangMarker` |
 | `prodrun_runner.go` | spawn `ainovel-cli --headless`, poll progress/reviews/cost, target-kill, Foundation Gate detect, reap+retry (persist chống Windows lock) |
 | `prodrun_handlers.go` | HTTP handlers `/api/profiles*` + `/api/prodruns*` (create/start/stop/sync/foundation/approve/reject/revise/resume/reveal/ide-bundle/export) |
 | `prodrun_health.go` | Health strip: pure fn `computeRunHealth` → 5 metric (progress/rewrite_rate/cost_pace/budget/persist); `prodRunView` bọc `health` vào response |
@@ -132,6 +133,39 @@ Quy tắc:
   đổi prompt xong phải **restart `--web`** (prompt nạp một lần lúc dựng engine). Role đã override thì
   không còn ăn cải tiến prompt từ upstream — cân nhắc chỉ override chọn lọc, phần còn lại dùng user-rules.
 
+### Language-aware rule selection (chống lây nhiễm chéo ngôn ngữ)
+
+**Vấn đề gốc:** engine (`internal/rules/raw.go`) quét **mọi** `*.md` trong
+`~/.ainovel/rules/` không phân biệt ngôn ngữ. Nếu để chung `lang-vi.md` + `lang-es.md`
+(+ `prose-rhythm-*.md`), một run ES sẽ nạp cả luật VN → xung đột trong `user_rules`
+(vd staccato VN vs câu dài ES → câu quá ngắn, đọc mệt).
+
+**Cách fix (100% trong `internal/entry/web/`, không đụng `internal/host`/`internal/rules`):**
+
+| Thành phần | Vai trò |
+|---|---|
+| `ProdRun.Language` | Mã ngôn ngữ chuẩn hoá (`vi`/`es`/`en`) của run. Rỗng = không lọc (legacy). |
+| `ProdRun.RuleFiles` | Danh sách file rule **thực sự** copy vào sandbox — hiện ở panel run (trực quan). |
+| `normalizeLangCode` | Map free-text/UI ("español", "Tiếng Việt", "vn"…) → mã chuẩn. |
+| `ruleFileLang` | Suy mã ngôn ngữ của 1 file rule từ hậu tố `-<mã>.md`. Không có hậu tố = **trung tính**. |
+| `detectProfileLang` | Auto-detect: marker `<!-- ainovel:lang=xx -->` trong profile → hậu tố tên file. |
+| `copyLangFilteredRules` | `prepareRunDir` copy rule trung tính + rule khớp mã, **bỏ** bộ ngôn ngữ khác. |
+| `withSandboxHome` | `start()` re-root HOME (`HOME`/`USERPROFILE`/`HOMEDRIVE`/`HOMEPATH`) của child về sandbox. |
+
+**Vì sao cần re-root HOME:** engine luôn đọc "global rules" từ `os.UserHomeDir()/.ainovel/rules`.
+Chỉ lọc bản copy trong sandbox là **chưa đủ** — đường global vẫn đọc `~/.ainovel/rules` thật (đủ mọi
+ngôn ngữ). Re-root HOME về `runDir` khiến "global" của engine trỏ vào bản đã lọc. Sandbox
+`.ainovel/config.json` đã chứa **full config (kèm API key)** từ `buildRunConfig`, nên API vẫn chạy;
+prompt override là feature của web-parent (child headless không dùng) nên không mất gì.
+
+**Quy ước đặt tên (load-bearing):** rule theo ngôn ngữ **phải** kết thúc `-<mã>.md`
+(`lang-es.md`, `prose-rhythm-vi.md`…). Rule trung tính không có hậu tố mã → nạp cho mọi run.
+Thêm ngôn ngữ mới: thêm mã vào `knownRuleLangs` + alias trong `langAliases` (`prodrun_rules.go`),
+thêm option vào `#newRunLang` (`app-production.js`) và `runLanguageLabel`.
+
+**Chọn ngôn ngữ cho run:** ô "Ngôn ngữ viết" trong modal tạo run, hoặc để "Tự động"
+(đọc marker/tên file profile). Studio chèn marker sẵn khi sinh profile.
+
 ## 3. Tab Sản xuất (Production Cockpit)
 
 Tab thứ 6 trong workspace (ngay trước tab **Hỗ trợ**), dùng để xếp hàng và chạy các job `ainovel-cli --headless` trong sandbox riêng `output/jobs/{id}/`.
@@ -151,7 +185,7 @@ Cockpit có 2 kiểu job:
 |---|---|---|---|
 | GET | `/api/profiles` | — | `[{name, path, source}]`, với `path` dạng `project/foo.md`, `global/foo.md`, hoặc `legacy/foo.md` |
 | GET | `/api/prodruns` | — | `[ProdRunView]` (`ProdRun` + `health`) |
-| POST | `/api/prodruns` | `{kind:"fresh_profile", name, profile, model?, provider?, targetChapters?, budgetUsd?}` | `ProdRunView` |
+| POST | `/api/prodruns` | `{kind:"fresh_profile", name, profile, language?, model?, provider?, targetChapters?, budgetUsd?}` | `ProdRunView` (`language` rỗng → auto-detect từ profile) |
 | POST | `/api/prodruns` | `{kind:"continue_workspace", name, model?, provider?, targetChapters, budgetUsd?}` | `ProdRunView` kèm `seededFrom` |
 | GET | `/api/prodruns/{id}` | — | `ProdRunView` |
 | POST | `/api/prodruns/{id}/start` | — | `ProdRunView` |

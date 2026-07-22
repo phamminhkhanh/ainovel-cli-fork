@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -1648,5 +1650,109 @@ func TestResumeFailedSteerSkippedWhenNoOutput(t *testing.T) {
 	runJSON := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta", "run.json")
 	if _, err := os.Stat(runJSON); err == nil {
 		t.Fatal("run.json should NOT be written when run has no output (fresh StartPrepared path, steer would be orphaned)")
+	}
+}
+
+// TestRunnerStartFiltersRulesByLanguage is the end-to-end guard for the
+// cross-language contamination bug: an es run must copy ONLY es + neutral rules
+// into its sandbox (never the vi rules), the child must be re-rooted at the
+// sandbox HOME, and run.RuleFiles must record what actually loaded.
+func TestRunnerStartFiltersRulesByLanguage(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	setTestHome(t, home)
+
+	// Seed the user's real ~/.ainovel/rules with both languages + a neutral file.
+	homeRules := filepath.Join(home, ".ainovel", "rules")
+	if err := os.MkdirAll(homeRules, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"lang-es.md":         "# es",
+		"prose-rhythm-es.md": "# es rhythm",
+		"lang-vi.md":         "# vi",
+		"prose-rhythm-vi.md": "# vi rhythm",
+		"anti-ai.md":         "# neutral",
+	} {
+		if err := os.WriteFile(filepath.Join(homeRules, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repoRoot := t.TempDir()
+	profileDir := filepath.Join(repoRoot, "profiles")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "es.md"), []byte("# perfil"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+	runner.pollInterval = 200 * time.Millisecond
+
+	var capturedEnv []string
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(200) }
+	runner.onCmdStarted = func(cmd *exec.Cmd) { capturedEnv = cmd.Env }
+
+	r, err := ps.createWithOptions(prodRunCreateOptions{
+		Kind:           prodRunKindFreshProfile,
+		Name:           "es-run",
+		Profile:        "profiles/es.md",
+		Language:       "es",
+		TargetChapters: 5,
+		BudgetUSD:      1,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := runner.start(r.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		if ps.get(r.ID).Status != prodRunRunning {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	runDir := ps.runDir(r.ID)
+	sandboxRules := filepath.Join(runDir, ".ainovel", "rules")
+
+	// vi rules MUST NOT be in the sandbox.
+	for _, forbidden := range []string{"lang-vi.md", "prose-rhythm-vi.md"} {
+		if _, err := os.Stat(filepath.Join(sandboxRules, forbidden)); !os.IsNotExist(err) {
+			t.Fatalf("%s leaked into es sandbox (err=%v)", forbidden, err)
+		}
+	}
+	// es + neutral rules MUST be present.
+	for _, want := range []string{"lang-es.md", "prose-rhythm-es.md", "anti-ai.md"} {
+		if _, err := os.Stat(filepath.Join(sandboxRules, want)); err != nil {
+			t.Fatalf("%s missing from es sandbox: %v", want, err)
+		}
+	}
+
+	// run.RuleFiles records exactly what loaded.
+	run := ps.get(r.ID)
+	wantFiles := []string{"anti-ai.md", "lang-es.md", "prose-rhythm-es.md"}
+	sort.Strings(run.RuleFiles)
+	if !reflect.DeepEqual(run.RuleFiles, wantFiles) {
+		t.Fatalf("run.RuleFiles = %v, want %v", run.RuleFiles, wantFiles)
+	}
+
+	// Child HOME re-rooted at the sandbox so the engine's global rules path can't
+	// reach the real ~/.ainovel/rules.
+	foundHome := false
+	for _, kv := range capturedEnv {
+		if kv == "HOME="+runDir {
+			foundHome = true
+		}
+	}
+	if !foundHome {
+		t.Fatalf("child HOME not re-rooted at sandbox %q; env=%v", runDir, capturedEnv)
 	}
 }

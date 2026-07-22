@@ -78,10 +78,20 @@ const defaultProdRunBudgetUSD = 5.0
 
 // ProdRun is a queued / running / finished headless novel-generation job.
 type ProdRun struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Kind             string    `json:"kind,omitempty"`
-	Profile          string    `json:"profile"` // profile ref, e.g. "project/foo.md", "global/foo.md", or legacy "profiles/foo.md"
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind,omitempty"`
+	Profile string `json:"profile"` // profile ref, e.g. "project/foo.md", "global/foo.md", or legacy "profiles/foo.md"
+	// Language is the canonical rule-language code (vi/es/en, see prodrun_rules.go)
+	// the run writes in. It selects which rule files load: prepareRunDir copies
+	// only neutral rules + rules matching this code, and the child's HOME is
+	// re-rooted at the sandbox so the engine's global rules path can't reach the
+	// other language's rules. Empty = undetermined → all rules load (legacy behavior).
+	Language string `json:"language,omitempty"`
+	// RuleFiles records the exact rule filenames that were copied into the run
+	// sandbox at start time (after language filtering). Surfaced in the UI so the
+	// user can see precisely which rules a run loaded instead of guessing.
+	RuleFiles        []string  `json:"ruleFiles,omitempty"`
 	Model            string    `json:"model,omitempty"`
 	Provider         string    `json:"provider,omitempty"`
 	TargetChapters   int       `json:"targetChapters"`
@@ -269,6 +279,7 @@ type prodRunCreateOptions struct {
 	Kind           string
 	Name           string
 	Profile        string
+	Language       string
 	Model          string
 	Provider       string
 	TargetChapters int
@@ -309,6 +320,7 @@ func (ps *prodRunStore) createWithOptions(opts prodRunCreateOptions) (*ProdRun, 
 		Name:           strings.TrimSpace(opts.Name),
 		Kind:           opts.Kind,
 		Profile:        opts.Profile,
+		Language:       normalizeLangCode(opts.Language),
 		Model:          opts.Model,
 		Provider:       opts.Provider,
 		TargetChapters: opts.TargetChapters,

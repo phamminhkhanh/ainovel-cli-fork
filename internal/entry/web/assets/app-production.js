@@ -48,6 +48,7 @@ function renderProductionTab() {
           <div class="modal-body">
             <div class="field"><label for="newRunName">T\u00ean job</label><input type="text" id="newRunName" placeholder="vd: Werewolf romantasy 100 ch\u01b0\u01a1ng"></div>
             <div class="field" id="newRunProfileField"><label for="newRunProfile">Profile t\u1ea1o truy\u1ec7n</label><select id="newRunProfile"><option value="">\u0110ang t\u1ea3i\u2026</option></select><small class="muted">File .md trong ./.ainovel/profiles/ ho\u1eb7c ~/.ainovel/profiles/.</small></div>
+            <div class="field" id="newRunLangField"><label for="newRunLang">Ng\u00f4n ng\u1eef vi\u1ebft</label><select id="newRunLang"><option value="">T\u1ef1 \u0111\u1ed9ng (theo profile)</option><option value="vi">Ti\u1ebfng Vi\u1ec7t</option><option value="es">Espa\u00f1ol</option><option value="en">English</option></select><small class="muted">Ch\u1ec9 rule \u0111\u00fang ng\u00f4n ng\u1eef n\u00e0y (+ rule trung t\u00ednh) \u0111\u01b0\u1ee3c n\u1ea1p cho run. \u201cT\u1ef1 \u0111\u1ed9ng\u201d \u0111\u1ecdc marker/t\u00ean file profile.</small></div>
             <div class="field-row">
               <div class="field"><label for="newRunModel">Model override (t\u00f9y ch\u1ecdn)</label><input type="text" id="newRunModel" placeholder="vd: gpt-4o"></div>
               <div class="field"><label for="newRunProvider">Provider override (t\u00f9y ch\u1ecdn)</label><input type="text" id="newRunProvider" placeholder="vd: openai"></div>
@@ -376,6 +377,8 @@ function configureNewRunModal() {
   const isContinue = productionCreateMode === 'continue_workspace';
   $('#newRunTitle').textContent = isContinue ? 'Cook ti\u1ebfp workspace hi\u1ec7n t\u1ea1i' : 'T\u1ea1o truy\u1ec7n m\u1edbi t\u1eeb profile';
   $('#newRunProfileField').hidden = isContinue;
+  const langField = $('#newRunLangField');
+  if (langField) langField.hidden = isContinue; // continue inherits its run's language
   $('#newRunTargetLabel').textContent = isContinue ? 'T\u1ed5ng s\u1ed1 ch\u01b0\u01a1ng mu\u1ed1n \u0111\u1ea1t t\u1edbi' : 'S\u1ed1 ch\u01b0\u01a1ng m\u1ee5c ti\u00eau';
   $('#newRunTargetHelp').textContent = isContinue
     ? 'M\u1ee5c ti\u00eau l\u00e0 t\u1ed5ng s\u1ed1 ch\u01b0\u01a1ng cu\u1ed1i c\u00f9ng, kh\u00f4ng ph\u1ea3i s\u1ed1 ch\u01b0\u01a1ng vi\u1ebft th\u00eam. V\u00ed d\u1ee5 \u0111ang 12 ch\u01b0\u01a1ng, mu\u1ed1n t\u1edbi 100 th\u00ec nh\u1eadp 100.'
@@ -425,6 +428,7 @@ async function submitNewRun() {
     kind: productionCreateMode,
     name: $('#newRunName').value.trim(),
     profile: isContinue ? undefined : $('#newRunProfile').value,
+    language: isContinue ? undefined : ($('#newRunLang')?.value || undefined),
     model: $('#newRunModel').value.trim() || undefined,
     provider: $('#newRunProvider').value.trim() || undefined,
     targetChapters: parseInt($('#newRunTarget').value, 10) || 30,
@@ -452,6 +456,8 @@ function clearNewRunForm() {
   $('#newRunProvider').value = '';
   $('#newRunTarget').value = '30';
   $('#newRunBudget').value = '5';
+  const lang = $('#newRunLang');
+  if (lang) lang.value = '';
 }
 
 // ── Profile Library ──────────────────────────────────────────────
@@ -1991,6 +1997,17 @@ function productionRunKindLabel(run) {
   return run.kind === 'continue_workspace' ? 'Cook ti\u1ebfp workspace' : 'Truy\u1ec7n m\u1edbi t\u1eeb profile';
 }
 
+// runLanguageLabel maps a run's canonical language code to a readable label.
+// Empty code = the run wasn't classified → all rules load (legacy behavior).
+function runLanguageLabel(code) {
+  switch (code) {
+    case 'vi': return 'Ti\u1ebfng Vi\u1ec7t (vi)';
+    case 'es': return 'Espa\u00f1ol (es)';
+    case 'en': return 'English (en)';
+    default: return 'T\u1ef1 \u0111\u1ed9ng / kh\u00f4ng l\u1ecdc';
+  }
+}
+
 function renderProductionRuns() {
   const ul = $('#runListItems');
   if (!ul) return;
@@ -2103,6 +2120,7 @@ async function renderProductionDetail(run) {
       ${healthHtml}
       <div class="run-detail-stats">
         <div class="stat"><span class="stat-label">Ki\u1ec3u job</span><span class="stat-value">${escapeHtml(productionRunKindLabel(run))}</span></div>
+        <div class="stat"><span class="stat-label">Ng\u00f4n ng\u1eef</span><span class="stat-value">${escapeHtml(runLanguageLabel(run.language))}</span></div>
         ${seedHtml}
         <div class="stat"><span class="stat-label">Ch\u01b0\u01a1ng</span><span class="stat-value">${run.chapters || 0} / ${run.targetChapters}</span></div>
         <div class="stat"><span class="stat-label">\u0110\u00e1nh gi\u00e1</span><span class="stat-value">${run.reviews || 0}</span></div>
@@ -2111,6 +2129,9 @@ async function renderProductionDetail(run) {
         <div class="stat"><span class="stat-label">Th\u1eddi gian</span><span class="stat-value">${runtime}</span></div>
         <div class="stat"><span class="stat-label">L\u00fd do d\u1eebng</span><span class="stat-value">${escapeHtml(run.stopReason || '\u2014')}</span></div>
       </div>
+      ${(run.ruleFiles && run.ruleFiles.length)
+        ? `<div class="run-rules muted"><span class="stat-label">Rule \u0111\u00e3 n\u1ea1p:</span> ${run.ruleFiles.map(escapeHtml).join(', ')}</div>`
+        : ''}
       <div class="progress-bar"><div class="progress-fill" style="width:${progress}%"></div></div>
       <div class="run-detail-actions">
         <button class="btn primary" data-action="start" data-run-id="${escapeHtml(run.id)}" ${!canStart ? 'disabled' : ''}>\u25b6 B\u1eaft \u0111\u1ea7u</button>

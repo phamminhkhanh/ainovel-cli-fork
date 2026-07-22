@@ -121,6 +121,13 @@ func (rr *prodRunRunner) start(id string) error {
 	cmd.Dir = runDir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	// Re-root the child's HOME at the sandbox so the engine's "global" rules path
+	// (os.UserHomeDir()/.ainovel/rules) resolves to the language-filtered copy we
+	// wrote in prepareRunDir, not the user's real ~/.ainovel/rules (which holds
+	// every language's rules). The sandbox .ainovel already carries a complete
+	// config.json (full providers/keys via buildRunConfig), so API access is
+	// unaffected. Preserve any env the cmdFactory set (tests inject helper vars).
+	cmd.Env = withSandboxHome(cmd.Env, runDir)
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
@@ -128,9 +135,13 @@ func (rr *prodRunRunner) start(id string) error {
 		return fmt.Errorf("start headless process: %w", err)
 	}
 
+	ruleFiles := r.RuleFiles
+	langCode := r.Language
 	if _, err := rr.store.update(id, func(r *ProdRun) {
 		r.ChildPID = cmd.Process.Pid
 		r.LogPath = logPath
+		r.RuleFiles = ruleFiles
+		r.Language = langCode
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "prodrun: failed to persist child pid: %v\n", err)
 	}
@@ -406,6 +417,12 @@ func prepareRunDir(runDir, repoRoot, hostDir string, r *ProdRun, baseCfg bootstr
 			if err != nil {
 				return fmt.Errorf("resolve profile: %w", err)
 			}
+			// No explicit language was chosen at creation: recover it from the
+			// profile itself (embedded marker, then filename suffix) so rule
+			// filtering still targets the right language.
+			if r.Language == "" {
+				r.Language = detectProfileLang(srcProfile)
+			}
 			dstProfile := filepath.Join(runDir, "profile.md")
 			if err := copyFile(dstProfile, srcProfile); err != nil {
 				return fmt.Errorf("copy profile: %w", err)
@@ -457,10 +474,18 @@ func prepareRunDir(runDir, repoRoot, hostDir string, r *ProdRun, baseCfg bootstr
 		return fmt.Errorf("unsupported production run kind %q", r.Kind)
 	}
 
+	// Copy only the rules that belong to this run's language (plus neutral ones)
+	// into the sandbox. Combined with the HOME re-root in start(), this is what
+	// keeps a Spanish run from loading Vietnamese rules and vice versa. When the
+	// language is undetermined (r.Language == "") every rule copies, matching the
+	// pre-language behavior. r.RuleFiles records the result for the UI; start()
+	// persists it after prepareRunDir returns.
 	homeRules := filepath.Join(bootstrap.DefaultConfigDir(), "rules")
-	if err := copyDirFiles(filepath.Join(cfgDir, "rules"), homeRules, ".md"); err != nil && !os.IsNotExist(err) {
+	copied, err := copyLangFilteredRules(filepath.Join(cfgDir, "rules"), homeRules, r.Language)
+	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("copy home rules: %w", err)
 	}
+	r.RuleFiles = copied
 
 	cfg := buildRunConfig(baseCfg, r)
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -647,6 +672,41 @@ func copyDirFiles(dstDir, srcDir, suffix string) error {
 	return nil
 }
 
+// withSandboxHome returns a child environment whose home-directory variables all
+// point at sandboxHome, so os.UserHomeDir() inside the child resolves there.
+// It starts from baseEnv (the cmdFactory's env, or the current process env when
+// nil), strips any existing home vars to avoid ambiguous duplicates, then appends
+// the sandbox ones. Non-home vars (PATH, provider creds, test helper flags) are
+// preserved untouched.
+func withSandboxHome(baseEnv []string, sandboxHome string) []string {
+	if baseEnv == nil {
+		baseEnv = os.Environ()
+	}
+	homeVars := map[string]bool{
+		"HOME": true, "USERPROFILE": true, "HOMEDRIVE": true, "HOMEPATH": true,
+	}
+	out := make([]string, 0, len(baseEnv)+4)
+	for _, kv := range baseEnv {
+		eq := strings.IndexByte(kv, '=')
+		if eq < 0 {
+			out = append(out, kv)
+			continue
+		}
+		if homeVars[strings.ToUpper(kv[:eq])] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out, "HOME="+sandboxHome, "USERPROFILE="+sandboxHome)
+	// On Windows os.UserHomeDir() reads USERPROFILE; HOMEDRIVE/HOMEPATH are set too
+	// so any other library that stitches them together lands in the sandbox as well.
+	vol := filepath.VolumeName(sandboxHome)
+	if vol != "" {
+		out = append(out, "HOMEDRIVE="+vol, "HOMEPATH="+strings.TrimPrefix(sandboxHome, vol))
+	}
+	return out
+}
+
 // ── prodRunManager wires store + runner for handlers ──
 
 type prodRunManager struct {
@@ -664,8 +724,17 @@ func newProdRunManager(jobsDir, binPath, repoRoot, hostDir string, baseCfg boots
 	return &prodRunManager{store: store, runner: runner, hostDir: hostDir}, nil
 }
 
-func (pm *prodRunManager) Create(name, profile, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
-	return pm.store.create(name, profile, model, provider, targetChapters, budgetUSD)
+func (pm *prodRunManager) Create(name, profile, language, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
+	return pm.store.createWithOptions(prodRunCreateOptions{
+		Kind:           prodRunKindFreshProfile,
+		Name:           name,
+		Profile:        profile,
+		Language:       language,
+		Model:          model,
+		Provider:       provider,
+		TargetChapters: targetChapters,
+		BudgetUSD:      budgetUSD,
+	})
 }
 
 func (pm *prodRunManager) CreateContinue(name, model, provider string, targetChapters int, budgetUSD float64) (*ProdRun, error) {
@@ -822,6 +891,7 @@ func (pm *prodRunManager) ResumeFailed(id, steer string) (*ProdRun, error) {
 	}
 	return pm.store.get(id), nil
 }
+
 // is still occupied by a just-killed child that waitProc hasn't reaped yet
 // (the gate's killProcess is async). Any non-"active" error returns immediately.
 func (pm *prodRunManager) startWithReapRetry(id string) error {
@@ -888,6 +958,7 @@ func (pm *prodRunManager) ReviseFoundation(id, feedback string) (*ProdRun, error
 		Kind:           prodRunKindFreshProfile,
 		Name:           old.Name + " (s\u1eeda)",
 		Profile:        old.Profile,
+		Language:       old.Language,
 		Model:          old.Model,
 		Provider:       old.Provider,
 		TargetChapters: old.TargetChapters,

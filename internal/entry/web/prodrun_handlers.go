@@ -71,6 +71,7 @@ func (s *server) handleProdRunCreate(w http.ResponseWriter, r *http.Request) {
 		Kind           string  `json:"kind"`
 		Name           string  `json:"name"`
 		Profile        string  `json:"profile"`
+		Language       string  `json:"language"`
 		Model          string  `json:"model"`
 		Provider       string  `json:"provider"`
 		TargetChapters int     `json:"targetChapters"`
@@ -97,7 +98,7 @@ func (s *server) handleProdRunCreate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
-		run, err = s.prodRunManager.Create(body.Name, body.Profile, body.Model, body.Provider, body.TargetChapters, body.BudgetUSD)
+		run, err = s.prodRunManager.Create(body.Name, body.Profile, body.Language, body.Model, body.Provider, body.TargetChapters, body.BudgetUSD)
 	case prodRunKindContinueWorkspace:
 		if s.hostIsRunning() {
 			writeErr(w, http.StatusConflict, errSeedHostRunning)
@@ -460,6 +461,7 @@ func (s *server) handleProdRunResume(w http.ResponseWriter, r *http.Request) {
 	}
 	writeProdRunView(w, http.StatusOK, next)
 }
+
 // manager so the user can hand-edit premise/outline/characters before Approve.
 // Loopback-only (same guard as handleReveal); the dir is derived server-side
 // from the validated run id — no client-supplied path.

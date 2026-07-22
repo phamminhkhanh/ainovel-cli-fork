@@ -250,6 +250,16 @@ Config field `style` trong `config.json` chọn template phong cách. Mỗi styl
 | Sci-fi Noir / Mystery | 🔥🔥 (niche nhỏ, ít cạnh tranh) | `suspense` | KDP, Royal Road |
 | Cozy Fantasy / Solarpunk | 🔥🔥 (xu hướng mới) | `default` | KDP, Royal Road |
 
+### 8.5 Độc giả & AI novel (góc dùng tool, ~2025–2026)
+
+Thị trường **không** trả tiền cho nhãn “AI novel”. Họ trả cho **truyện đọc được, ra đều, đúng niche** — nhất là webnovel / romantasy / serialized romance.
+
+- **Hành vi đọc:** chấp nhận (thường im lặng) bản AI-assisted khi prose sạch + series giữ nhịp; ghét **slop** (câu máy, nhân vật phẳng, dump không edit). Nhiều độc giả khó phân AI vs human khi chất lượng đủ; **stated** “cần người trong loop” vẫn phổ biến.
+- **Platform:** cho phép AI (có điều kiện) — disclose nội bộ (vd KDP) hoặc tag công khai (vd Wattpad, Royal Road); đồng thời siết spam. Một số brand indie **lọc AI** làm điểm bán (xem [03-MYNOVEL-REPORT.md](03-MYNOVEL-REPORT.md)).
+- **Hệ quả cho engine / fork:** bán **speed + continuity + human gate**, không bán “máy in bestseller”. Profile SSOT + Foundation Gate + can thiệp sớm (§9.3–9.4) là lớp khớp xu hướng này. Chọn platform volume; tuân disclosure từng store khi up.
+
+> Ghi chú: con số % title AI / survey thay đổi nhanh — dùng làm **hướng**, không hardcode vào product claim.
+
 ---
 
 ## 9. Lưu ý thực tế khi sử dụng
@@ -312,7 +322,8 @@ vật) — trước khi viết phần lớn truyện — để bạn duyệt. �
 tiếp), **Sửa tay** (mở thư mục sửa file nền móng rồi Duyệt), hoặc **Sửa & tạo lại** (nhờ AI
 viết lại nền móng theo góp ý — tạo job mới, giữ job cũ làm dự phòng, ~$0.01 sinh nền móng). Đây
 là chốt chặn rẻ nhất chống đúng cái bẫy "50 chương sau mới phát hiện lệch" ở §9.3 (dừng theo
-poll 5s nên là best-effort — tệ nhất mất một phần chương 1, không mất hàng trăm chương). Chi tiết:
+poll 5s nên là best-effort — tệ nhất mất một phần chương 1, không mất hàng trăm chương). Gate
+cũng khớp kỳ vọng market ở §8.5: human duyệt trước khi đốt volume Writer. Chi tiết:
 [docs/journals/260705-foundation-gate.md](docs/journals/260705-foundation-gate.md).
 
 ### 9.5 Chi phí & thời gian

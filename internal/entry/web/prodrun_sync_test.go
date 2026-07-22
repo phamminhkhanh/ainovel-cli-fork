@@ -347,7 +347,7 @@ func TestProdRunManagerSync_RejectsActiveRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := mgr.Create("test", "profiles/p.md", "", "", 10, 5)
+	run, err := mgr.Create("test", "profiles/p.md", "", "", "", 10, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestProdRunManagerSync_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := mgr.Create("test", "profiles/p.md", "", "", 10, 5)
+	run, err := mgr.Create("test", "profiles/p.md", "", "", "", 10, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
