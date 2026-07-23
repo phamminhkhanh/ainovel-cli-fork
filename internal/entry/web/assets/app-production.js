@@ -9,6 +9,7 @@ let productionRunsCache = [];
 // reset khi khoẻ lại → tránh spam mỗi 5s poll.
 let lastPersistToastRun = null;
 let productionProfilesCache = [];
+let productionDetailRenderToken = 0;
 let productionCreateMode = 'fresh_profile';
 let productionWorkspaceSnapshot = null;
 // Cache nội dung preview nền móng theo run id (nội dung tĩnh) → tránh nhấp nháy
@@ -2042,16 +2043,20 @@ async function renderProductionDetail(run) {
     return;
   }
 
+  const token = ++productionDetailRenderToken;
+
   const runtime = formatDuration(run.startedAt ? new Date(run.startedAt) : null, run.stoppedAt ? new Date(run.stoppedAt) : null);
   const progress = run.targetChapters > 0 ? Math.min(100, Math.round((run.chapters || 0) / run.targetChapters * 100)) : 0;
   let logHtml = '';
   try {
     const res = await fetch(`/api/prodruns/${run.id}/log?lines=50`);
+    if (productionDetailRenderToken !== token) return;
     const text = res.ok ? await res.text() : '';
     logHtml = text ? `<pre class="run-log">${escapeHtml(text)}</pre>` : '<p class="muted">Ch\u01b0a c\u00f3 log.</p>';
   } catch (e) {
     logHtml = '<p class="muted">L\u1ed7i t\u1ea3i log.</p>';
   }
+  if (productionDetailRenderToken !== token || productionSelectedRunId !== run.id) return;
 
   const pauseNotice = run.status === 'paused'
     ? '<div class=\"run-pause-notice\">T\u1ea1m d\u1eebng \u2014 ch\u1ec9 c\u00f3 th\u1ec3 D\u1eebng ho\u1eb7c xu\u1ea5t file.</div>'

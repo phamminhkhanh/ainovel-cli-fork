@@ -36,6 +36,7 @@ type server struct {
 	studioOnce   sync.Once
 	studioModels *bootstrap.ModelSet
 	studioErr    error
+	workspaceMu sync.Mutex // serializes mutations to the main host workspace
 }
 
 // Store returns the cached on-disk store for read-only content handlers.

@@ -121,6 +121,8 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
 	var body struct {
 		Prompt string `json:"prompt"`
 		Force  bool   `json:"force"`
@@ -180,6 +182,8 @@ func (s *server) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
 	var body struct {
 		Text string `json:"text"`
 	}
@@ -208,6 +212,8 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
 	label, err := s.eng.Resume()
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)

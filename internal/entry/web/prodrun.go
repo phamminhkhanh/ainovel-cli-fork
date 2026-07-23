@@ -411,6 +411,9 @@ func (ps *prodRunStore) delete(id string) error {
 	if id == "" {
 		return fmt.Errorf("run id is empty")
 	}
+	if _, ok := parseRunSeq(id); !ok {
+		return fmt.Errorf("invalid run id %q", id)
+	}
 	if _, ok := ps.runs[id]; !ok {
 		return errDeleteRunNotFound
 	}
@@ -419,8 +422,12 @@ func (ps *prodRunStore) delete(id string) error {
 		return err
 	}
 	runDir := ps.runDirLocked(id)
-	if runDir == "" || runDir == ps.jobsDir || runDir == filepath.Dir(ps.jobsDir) {
+	if runDir == "" {
 		return fmt.Errorf("invalid run directory %q", runDir)
+	}
+	rel, err := filepath.Rel(ps.jobsDir, runDir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return fmt.Errorf("run directory %q outside jobs dir", runDir)
 	}
 	return os.RemoveAll(runDir)
 }

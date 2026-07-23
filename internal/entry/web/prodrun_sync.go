@@ -292,8 +292,9 @@ func ensureHostDirs(hostDir string) error {
 	return nil
 }
 
-// clearHostWorkspace removes the files/directories that sync copies into, so a
-// force sync does not leave stale host-only files behind.
+// clearHostWorkspace removes the files/directories that sync copies into, plus
+// cached host state that must not survive a force sync, so a force sync does not
+// leave stale host-only files or cached runtime state behind.
 func clearHostWorkspace(hostDir string) error {
 	paths := []string{
 		"premise.md",
@@ -304,14 +305,20 @@ func clearHostWorkspace(hostDir string) error {
 		"timeline.json", "timeline.md",
 		"foreshadow_ledger.json", "foreshadow_ledger.md",
 		"relationship_state.json", "relationship_state.md",
+		"chapters", "drafts", "summaries", "reviews",
+		"meta/progress.json",
 		"meta/compass.json",
 		"meta/style_rules.json",
 		"meta/state_changes.json",
 		"meta/cast_ledger.json",
+		"meta/usage.json",
+		"meta/checkpoints.jsonl",
+		"meta/runtime",
+		"meta/sessions",
+		"meta/snapshots",
 		"meta/signals/last_commit.json",
 		"meta/signals/pending_commit.json",
 		"meta/signals/last_review.json",
-		"chapters", "drafts", "summaries", "reviews", "meta/snapshots",
 	}
 	for _, p := range paths {
 		full := filepath.Join(hostDir, p)

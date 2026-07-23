@@ -361,6 +361,65 @@ func TestProdRunManagerSync_RejectsActiveRun(t *testing.T) {
 	}
 }
 
+func TestSyncRunOutputIntoHost_ForceClearsCachedState(t *testing.T) {
+	runDir := t.TempDir()
+	hostDir := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(runDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "chapters", "01.md"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(runDir, "meta"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := domain.Progress{CompletedChapters: []int{1}}
+	data, _ := json.Marshal(p)
+	if err := os.WriteFile(filepath.Join(runDir, "meta", "progress.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed host with stale cached state that sync must not preserve.
+	if err := os.MkdirAll(filepath.Join(hostDir, "meta", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "meta", "usage.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "meta", "checkpoints.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "meta", "runtime", "session.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := syncRunOutputIntoHost(runDir, hostDir, syncOptions{Force: true})
+	if err != nil {
+		t.Fatalf("force sync failed: %v", err)
+	}
+
+	for _, p := range []string{"meta/usage.json", "meta/checkpoints.jsonl", "meta/runtime/session.json"} {
+		if _, err := os.Stat(filepath.Join(hostDir, p)); !os.IsNotExist(err) {
+			t.Fatalf("stale cached state should be removed: %s", p)
+		}
+	}
+}
+
+func TestProdRunStoreDelete_RejectsInvalidID(t *testing.T) {
+	dir := t.TempDir()
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ps.create("Test", "profiles/t.md", "", "", 5, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.delete("../etc"); err == nil {
+		t.Fatal("expected error for invalid id")
+	}
+}
+
 func TestProdRunManagerSync_HappyPath(t *testing.T) {
 	jobsDir := t.TempDir()
 	hostDir := t.TempDir()

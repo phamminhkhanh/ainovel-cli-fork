@@ -193,6 +193,8 @@ func (s *server) handleProdRunSync(w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
 	if s.hostIsRunning() {
 		writeErr(w, http.StatusConflict, fmt.Errorf("host is running; stop before syncing"))
 		return
