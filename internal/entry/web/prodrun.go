@@ -70,6 +70,11 @@ const (
 	stopReasonError           = "error"
 	stopReasonUnclean         = "unclean_shutdown"
 	stopReasonFoundationReady = "foundation_ready"
+	// engine_paused: the Engine+Arbiter engine exits 0 when it self-pauses
+	// mid-run (deadlock, worker failure, gate error). waitProc maps that to
+	// paused instead of completed so an unfinished book is never mislabeled
+	// "Hoàn thành".
+	stopReasonEnginePaused = "engine_paused"
 )
 
 // defaultProdRunBudgetUSD is the fallback cost cap when the user/global config

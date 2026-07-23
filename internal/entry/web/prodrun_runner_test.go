@@ -82,7 +82,10 @@ func TestRunnerStartCreatesRunDirAndConfig(t *testing.T) {
 	}
 
 	run := ps.get(r.ID)
-	if run.Status != prodRunCompleted && run.Status != prodRunFailed {
+	// paused is terminal for waitProc purposes: the helper child exits 0 with
+	// no progress.json, which the new classification maps to paused
+	// (engine_paused) rather than mislabeling it completed.
+	if run.Status != prodRunCompleted && run.Status != prodRunFailed && run.Status != prodRunPaused {
 		t.Fatalf("expected terminal status, got %s", run.Status)
 	}
 
@@ -968,6 +971,79 @@ func TestWaitProcFreesSlotBeforeClosingDone(t *testing.T) {
 	}
 }
 
+// TestWaitProcClassifiesCleanExit verifies the regression fix for the
+// Engine+Arbiter engine exiting 0 on self-pause: waitProc must not blanket-map
+// a clean exit to completed. It classifies by actual workspace progress —
+// phase=complete or target met means completed; anything else means the engine
+// paused mid-run and the run must surface as paused/engine_paused.
+func TestWaitProcClassifiesCleanExit(t *testing.T) {
+	cases := []struct {
+		name         string
+		completed    []int  // nil + writeProgress=false → no progress.json at all
+		phase        domain.Phase
+		writeProgress bool
+		target       int
+		wantStatus   string
+		wantReason   string
+		wantChapters int
+	}{
+		{"engine pause mid-run", []int{1, 2}, domain.PhaseWriting, true, 5, prodRunPaused, stopReasonEnginePaused, 2},
+		{"phase complete", []int{1, 2, 3, 4, 5}, domain.PhaseComplete, true, 5, prodRunCompleted, stopReasonCompleted, 5},
+		{"target met without complete phase", []int{1, 2, 3, 4, 5}, domain.PhaseWriting, true, 5, prodRunCompleted, stopReasonCompleted, 5},
+		{"no progress file", nil, "", false, 5, prodRunPaused, stopReasonEnginePaused, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			repoRoot := t.TempDir()
+			profileDir := filepath.Join(repoRoot, "profiles")
+			_ = os.MkdirAll(profileDir, 0o755)
+			_ = os.WriteFile(filepath.Join(profileDir, "x.md"), []byte("# x"), 0o644)
+
+			ps, err := newProdRunStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, t.TempDir(), bootstrap.Config{})
+
+			r, err := ps.create("classify", "profiles/x.md", "", "", tc.target, 1)
+			if err != nil {
+				t.Fatalf("create run: %v", err)
+			}
+			// Force running status; create() seeds queued, waitProc only
+			// classifies running/paused runs.
+			if _, err := ps.update(r.ID, func(run *ProdRun) { run.Status = prodRunRunning }); err != nil {
+				t.Fatal(err)
+			}
+			if tc.writeProgress {
+				writeWorkspaceProgress(t, filepath.Join(ps.runDir(r.ID), "output", "novel"), tc.completed, tc.phase)
+			}
+
+			cmd := helperCommand(10)
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			logFile, err := os.CreateTemp(t.TempDir(), "run.log")
+			if err != nil {
+				t.Fatal(err)
+			}
+			proc := &runningProc{cmd: cmd, logFile: logFile, done: make(chan struct{})}
+			runner.waitProc(r.ID, proc)
+
+			got := ps.get(r.ID)
+			if got.Status != tc.wantStatus {
+				t.Fatalf("status: want %s, got %s", tc.wantStatus, got.Status)
+			}
+			if got.StopReason != tc.wantReason {
+				t.Fatalf("stop reason: want %q, got %q", tc.wantReason, got.StopReason)
+			}
+			if got.Chapters != tc.wantChapters {
+				t.Fatalf("chapters: want %d, got %d", tc.wantChapters, got.Chapters)
+			}
+		})
+	}
+}
+
 // TestApproveFoundationReapTimeoutReverts verifies that when the just-killed
 // child cannot be reaped within the budget, ApproveFoundation reverts status
 // back to awaiting_review and returns errReapTimeout instead of stranding the
@@ -1751,5 +1827,34 @@ func TestRunnerStartFiltersRulesByLanguage(t *testing.T) {
 	}
 	if !foundHome {
 		t.Fatalf("child HOME not re-rooted at sandbox %q; env=%v", runDir, capturedEnv)
+	}
+}
+
+// TestHasPauseMarker pins the pause-marker list that poll uses to flip a
+// running run to paused. It guards the regression fix for the Engine+Arbiter
+// merge: the new engine emits 已暂停 (e.g. 已暂停，等待人工介入) on self-pause,
+// so the marker must match, while ordinary progress logs must not.
+func TestHasPauseMarker(t *testing.T) {
+	cases := []struct {
+		name string
+		tail string
+		want bool
+	}{
+		{"等待用户输入 marker", "...等待用户输入\n", true},
+		{"等待输入 marker", "engine: 等待输入", true},
+		{"paused lowercase marker", "status: paused\n", true},
+		{"用户暂停 marker", "用户暂停，按回车继续", true},
+		{"已暂停 marker", "已暂停，等待人工介入", true},
+		{"已暂停 case-insensitive english nearby", "PAUSED by deadlock", true},
+		{"plain progress log", "已完成 3 章，继续写作中", false},
+		{"empty tail", "", false},
+		{"unrelated error log", "Error: context deadline exceeded", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasPauseMarker(tc.tail); got != tc.want {
+				t.Fatalf("hasPauseMarker(%q) = %v, want %v", tc.tail, got, tc.want)
+			}
+		})
 	}
 }

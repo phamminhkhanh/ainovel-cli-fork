@@ -4,6 +4,8 @@
 > Chi tiết kỹ thuật đầy đủ: [README.md](README.md) (中文) · [docs/architecture.md](docs/architecture.md).
 > Review truyện engine sinh ra (nền móng/prose/11 trục/định khung thể loại+nước+văn hóa/can thiệp): [05-REVIEW-TRUYEN.md](05-REVIEW-TRUYEN.md).
 
+> **⚠️ CẬP NHẬT 2026-07-23:** Kiến trúc **Coordinator long-loop** mô tả trong doc này đã bị upstream **xóa hoàn toàn**, thay bằng **Engine + Arbiter** (merge `2e78d4e`). Phần kiến trúc/flow dưới đây chỉ còn giá trị tham khảo lịch sử. **Vận hành hệ thống hiện tại → đọc [07-VAN-HANH-HE-THONG-MOI.md](07-VAN-HANH-HE-THONG-MOI.md).** Lịch sử merge: [04-LUU-Y-MERGE-UPSTREAM.md](04-LUU-Y-MERGE-UPSTREAM.md).
+
 ---
 
 ## 1. Dự án là gì

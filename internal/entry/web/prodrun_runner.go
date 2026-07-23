@@ -173,6 +173,17 @@ func (rr *prodRunRunner) markFailed(id string) {
 func (rr *prodRunRunner) waitProc(id string, proc *runningProc) {
 	err := proc.cmd.Wait()
 
+	// Resolve runDir + final progress BEFORE store.update: update() holds the
+	// store lock while its closure runs, so calling runDir() inside the
+	// closure would deadlock on the same mutex. TargetChapters is immutable
+	// after create, so reading it via get() here is race-free.
+	runDir := rr.store.runDir(id)
+	target := 0
+	if r0 := rr.store.get(id); r0 != nil {
+		target = r0.TargetChapters
+	}
+	finished, chapters := runFinished(runDir, target)
+
 	// Resolve the stored status before releasing the process slot so that a
 	// concurrent start() cannot observe a running status with no process.
 	if _, saveErr := rr.store.update(id, func(r *ProdRun) {
@@ -180,12 +191,20 @@ func (rr *prodRunRunner) waitProc(id string, proc *runningProc) {
 			return
 		}
 		if r.Status == prodRunRunning || r.Status == prodRunPaused {
-			if err != nil {
+			r.Chapters = chapters // final count; poll stats lag up to one interval
+			switch {
+			case err != nil:
 				r.Status = prodRunFailed
 				r.StopReason = stopReasonError
-			} else {
+			case finished:
 				r.Status = prodRunCompleted
 				r.StopReason = stopReasonCompleted
+			default:
+				// Engine+Arbiter exits 0 on self-pause (deadlock, worker
+				// failure, gate error): child gone, book unfinished. Label
+				// paused, never "Hoàn thành".
+				r.Status = prodRunPaused
+				r.StopReason = stopReasonEnginePaused
 			}
 			r.StoppedAt = time.Now()
 		}
@@ -551,6 +570,20 @@ func readWorkspacePhase(path string) string {
 	return string(p.Phase)
 }
 
+// runFinished reports whether a cleanly exited child actually finished the
+// book: the workspace phase reached complete, or the chapter target was met.
+// The Engine+Arbiter engine also exits 0 when it self-pauses mid-run
+// (deadlock, worker failure, gate error); those return false so waitProc can
+// label the run paused instead of mislabeling it completed. It also returns
+// the final chapter count (poll stats can lag up to one interval).
+func runFinished(runDir string, targetChapters int) (finished bool, chapters int) {
+	progressPath := filepath.Join(runDir, "output", "novel", "meta", "progress.json")
+	chapters = readCompletedChapters(progressPath)
+	finished = readWorkspacePhase(progressPath) == string(domain.PhaseComplete) ||
+		(targetChapters > 0 && chapters >= targetChapters)
+	return finished, chapters
+}
+
 func countReviewsAndRewrites(dir string) (int, int) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -617,7 +650,7 @@ func hasPauseMarker(tail string) bool {
 	// Pause markers observed in headless engine output. If upstream changes the
 	// wording, add the new marker here. The list is intentionally conservative:
 	// a false positive just flips status to paused, which is recoverable by Stop.
-	markers := []string{"等待用户输入", "等待输入", "paused", "用户暂停"}
+	markers := []string{"等待用户输入", "等待输入", "paused", "用户暂停", "已暂停"}
 	lower := strings.ToLower(tail)
 	for _, m := range markers {
 		if strings.Contains(lower, strings.ToLower(m)) {

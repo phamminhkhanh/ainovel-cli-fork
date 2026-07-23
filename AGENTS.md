@@ -15,7 +15,7 @@ cmd/ainovel-cli/main.go   ← only upstream file we touch
     └── internal/host/         ← engine core (DON'T MODIFY)
 ```
 
-- **`internal/host/Host`** is the engine. It exposes public API: `StartPrepared`, `Steer`, `CoCreateStream`, `Export`, `SwitchModel`, `Snapshot()`, etc.
+- **`internal/host/Host`** is the engine. It exposes public API: `StartPrepared`, `Steer`, `CoCreateStream`, `Export`, `SwitchModel`, `Snapshot()`, `SetAdvanceMode`, `AdvanceOneChapter`, `Reopen`, etc.
 - **Entry adapters** (TUI, Web, headless) are thin consumers of Host API. Dependency is one-way: `entry → host`.
 - **Web adapter** files are 100% new → never conflict on merge.
 - **Tiếng Việt** is UI-only (`app-i18n.js`). Engine/prompts stay in Chinese. Novel language controlled via `~/.ainovel/rules/lang-vi.md` (outside repo).
@@ -24,11 +24,13 @@ cmd/ainovel-cli/main.go   ← only upstream file we touch
 
 | Document | What it covers |
 |---|---|
-| [01-TONG-QUAN-DU-AN.md](01-TONG-QUAN-DU-AN.md) | Tổng quan tiếng Việt: kiến trúc, flow, thể loại hỗ trợ, lưu ý sử dụng |
+| [01-TONG-QUAN-DU-AN.md](01-TONG-QUAN-DU-AN.md) | Tổng quan tiếng Việt (kiến trúc cũ — lịch sử). Hệ hiện tại → [07](07-VAN-HANH-HE-THONG-MOI.md) |
 | [02-WEB-UI.md](02-WEB-UI.md) | **Deep dive**: Web UI architecture, file map, API endpoints, content workspace tabs, i18n strategy, upstream merge workflow |
 | [03-MYNOVEL-REPORT.md](03-MYNOVEL-REPORT.md) | Phân tích nền tảng MyNovel (mynovel.net/pro): pháp lý, traffic, rủi ro, so sánh platform |
+| [04-LUU-Y-MERGE-UPSTREAM.md](04-LUU-Y-MERGE-UPSTREAM.md) | Quy trình merge upstream an toàn + lịch sử big changes + checklist sau merge |
 | [05-REVIEW-TRUYEN.md](05-REVIEW-TRUYEN.md) | **Playbook review truyện engine sinh ra**: đọc file này là đủ để review 1 cuốn (nền móng/prose/11 trục/can thiệp). Mở thread mới review → đọc 05 trước |
 | [06-ES-BEST-PRACTICES.md](06-ES-BEST-PRACTICES.md) | **Best practices novel tiếng Tây Ban Nha**: platforms (Booknet/Wattpad/Dreame/MyNovel), tropes ES, español neutro, anti-AI prose, chapter conventions, checklist production |
+| [07-VAN-HANH-HE-THONG-MOI.md](07-VAN-HANH-HE-THONG-MOI.md) | **Handbook vận hành Engine+Arbiter**: lệnh TUI, advance gate, voice layer, import, `/reopen`, audit decisions |
 | [docs/production-cockpit.md](docs/production-cockpit.md) | Production Cockpit (tab Sản xuất): hướng dẫn dùng + [journal MVP kèm sơ đồ tương tác](docs/journals/260703-production-cockpit-mvp.md) |
 | [start-web.sh](start-web.sh) | How to run the web UI locally |
 

@@ -57,11 +57,47 @@ go test ./internal/entry/web/...
 - **Behavior hoàn thành sách khác** → spike test 30 chương phải chạy trên v0.6.1, không dùng kết quả cũ.
 - **Pause point** có thể làm engine dừng giữa chừng sau rewrite. Khi làm Production Cockpit sau này, nên tận dụng behavior này thay vì tự xây stop logic phức tạp.
 - **Final volume** có nghĩa là `TotalChapters` trong snapshot có thể thay đổi khi story tiến gần kết — automation target phải linh hoạt hoặc dựa trên `phase == complete` thay vì chapter count cứng.
-- **Windows file lock với export/rename**: Trong spike test v0.6.1, engine export thất bại trên Windows khi IDE/file watcher giữ file chapter đang mở trong lúc `os.Rename` ghi đè. Lỗi này tồn thiởi trước v0.6.1, không phải regression. Cần đóng watcher/IDE khi chạy production, hoặc upstream cần thêm retry loop/copy-delete fallback cho Windows.
+- **Windows file lock với export/rename**: Trong spike test v0.6.1, engine export thất bại trên Windows khi IDE/file watcher giữ file chapter đang mở trong lúc `os.Rename` ghi đè. Lỗi này tồn tại trước v0.6.1, không phải regression. Cần đóng watcher/IDE khi chạy production, hoặc upstream cần thêm retry loop/copy-delete fallback cho Windows.
+
+> **⚠️ Lưu ý:** Cơ chế pause point v0.6.1 (`internal/tools/save_pause_point.go`) đã bị upstream **xóa** trong merge Engine+Arbiter 2026-07-23. Pause giữa chừng giờ do advance hold + `pauseWithNotify` đảm nhiệm. Xem §3 bên dưới.
 
 ---
 
-## 3. Production Cockpit MVP (tab Sản xuất)
+## 3. Engine + Arbiter + Advance Gate + Voice Layer (upstream, chưa tag)
+
+**Merge date:** 2026-07-23  
+**Merge commit:** `2e78d4e`  
+**Range:** `964eb06..5127e69` (8 commits upstream)  
+**Handbook vận hành:** [07-VAN-HANH-HE-THONG-MOI.md](07-VAN-HANH-HE-THONG-MOI.md)
+
+### Big changes
+
+| Feature | Files chính | Impact |
+|---------|-------------|--------|
+| **Engine + Arbiter** (xóa Coordinator long-loop) | `internal/host/engine.go`, `arbiter.go`, `loop.go`, `workers.go`, `flow/*`, `internal/tools/orchestrate.go`, `assets/prompts/arbiter-*.md` | Control flow đổi hoàn toàn. Code định tuyến quy trình; LLM chỉ phán đoán ở 4 kịch bản (plan_start / intervention / worker_failure / deadlock). Audit: `meta/decisions.jsonl`. |
+| **Advance gate** | `internal/host/gate.go`, `domain/runtime.go`, RunMeta store | TUI: `/review on\|off` + `/next`. Mode lưu RunMeta, sống qua restart. Hold một lần: `boundary` / `rewrites_drained`. |
+| **Voice layer** | `assets/voice.md`, `internal/assets/loader.go`, `prompt_bundle.go` | Override văn phong qua `<outputDir>/style/` hoặc `~/.ainovel/style/` — không rebuild. Restart để áp dụng. |
+| **Import pipeline viết lại** | `internal/importer/*`, `assets/prompts/import-*.md` | Segment-based; resume tự suy ra; không còn `from=N`. |
+| **`/reopen`** | `host.go` `Reopen`, TUI commands | Viết tiếp truyện đã `complete`. |
+| **Structured output** | `internal/llmcontract/`, `llmretry/` | Validate + retry schema; hết fallback nuốt lỗi. |
+| **Pause point v0.6.1 bị xóa** | `internal/tools/save_pause_point.go` (deleted), `pause.go` (modified), `notify.go` | Tool `save_pause_point` gone. Pause giờ qua advance hold + `pauseWithNotify` (lifecycle=paused). |
+
+### Lưu ý sau merge 2026-07-23
+
+| Vùng | Tác động / Cần làm |
+|------|--------------------|
+| **Rebuild binary** | Prompts đổi nhiều (writer/architect/editor + 3 arbiter mới). `go build ./...` bắt buộc. |
+| **Web UI thiếu gate/reopen** | `/review`, `/next`, `/reopen` chỉ có TUI. Host API đã sẵn (`SetAdvanceMode`, `AdvanceOneChapter`, `Reopen`) — khi cần trên web, thêm endpoint additive vào `internal/entry/web/`. |
+| **Cocreate / Import web** | Cocreate endpoints vẫn còn (`/api/cocreate/*`). Import web là file fork (`import.go`) — kiểm tra vẫn wire sau merge. |
+| **Production Cockpit pause marker** | Runner poll `run.log` markers `等待用户输入` / `等待输入` / `paused` / `用户暂停` / `已暂停`. Engine mới pause qua `pauseWithNotify` (lifecycle=paused) — marker `"paused"` / `"已暂停"` match, nhưng pause-point-after-rewrite v0.6.1 **không còn**. **Đã verify + fix (2026-07-23):** engine pause = child exit 0; `waitProc` giờ phân loại theo `progress.json` (phase=complete hoặc đủ target → `completed`, ngược lại → `paused`/`engine_paused`) — không còn gán nhầm `Hoàn thành`. Advance hold chưa có API cho web. |
+| **`progress.json` schema** | Advance state nằm trong **RunMeta** (không phải `progress.json`) → cockpit đọc `completed_chapters` / `phase` không bị ảnh hưởng trực tiếp. Vẫn smoke-test Foundation Gate. |
+| **Resume sách cũ** | Kịch bản `run_resume` upstream đã validate. Nên backup thư mục output trước lần chạy đầu với binary mới. |
+| **Voice ≠ rules** | `rules/` bind cwd (project); `style/` bind outputDir (theo sách). `~/.ainovel/rules/lang-vi.md` vẫn hoạt động. |
+| **Notify events** | `pause_point` (v0.6.1) có thể không còn; notify kinds mới: `KindAdvanceGate`, `KindDeadlock`, `KindWorkerFailure`, `KindPlanStart`. Kiểm tra `config.example.jsonc` nếu dùng off-screen notify. |
+
+---
+
+## 4. Production Cockpit MVP (tab Sản xuất)
 
 **Ngày thêm:** 2026-07-03  
 **Files mới toàn bộ trong `internal/entry/web/`:**
@@ -87,7 +123,7 @@ go test ./internal/entry/web/...
 | **Target chapters** | Với `continue_workspace`, `targetChapters` là tổng số chương tuyệt đối cuối cùng, không phải delta. Sau merge phải test case đang có N chương và target > N. |
 | **Fast-forward sync** | Continue sync mặc định là fast-forward: fingerprint host phải khớp seed fingerprint; diverge trả 409 và chỉ ghi khi user chọn `force`. Force phải backup `output/backups/pre-sync-*` trước khi ghi. |
 | **Workspace noise exclude** | Fingerprint/seed/sync-back phải dùng cùng exclude list: bỏ `logs/`, `*.log`, `diag/`, `diagnostics/`, `exports/`, temp/lock files. Nếu upstream thêm log/diagnostic path mới, cập nhật `shouldExcludeWorkspaceSeed`. |
-| **Pause point v0.6.1** | Cockpit chỉ đọc pause marker từ `run.log` (read-only). Nếu upstream cung cấp API pause tốt hơn (ví dụ snapshot pause state hoặc RPC), có thể thay thế polling log. |
+| **Pause markers (sau Engine+Arbiter 2026-07-23)** | Cockpit poll `run.log` markers `等待用户输入` / `等待输入` / `paused` / `用户暂停` / `已暂停`. Tool `save_pause_point` đã bị xóa; engine pause qua `pauseWithNotify` (lifecycle=paused). **Đã verify + fix (2026-07-23):** `waitProc` phân loại exit 0 theo `progress.json` (phase=complete hoặc đủ target → `completed`; ngược lại → `paused`/`engine_paused`), không còn gán nhầm `Hoàn thành`. Advance hold chưa có API web. |
 | **Windows file lock** | Export TXT của Cockpit là server-side concat, không dùng `os.Rename`. Continue sync-back cũng không clear/rename cả thư mục host; dùng file-by-file `safeWriteFile` retry. Giữ behavior này, đừng chuyển sang `s.eng.Export()` hoặc `os.RemoveAll` full-replace vì sẽ re-introduce Windows lock/data-loss risk. |
 | **Foundation Gate — detect phase** (2026-07-05) | `poll()` đọc `progress.json` field `phase`; khi `== "writing"` + `completed_chapters==0` + `fresh_profile` + chưa `FoundationApproved` → chuyển `awaiting_review` và kill child. Nếu upstream **đổi tên/giá trị field `phase`** (hiện `"writing"`, hằng `domain.PhaseWriting`) thì phải cập nhật `readWorkspacePhase`. Best-effort (poll 5s) — không phải hard gate; xem journal `260705`. |
 | **Status `awaiting_review`** | Là schema mới của `ProdRun`. `load()` **cố ý KHÔNG** coalesce nó → `failed` như running/paused (child đã chủ động kill, không có process treo). Nếu refactor `load()`, giữ awaiting_review sống sót qua restart. |
@@ -117,7 +153,7 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 
 ---
 
-## 4. Checklist Sau Mỗi Lần Merge
+## 5. Checklist Sau Mỗi Lần Merge
 
 - [ ] `git fetch upstream` xong.
 - [ ] Dry-run merge không báo conflict.
@@ -137,7 +173,7 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 
 ---
 
-## 5. Lịch Sử Thay Đổi Lớn
+## 6. Lịch Sử Thay Đổi Lớn
 
 | Version | Date | Key Change | Action Required |
 |---------|------|------------|-----------------|
@@ -147,12 +183,14 @@ Security guard bắt buộc: reject absolute path, unknown source, non-`.md`, tr
 | post-v0.6.1 (fork) | 2026-07-04 | Production profile resolver standardized to `.ainovel` 2-layer model + legacy fallback | Verify `/api/profiles`, profile path validation, and `prepareRunDir` resolver after upstream merge |
 | post-v0.6.1 (fork) | 2026-07-05 | Foundation Gate Milestone 1a (`awaiting_review` + approve/reject/revise/reveal, best-effort poll on `progress.json` phase) | Verify `readWorkspacePhase`, `FoundationApproved` chống re-gate, 5 endpoint Gate trong `server.go`, reveal loopback-only |
 | post-v0.6.1 (fork) | 2026-07-05 | Profile Library + Profile Studio C-lite (author/generate profiles in UI) | Verify 4 endpoint `/api/profiles/{content,save,delete,generate}` trong `server.go`; save/delete project-only; `NewModelSet(cfg)` cho Studio |
+| post-v0.6.1 (upstream) | 2026-07-23 | **Engine + Arbiter** (xóa Coordinator); advance gate; voice layer; import rewrite; `/reopen`; xóa `save_pause_point` | Rebuild binary; đọc [07](07-VAN-HANH-HE-THONG-MOI.md); verify cockpit pause markers; Web UI chưa có `/review`/`/next`/`/reopen` |
 ---
 
-## 6. Link
+## 7. Link
 
+- Handbook vận hành hệ mới: [`07-VAN-HANH-HE-THONG-MOI.md`](07-VAN-HANH-HE-THONG-MOI.md)
 - Report merge test chi tiết: [`plans/reports/upstream-merge-test-260703-1121-v061-pause-convergence-report.md`](plans/reports/upstream-merge-test-260703-1121-v061-pause-convergence-report.md)
-- Architecture upstream: [`docs/architecture.md`](docs/architecture.md)
+- Architecture upstream: [`docs/architecture.md`](docs/architecture.md) · RFC: [`docs/engine-rfc.md`](docs/engine-rfc.md) · Arbiter: [`docs/engine-arbiter.md`](docs/engine-arbiter.md)
 - Journal Production Cockpit MVP (kèm sơ đồ tương tác + state machine): [`docs/journals/260703-production-cockpit-mvp.md`](docs/journals/260703-production-cockpit-mvp.md)
 - Journal Foundation Gate (best-effort gate, revise/reveal, race, bug đã fix): [`docs/journals/260705-foundation-gate.md`](docs/journals/260705-foundation-gate.md)
 - Journal Profile Library & Studio (tạo/sinh/lưu profile trong UI): [`docs/journals/260705-profile-library-studio.md`](docs/journals/260705-profile-library-studio.md)

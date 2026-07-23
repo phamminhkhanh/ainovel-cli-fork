@@ -2,6 +2,8 @@
 
 Production Cockpit là tab **Sản xuất** trong Web UI của `ainovel-cli-fork`. Nó cho phép bạn xếp hàng đợi và chạy các generation job dạng headless, giám sát tiến độ + chi phí, xem lịch sử, và xuất file TXT — thay vì phải để máy đứng chờ ở TUI.
 
+> ⚠️ **Sau merge Engine+Arbiter (2026-07-23):** engine mới **không còn pause point**. Khi engine tự pause (deadlock / worker failure) thì **child process thoát luôn với exit 0**. Cockpit phân biệt được trường hợp này: job chuyển `Tạm dừng` với lý do `engine_paused`, **không** gán nhầm `Hoàn thành`. Đọc [07-VAN-HANH-HE-THONG-MOI.md §9](../07-VAN-HANH-HE-THONG-MOI.md#9-production-cockpit--tab-sản-xuất-headless) trước khi chạy batch.
+
 ## Mục Lục
 
 1. [Khi nào dùng](#khi-nào-dùng)
@@ -90,8 +92,8 @@ Mỗi job có một dải health dạng traffic-light, được backend tính t�
 |------------|---------|
 | `Chờ` | Job đã tạo, chưa chạy. |
 | `Đang chạy` | Tiến trình con đang viết. |
-| `Tạm dừng` | Engine pause (ví dụ pause point). Chỉ có thể Dừng hoặc Xuất TXT. |
-| `Hoàn thành` | Đạt số chương mục tiêu hoặc engine tự kết thúc. |
+| `Tạm dừng` | Engine tự pause giữa chừng (deadlock / worker failure / gate lỗi) rồi child exit 0. Runner gán `stopReason=engine_paused`. Child đã chết — chưa có nút **Tiếp tục**, xem `run.log` rồi tạo job mới nếu cần. |
+| `Hoàn thành` | Truyện thật sự xong (`phase=complete`) hoặc đạt số chương mục tiêu. |
 | `Lỗi` | Tiến trình con thoát với lỗi. |
 | `Đã hủy` | Ngườii dùng nhấn Dừng. |
 
@@ -111,7 +113,7 @@ Khi job đã có ít nhất một chương hoàn thành:
 - **Một job chạy một lúc**: MVP không hỗ trợ chạy song song nhiều job. Nếu cần chạy nhiều, tạo job và chạy từng cái.
 - **Tiến trình con bị kill khi đạt target**: Cockpit poll `meta/progress.json` và kill child khi `len(completed_chapters) >= targetChapters`, vì engine chưa có config `max_chapters`.
 - **Khôi phục sau crash**: khi Web UI khởi động lại, các job trước đó đang `running` sẽ bị đánh dấu `failed` với cờ `PossiblyOrphaned`. Bạn nên kiểm tra PID cũ trên hệ thống và kill tay nếu cần.
-- **Pause là read-only**: khi engine pause, UI chỉ hiển thị thông báo. MVP chưa có nút **Tiếp tục**; bạn chỉ có thể Dừng hoặc Xuất TXT.
+- **Pause là read-only**: khi engine tự pause (deadlock / worker failure), child exit 0 và runner gán trạng thái `Tạm dừng` + lý do `engine_paused` (dựa trên `meta/progress.json` thực tế — không còn gán nhầm `Hoàn thành`). MVP chưa có nút **Tiếp tục** cho paused child; mở `run.log` tìm `已暂停` / `引擎停止` để biết lý do pause rồi tạo job mới.
 - **Spike test Unix-only**: `scripts/model-spike-test.sh` dùng bash / `kill` / `find` / python3; trên Windows cần chạy trong Git Bash hoặc WSL.
 
 ## Giới hạn MVP
@@ -127,7 +129,8 @@ Khi job đã có ít nhất một chương hoàn thành:
 | Triệu chứng | Cách xử lý |
 |-------------|------------|
 | Job tạo xong không chạy được | Kiểm tra profile path có tồn tại không; xem log server. |
-| Chương không tăng nhưng vẫn `Đang chạy` | Kiểm tra `run.log` xem engine có đang pause hoặc lỗi loop. |
+| Chương không tăng nhưng vẫn `Đang chạy` | Kiểm tra `run.log` xem engine có đang pause (`已暂停`) hoặc lỗi loop. |
+| Job hiển thị `Tạm dừng` với lý do `engine_paused` | Engine đã pause giữa chừng (deadlock / worker failure / gate lỗi) rồi child exit 0. Mở `run.log` tìm `已暂停` / `引擎停止 (已完成 N 章)`, đọc `meta/decisions.jsonl` để biết arbiter đã phán gì. |
 | Chi phí không cập nhật | Kiểm tra `meta/progress.json` và `run.log` có ghi cost không. |
 | Xuất TXT lỗi | Đảm bảo thư mục `{runDir}/output/novel/chapters/` tồn tại và có file `.md`. |
 | `PossiblyOrphaned` | Kiểm tra PID cũ trong Task Manager / `ps` và kill nếu còn. |
