@@ -21,7 +21,7 @@ func TestApplyPromptOverridesFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b := assets.Load("default")
+	b := assets.Load("default", assets.LoadOptions{})
 	baselineEditor := b.Prompts.Editor
 	applied := applyPromptOverridesFrom(dir, &b)
 
@@ -38,7 +38,7 @@ func TestApplyPromptOverridesFrom(t *testing.T) {
 
 // TestApplyPromptOverridesFrom_EmptyDir: thư mục không có file → không áp gì, không panic.
 func TestApplyPromptOverridesFrom_EmptyDir(t *testing.T) {
-	b := assets.Load("default")
+	b := assets.Load("default", assets.LoadOptions{})
 	if applied := applyPromptOverridesFrom(t.TempDir(), &b); len(applied) != 0 {
 		t.Fatalf("thư mục rỗng nên không áp gì, got %v", applied)
 	}

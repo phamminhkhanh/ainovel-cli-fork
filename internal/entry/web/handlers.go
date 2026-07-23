@@ -152,7 +152,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := s.eng.StartPrepared(plan.StartPrompt); err != nil {
+	if err := s.eng.StartPrepared(plan.RawPrompt); err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}

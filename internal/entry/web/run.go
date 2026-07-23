@@ -57,7 +57,10 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	if err != nil {
 		return err
 	}
-	cleanup := logger.SetupFile(eng.Dir(), "web.log", false)
+	cleanup, err := logger.SetupFile(eng.Dir(), "web.log", false)
+	if err != nil {
+		return err
+	}
 	defer cleanup()
 	defer eng.Close()
 	// 运行结束 / 出错返回时落一份脱敏诊断，方便贴 issue。

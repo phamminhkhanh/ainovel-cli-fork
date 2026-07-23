@@ -1,6 +1,6 @@
 # ainovel-cli
 
-全自动 AI 长篇小说创作引擎。Coordinator 在一次 Prompt 里驱动 Architect / Writer / Editor 三个子代理完成整本书的创作；LLM 负责创作与裁定，Host 负责启动、恢复、流程路由和观察。从一句话需求到完整小说，全程无需人工干预。
+全自动 AI 长篇小说创作引擎。确定性引擎跑完整本书，模型在每个需要判断的位置被精确使用：Engine 按事实路由驱动 Architect / Writer / Editor 三个自主创作代理，语义裁定按需唤醒 Arbiter。从一句话需求到完整小说，全程无需人工干预。
 
 <p align="center">
   <img src="scripts/sample.gif" alt="ainovel-cli demo" width="800">
@@ -11,35 +11,33 @@
 
 ## 特性
 
-- **多智能体协作** — Coordinator 在一次长循环中调度 Architect / Writer / Editor 三个子代理，自主决策创作流程
-- **Hybrid Coordinator 长循环** — 一次 Prompt 写完整本书：LLM 负责创作与裁定，Host 的 Flow Router（纯函数）负责确定性流程路由。越简单越稳定，拒绝复杂编排
+- **确定性引擎 + 多智能体协作** — Engine 按事实决策表调度 Architect / Writer / Editor 三个自主创作代理，主循环零 LLM 开销、行为可穷举测试
+- **语义裁定可审计** — 选规划师、干预分诊、失败出路等判断由 Arbiter 单次调用完成，每次裁定落盘可回放。越简单越稳定，拒绝复杂编排
 - **Step 级断点恢复** — 每个工具执行成功后写入 checkpoint，崩溃后精确到 plan/draft/check/commit 步骤级恢复
 - **卷弧双层滚动规划** — 长篇不再一次性规划全部章节。初始只规划前 2 卷弧骨架 + 第 1 弧详细章节，后续弧/卷在写作推进到时再由 Architect 展开，每次展开都参考前文摘要和角色状态，远期规划不空洞
 - **相关章节智能推荐** — 每章写作时从伏笔、角色出场、状态变化、关系四个维度自动推荐相关历史章节，配合下一章预告，确保 500+ 章长篇的连续性
 - **自适应上下文策略** — 根据总章节数自动切换全量 / 滑窗 / 分层摘要，支持 500+ 章长篇
 - **七维质量评审** — Editor 从设定一致性、角色行为、节奏、叙事连贯、伏笔、钩子、审美品质七个维度评审，审美维度细分描写质感/叙事手法/对话区分度/用词质量/情感打动力五项，每项必须引用原文举证
 - **用户实时干预** — 写作过程中随时在输入框注入修改意见（无需暂停），系统自动评估影响范围并重写受影响章节
+- **可选逐章验收** — 默认仍全自动；需要精细控制时用 `/review on`，每次 `/next` 只放行一个新章节，返工和崩溃恢复不会误消耗许可
 - **统一 TUI 入口** — 交互界面实时观察进度，也支持携带一句需求直接启动
 - **多 LLM 支持** — OpenRouter / Anthropic / Gemini / OpenAI 等等随意切换
 
 ## 架构
 
-核心设计：**LLM 驱动创作与裁定，Host 驱动流程路由**（Hybrid Coordinator）。Coordinator 在一次 Run 中负责创作决策与用户干预裁定；Host 的 Flow Router 读事实做确定性路由，在子代理工具成功返回的同步边界通过 `coordinator.Steer` 下达 `[Host 下达指令]`，不绕过 Coordinator 直接调 SubAgent。
+核心设计：**事实层确定，语义层自主**。可枚举的状态迁移由确定性代码执行（Engine + Route）；边界清晰的判断按需咨询 LLM 函数（Arbiter）；开放式创作交给自主的 LLM 循环（Workers）。一句话概括：一个串行确定性 Engine、三个自主 Worker、少数几个按需 Arbiter 函数、一个文件系统事实层。
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                Host（薄外壳）                     │
-│        启动 / 恢复 / 流程路由 / 观察 / 干预注入        │
-└──────────────────────┬──────────────────────────┘
-                       │ 一次 Prompt
-┌──────────────────────▼──────────────────────────┐
-│              Coordinator（LLM 长循环）            │
-│    读 novel_context → 调子代理 → 读结果 → 继续     │
-└────┬──────────┬──────────┬──────────────────────┘
-     │          │          │
- ┌───▼────┐ ┌───▼───┐ ┌────▼────┐
- │Architect│ │Writer │ │ Editor  │
- └───┬────┘ └───┬───┘ └────┬────┘
+│              Host / Engine（确定性）              │
+│  读 Store → Route → 直接运行 Worker → 循环        │
+│  启动裁定 / 干预分诊 / 失败僵局 → 按需咨询 Arbiter  │
+└────┬──────────┬──────────┬─────────────┬────────┘
+     │          │          │             │
+ ┌───▼────┐ ┌───▼───┐ ┌────▼────┐   ┌────▼────┐
+ │Architect│ │Writer │ │ Editor  │   │ Arbiter │
+ │(LLM循环)│ │(LLM循环)│ │(LLM循环)│   │(LLM函数)│
+ └───┬────┘ └───┬───┘ └────┬────┘   └─────────┘
      └──────────┼──────────┘
                 │ 工具调用（IO + checkpoint）
 ┌───────────────▼─────────────────────────────────┐
@@ -48,16 +46,16 @@
 └─────────────────────────────────────────────────┘
 ```
 
-- **Host** — 启动 Coordinator、崩溃恢复、事件投影给 TUI，并由 Flow Router（纯函数 `Route(state) → *Instruction`）承担确定性流程路由；返回 nil 表示裁定场景，交回 Coordinator LLM 自主决策
-- **Coordinator** — 创作裁定节点 + 指令执行通道：执行 Host 下达的路由指令，并对规划选型、用户干预等语义场景自主裁定
-- **SubAgents** — Architect / Writer / Editor 各自独立 context，通过 Store 中的工件协作
-- **Tools** — 原子 IO + checkpoint 写入，只返事实 JSON，不夹带指令
+- **Engine** — 每轮从 Store 读事实、按 Route 决策表派发 Worker，执行决定、不参与文学判断；崩溃恢复=读 store 续跑,无会话可恢复
+- **Arbiter** — 按需唤醒的语义裁定（选规划师、用户干预分诊、失败/僵局出路），事实进、结构化决策出，每次裁定落盘可审计可回放
+- **Workers** — Architect / Writer / Editor 各自独立 context 的自主创作循环，通过 Store 中的工件协作
+- **Tools** — 单文件原子 IO + 幂等重放；章节提交使用持久化 Saga + checkpoint，只返事实 JSON，不夹带指令
 
 ### 智能体职责
 
-| 智能体 | 职责 | 工具 |
+| 角色 | 职责 | 工具 |
 |--------|------|------|
-| **Coordinator** | 调度全局，处理评审裁定和用户干预 | `subagent` `novel_context` |
+| **Arbiter** | 语义裁定：启动选规划师、用户干预分诊、失败/僵局出路 | 无（单次 LLM 调用，输出结构化决策） |
 | **Architect** | 生成前提、大纲、角色档案、世界规则 | `novel_context` `save_foundation` |
 | **Writer** | 自主完成一章的构思、写作、自审和提交 | `novel_context` `read_chapter` `plan_chapter` `draft_chapter` `check_consistency` `commit_chapter` |
 | **Editor** | 阅读原文，从结构和审美两个层面审阅 | `novel_context` `read_chapter` `save_review` `save_arc_summary` `save_volume_summary` |
@@ -65,13 +63,15 @@
 ### 写作流程
 
 ```
-用户需求 → Architect 规划骨架 + 首弧章节 → Writer 逐章写作 → Editor 弧级评审
-                                                  ↑                   │
-                                                  ├── 重写/打磨 ◄──────┘
-                                                  │
-                                           Architect 展开下一弧/卷
-                                          （参考前文摘要+角色快照）
+用户需求 → Arbiter 选规划师 → Architect 规划骨架+首弧 → Writer 逐章写作 → Editor 弧级评审
+              (裁定落盘)                                     ↑                   │
+                                                            ├── 重写/打磨 ◄──────┘
+                                                            │
+                                                     Architect 展开下一弧/卷
+                                                    （参考前文摘要+角色快照）
 ```
+
+每一步"下一个派谁"由 Engine 的 Route 决策表按 Store 事实推导（万级组合穷举测试钉死），不消耗任何 LLM 调用。
 
 Writer 按固定顺序完成每章（写作内容完全自主，工具调用顺序严格）：
 
@@ -80,7 +80,7 @@ Writer 按固定顺序完成每章（写作内容完全自主，工具调用顺�
 3. `plan_chapter` — 构思本章目标、冲突、情绪弧线
 4. `draft_chapter` — 写入整章正文
 5. `check_consistency` — 对照状态数据检查一致性（必须在 draft 之后）
-6. `commit_chapter` — 提交终稿，返回事实字段（`arc_end_reached` / `next_chapter` 等），下一步由 Flow Router 读事实后派发
+6. `commit_chapter` — 提交终稿，落盘事实字段（`arc_end` / `next_chapter` / 反馈池等），下一步由 Engine 按 Route 决策表推导
 
 ### 状态迁移规则
 
@@ -149,10 +149,10 @@ steering  -> writing / reviewing / rewriting / polishing / steering
 ```
 初始规划                     弧结束时                      卷结束时
 ┌────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
-│ 终局方向（指南针）    │    │ Editor 弧级评审      │    │ Editor 卷级评审       │
-│ 起步 2 卷，后续按需   │    │ 弧摘要 + 角色快照     │    │ 卷摘要               │
-│ 第1弧详细章节        │ →  │ Architect 展开下一弧  │ →  │ Architect 自主创建   │
-│ 角色 + 世界观        │    │ Writer 继续写作      │    │ 下一卷 + 更新指南针    │
+│ 终局方向（指南针）   │    │ Editor 弧级评审      │    │ Editor 卷级评审      │
+│ 起步 2 卷，后续按需  │    │ 弧摘要 + 角色快照    │    │ 卷摘要               │
+│ 第1弧详细章节       │ →  │ Architect 展开下一弧 │ → │ Architect 自主创建   │
+│ 角色 + 世界观       │    │ Writer 继续写作      │    │ 下一卷 + 更新指南针   │
 └────────────────────┘    └─────────────────────┘    └─────────────────────┘
 ```
 
@@ -256,7 +256,7 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
 
 ### 配置文件
 
-首次运行时自动引导生成配置文件 `~/.ainovel/config.json`，后续可直接编辑该文件调整设置。删除配置文件后重新运行会再次进入引导流程。
+首次运行时自动引导生成配置文件 `~/.ainovel/config.json`。进入 TUI 后可输入 `/config` 新增或编辑 Provider、保存多个模型并为每个模型设置上下文窗口；保存后立即生效。`/model` 用于在这些已保存模型之间切换。
 
 也可以手动创建配置文件，参考仓库根目录的 `config.example.jsonc`。首次引导也会复制一份到 `~/.ainovel/config.example.jsonc`，方便本机离线查看。
 
@@ -269,7 +269,10 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
     "openrouter": {
       "api_key": "sk-or-v1-xxx",
       "base_url": "https://openrouter.ai/api/v1",
-      "models": ["google/gemini-2.5-flash", "google/gemini-2.5-pro"],
+      "models": [
+        { "name": "google/gemini-2.5-flash", "context_window": 200000 },
+        { "name": "google/gemini-2.5-pro", "context_window": 1000000 }
+      ],
       "extra": {
         "user_agent": "my-client/1.0",
         "headers": { "X-Custom-Client": "my-client" }
@@ -284,7 +287,6 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
 
 1. `~/.ainovel/config.json` — 全局配置
 2. `./.ainovel/config.json` — 项目级覆盖（可选）
-3. `--config path/to/config.json` — 命令行指定
 
 > 项目级 `.ainovel/` 是全局 `~/.ainovel/` 的镜像：同样的结构、只是根目录从家目录换成当前项目。配置放 `./.ainovel/config.json`，写作规则放 `./.ainovel/rules/*.md`（详见下文「去 AI 味与自定义规则」）。该目录含密钥，已默认加入 `.gitignore`。
 
@@ -293,15 +295,21 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
 - 标量字段按后者覆盖前者，例如 `provider`、`model`、`reasoning_effort`、`style`
 - `providers` 和 `roles` 按 key 合并，同名项内部按字段覆盖
 - 未填写的字段会继承上层配置，例如项目级配置只写 `base_url` 时会保留全局配置中的 `api_key`
-- 当前不支持用空字符串显式清空上层已有值；如需清空，请直接编辑更高优先级的配置文件
+- 不支持用空字符串清空上层已有值；如需清空，请直接编辑更高优先级的配置文件
 
 > ⚠️ `provider`（以及 `roles.*.provider`）的值是 `providers` 里的 **key 名**——一根指针，不是协议名。项目级若把 `provider` 切到一个全局 `providers` 里不存在的账号，必须在项目级同时补上该账号的凭证（`api_key` / `base_url`），否则启动会报“未配置凭证”。
 
-`providers.<name>.models` 为可选字段，用于声明该 provider 下允许在 TUI `/model` 面板中切换的模型列表；如果未配置，系统会回退为当前配置文件里已经出现过的该 provider 模型。
+`providers.<name>.models` 为可选模型对象列表：`name` 是传给 Provider 的模型名，`context_window` 是模型专属的上下文压缩窗口，`json_schema` 是原生结构化输出的三态覆盖（`true` 确认支持、`false` 确认不支持、省略则采用适配器能力）。自定义中转或能力取决于具体模型时建议明确填写。旧版字符串数组仍可读取，下一次通过 `/config` 保存时会规范化为对象列表。如果未配置，系统会回退为配置中已经出现过的同 Provider 模型。
 
-`reasoning_effort` 为默认推理强度，可选值为 `off` / `low` / `medium` / `high` / `xhigh` / `max`；省略或空字符串表示沿用模型/provider 默认。`roles.<role>.reasoning_effort` 可按角色覆盖，未配置时继承顶层 `reasoning_effort`。TUI `/model` 面板切换 provider、model 或推理强度后，会写回全局配置 `~/.ainovel/config.json`。
+上下文窗口按“模型专属值 → 旧顶层 `context_window` → 模型注册表 → 200K 兜底”的顺序解析。它只影响本地上下文压缩时机，不改变远端 API 的真实请求限制。
 
-`providers.<name>.api` 仅对 `type: "openai"` 或内置 `openai` 生效，用于选择 OpenAI 协议 endpoint：`chat`（默认，`/v1/chat/completions`）或 `responses`（`/v1/responses`）。Codex 类代理通常需要配置为 `responses`。
+`/config` 只用来**编辑 Provider 的定义**（协议 / API Key / Base URL / 模型库），不负责“当前用哪个模型”——切换模型与推理强度请用 `/model`。模型列表支持 `↑↓` 选行、`←→` 选字段、`Enter` 原位编辑模型 ID 或上下文窗口、`Delete` 删除；末尾可直接新增模型，不再进入多层详情页。窗口可输入整数、`128K`、`1M`，留空表示自动解析。保存**就近写回当前生效的那份配置**——项目目录有 `./.ainovel/config.json` 就写它，否则写全局 `~/.ainovel/config.json`——并立即热应用。普通修改只补对应 Provider 段；显式修改模型 ID 时，会在同一次原子写入中同步迁移顶层、角色和 fallback 引用。被引用的模型不能直接删除，需先在 `/model` 切走。API Key 输入始终隐藏。
+
+Provider 详情中的 API Key 与 Base URL 支持原位编辑，已有 Key 只显示首尾脱敏提示；“测试连接”会使用当前草稿和所选模型发送一个最小真实请求，可能产生少量 API 用量，但测试结果不会阻止保存或触发自动降级。任意 `extra`、`extra_body`、`stream_idle_timeout` 等高级配置仍在界面显示的实际配置文件中维护。
+
+`reasoning_effort` 为默认推理强度，可选值为 `off` / `low` / `medium` / `high` / `xhigh` / `max`；省略或空字符串表示沿用模型/provider 默认。`roles.<role>.reasoning_effort` 可按角色覆盖，未配置时继承顶层 `reasoning_effort`。推理强度按“意图 × 能力”生效：配置里存的是你选定的**原始意图**，实际下发时再按该角色**当前模型的能力**钳制——换到能力较低的模型只是当次生效值被钳低，存储的意图不变，切回强模型即自动恢复。TUI `/model` 面板切换 provider、model 或推理强度后，会写回当前生效的那份配置（与 `/config` 一致：项目级存在则写项目，否则写全局）。
+
+`providers.<name>.api` 仅对 `type: "openai"` 或内置 `openai` 生效，用于选择 OpenAI 协议 endpoint：`chat`（默认，`base_url + /chat/completions`）或 `responses`（`base_url + /responses`）。`base_url` 若已包含路径（如火山方舟的 `/api/v3`），该路径会原样保留；只填写域名时默认使用 OpenAI 的 `/v1`。Codex 类代理通常需要配置为 `responses`。
 
 `providers.<name>.extra` 为 provider 级配置，会传给底层 HTTP 客户端，适合配置 `user_agent`、`headers`、`anthropic_beta` 等代理识别字段；`providers.<name>.extra_body` 才是请求体扩展参数，两者不要混用。
 
@@ -337,30 +345,48 @@ output/novel/meta/simulation_profile.json
 /importsim ./profile.json
 ```
 
-`/importsim` 只接受本功能生成的 `simulation_profile.v1` JSON，并按语料指纹合并，重复来源会跳过。只导入可信来源的画像文件；导入内容会成为后续 Agent 的上下文参考。画像会以 compact 形式注入 `novel_context`，Coordinator、Architect、Writer、Editor 都能读取；各 Agent 只借鉴结构、节奏、钩子和吸引读者手法，不复制原文表达或专有设定。
+`/importsim` 只接受本功能生成的 `simulation_profile.v1` JSON，并按语料指纹合并，重复来源会跳过。只导入可信来源的画像文件；导入内容会成为后续 Agent 的上下文参考。画像会以 compact 形式注入 `novel_context`，Architect、Writer、Editor 都能读取；各 Agent 只借鉴结构、节奏、钩子和吸引读者手法，不复制原文表达或专有设定。
 
 ## 导入
 
-在 TUI 中输入 `/import <文件路径>` 可把一本已有的小说反推导入：先按章切分，再用 LLM 反推出前提 / 角色 / 世界观 / 分层大纲 / 指南针，逐章落盘。原文作为第一卷落成可续写的连载，导入完成后会**自动接力续写**——Coordinator 在第一卷末做评审/摘要、追加新卷，从下一章继续。
+在 TUI 中输入 `/import <文件路径>` 可把一本已有的小说**语义编译**进项目。一次启动绑定一本书（启动目录下的 `output/novel`），因此导入通常在**新目录启动后的欢迎界面**直接发起——它和"输入需求起新书"、"共创起新书"并列，是起一本书的第三种方式；引擎正在创作时该命令会被拒绝。管线分阶段推进：源文件快照（ingest）→ LLM 识别章节边界（segment）→ 确认切分 → 逐章提取事实（analyze）→ 分层归纳全书前提 / 角色 / 世界观 / 分层大纲 / 指南针（synthesize）→ 发布正式 Foundation 并逐章落盘（publish）。章节边界由模型按语义裁定，不依赖硬编码标题规则；Go 侧只掌管坐标、覆盖校验、幂等与顺序。
 
+典型流程就三步——导入、核对、等完成：
+
+```text
+/import ~/我的小说.txt   # ① 启动：面板实时显示进度，切分完成后停下
+                         # ② 核对面板列出的全部章节标题：按 y 确认继续
+                         # ③ 自动跑完 分析→综合→发布，完成后停在验收，确认无误即可继续创作
 ```
-/import ~/我的小说.txt              # 从头导入并反推 foundation
-/import ~/我的小说.txt from=50      # 从第 50 章接着导入（跳过反推）
+
+切分不对？Esc 关面板，用自然语言说明后重新识别（会再次停下核对）：
+
+```text
+/import --guide=幕间·X 也是独立章节     # 指导文本可含空格，置于命令最后
 ```
 
-**章节切分规则**：自动识别这些标题格式（行首，可带 `#`/`##` Markdown 前缀、`【】`/`〖〗` 包裹、全角空格，兼容 GBK/BOM 编码）：
+全部选项（前三个会持久化，崩溃恢复后仍然遵守）：
 
-- 中文编号：`第一章` `第3回` `第十话` `第二卷` `第五节` `第二幕`、独立 `卷一`，数字支持大写（`第壹章`），可带副标题（`第三章：决战`）
-- 中文特殊单元：`序章` `楔子` `引子` `前言` `尾声` `终章` `后记` `番外` `外传`
-- 英文：`Chapter 1` `Chapter II`、`Prologue` `Epilogue`，可带副标题（`Chapter 1: The Beginning`）
+```text
+/import ~/我的小说.txt --yes           # 无人值守：自动接受切分并跑完全程
+/import ~/我的小说.txt --story=closed  # 预答"故事状态存疑"：按完结（closed）/未完（open）处理
+/import ~/我的小说.txt --continue      # 导入完成后直接接力续写，不停在验收
+/import                                # 无参数：从中断处恢复未完成的导入
+```
 
-若提示**"未识别到任何章节"**，请确认文件确为分章小说文本（章节标题独占一行、位于行首）。
+前置与恢复：
 
-> 导入是确定性回放，不经过 Coordinator；原文会逐字落盘为已完成章节，因此适合"续写同一本书"。如果只想借鉴设定做全新创作，请用普通方式起一本新书、在需求里描述想要的风格设定。
+- 只能导入到**空书**（没有已完成章节），不支持把另一本书并入已有作品；源文件支持 `txt`/`md`，编码 UTF-8 / GB18030（自动识别，无法可靠解码会明确报错）。
+- 每个阶段的产物落在 `meta/import/` 工作区并按输入指纹绑定：中断或失败后重跑 `/import` 只补做缺失部分，不重复调用模型、不用记 "导到第几章了"。存在未完成的导入时，重新启动后的欢迎界面会主动提示进度（如"已分析 210/300 章"）；恢复完成前引擎被门禁挡住，不会把半成品当完整的书续写。模型输出失败的原始响应保存在 `meta/import/failures/` 供排查。
+- 故事状态被综合判定为 `uncertain` 时管线停下，用 `--story=open|closed` 明确后重跑即可。
+- 默认发布完成后设一次验收 Hold，等你确认再续写；`--continue` 跳过该 Hold（review 模式下仍需 `/next`）。
+- 导入的三个语义函数可在配置 `roles` 中指定独立模型档位（见[按角色使用不同模型](#按角色使用不同模型)）。
+
+> 原文会逐字落盘为已完成章节，因此导入适合"续写同一本书"。如果只想借鉴设定做全新创作，请用普通方式起一本新书、在需求里描述想要的风格设定。
 
 ## 导出
 
-在 TUI 中输入 `/export` 可把已完成的章节合并导出，默认 TXT，写到 `{novelDir}/{NovelName}.txt`。导出是只读操作，写作中途也可以随时拿"现阶段成品"，不影响 Coordinator 运行。
+在 TUI 中输入 `/export` 可把已完成的章节合并导出，默认 TXT，写到 `{novelDir}/{NovelName}.txt`。导出是只读操作，写作中途也可以随时拿"现阶段成品"，不影响引擎运行。
 
 格式由**输出路径后缀**决定（`.txt` / `.epub`）：
 
@@ -397,7 +423,7 @@ output/novel/meta/simulation_profile.json
 }
 ```
 
-可配置的角色：`coordinator` / `architect` / `writer` / `editor`
+可配置的角色：`architect` / `writer` / `editor`，以及导入管线的三个语义函数档位 `import_segment` / `import_analyze` / `import_synthesize`（未配置时落到 architect；可把机械性更强的切分指到更便宜的模型省成本）。语义裁定 Arbiter 统一使用 default 模型，当前不开放独立角色配置。
 
 #### 自定义代理
 
@@ -458,7 +484,11 @@ output/novel/meta/simulation_profile.json
       "type": "openai",
       "api_key": "sk-xxx",
       "base_url": "https://proxy.example.com/v1",
-      "models": ["gpt-5.4", "gpt-5.4-mini", "MiniMax-M3"],
+      "models": [
+        { "name": "gpt-5.4", "context_window": 400000 },
+        { "name": "gpt-5.4-mini" },
+        { "name": "MiniMax-M3", "context_window": 1000000 }
+      ],
       "api": "responses",
       "extra": {
         "user_agent": "codex-tui/0.142.3 (Mac OS 26.5.1; arm64) Apple_Terminal/470.2 (codex-tui; 0.142.3)",
@@ -507,6 +537,24 @@ output/novel/meta/simulation_profile.json
 内置一份去 AI 味基线（出厂默认）：机械黑名单（套句 / 疲劳词，代码内置 `rules.SystemDefaults()`，commit 时确定性检查）+ 语义判据 `assets/references/anti-ai-tone.md`（注入 writer / editor 规避与举证）。
 
 想叠加自己的偏好**无需改源码**：在 `~/.ainovel/rules/` 目录（全局，放任意 `.md`，按文件名字典序合并）或 `./.ainovel/rules/` 目录（本书，同样放任意 `.md`，与全局同形态）里，**用大白话写偏好即可**（如「主角别写成圣母」「多用身体感知」「每章 3000 字左右」「不要出现『某种程度上』」）——零格式、零 YAML。系统会用模型把这些自然语言要求归一化成本书规则快照（字数范围 / 禁用词 / 疲劳词阈值等结构化约束 + 风格偏好），写作时自动遵循、提交时自动机械自检；常见 AI 套句与疲劳词的机械基线已内置，不写也能用，就近覆盖、与内置基线叠加生效。
+
+### 自定义文风（Voice Layer）
+
+写作标准与去 AI 味判据也可以直接覆盖，同样**无需改源码、无需重新编译**。覆盖目录两级：`<输出目录>/style/`（本书，随书走——换机器恢复同一本书加载同一份文风）> `~/.ainovel/style/`（全局），目录结构：
+
+```
+style/
+├── voice.md                          # 写作标准追加段（内置保留，你的要求追加在后、优先级更高）
+├── anti-ai-tone.md                   # 去 AI 味判据追加段（同上）
+├── styles/
+│   └── xianxia.md                    # 新增自定义风格（文件名即风格名，config 里 style: xianxia 即用）
+│                                     #（与内置同名如 fantasy.md 则整体替换）
+└── genres/
+    └── xianxia/
+        └── style-references.md       # 该风格的题材参考（整文件替换）
+```
+
+语义速记：**指导性文本（voice / anti-ai-tone）追加，风格预设（styles / genres）整文件替换**。追加的优先级是给模型的指示；需要机械强制的约束（禁用词、字数）请写在上面的 rules 目录里。改动重启后生效（断点恢复精确到步骤，重启无成本）。执行协议类提示词不开放覆盖——协作不变量由工具层守卫保障，这也是你可以放心改文风而不会弄坏系统的原因。设计细节见 `docs/voice-layer.md`。
 
 ## 输出结构
 
@@ -560,9 +608,21 @@ output/{novel_name}/
 
 1. 读取 `progress.json` + 最近 checkpoint + 待处理信号
 2. 精确到 step 级生成恢复指令（如"第 7 章 draft 已落盘，请继续 check_consistency"）
-3. 一次 `Prompt` 启动 Coordinator，进入长循环继续创作
+3. Engine 直接从 store 重算路由续跑——没有会话需要恢复，checkpoint 幂等保证重复派发安全
 
 > 文件写入使用 temp + fsync + rename 原子操作，即使在写入过程中断电也不会损坏已有数据。
+
+## 逐章验收
+
+系统默认使用 `auto` 模式持续自主创作。需要逐章审读、避免审读窗口期继续写新章时，可启用确定性的验收闸门：
+
+```text
+/review on   # 开启逐章验收；当前工作完成后，在下一个正向新章前等待
+/next        # 只放行下一章；必要的评审与弧/卷结构维护仍会自动完成
+/review off  # 恢复自动推进；若当前已暂停，再输入继续指令启动 Engine
+```
+
+许可与具体章节号绑定。章节只有在提交恢复状态清空且 commit checkpoint 已落盘后才消费许可，因此进程在提交中途崩溃也不会意外多写下一章。重写、打磨、评审和结构维护不属于“新章”，不会被闸门截断。
 
 ## 实时干预（Steer）
 
@@ -578,8 +638,8 @@ output/{novel_name}/
 
 输入后按 Enter，系统自动：
 1. 记录干预指令到 `run.json`（崩溃恢复用）
-2. 注入到正在运行的 Coordinator
-3. Coordinator 评估影响范围，决定是修改设定、重写已有章节，还是在后续章节调整
+2. Arbiter 立即裁定（查询秒级回显；控制类动作在章节边界安全提交）
+3. 按裁定执行：修改设定走 Architect、重写已有章节走 Editor 入队、写作规则即时落盘——每次裁定审计可回放
 
 ### 干预示例
 
@@ -592,16 +652,18 @@ output/{novel_name}/
 
 ## 设计理念
 
-> **把复杂度从代码搬到模型里。** 代码越少，能坏的地方越少。决策权交给更擅长做决策的角色。
+> **事实层确定，语义层自主。** 模型自由在验证不可能的地方（写什么、怎么写），被约束在验证可能的地方（顺序、幂等、阶段）。
 
-### LLM 驱动创作，Host 驱动路由
+### 三分法，越简单越稳定
 
-- **创作与裁定归 LLM，流程路由归 Host** — 语义 / 质量 / 意图类决策由 Coordinator 与子代理裁定；读事实查表的流程路由由 Host 的 `flow.Router` 纯函数承担，错误率趋近 0。工具失败时返回结构化错误，由 LLM 自行决定重试或调整策略
-- **工具只返事实** — 原子 IO + checkpoint 写入，返回值是 JSON 事实字段（`final_verdict` / `pending_rewrites` / `arc_end_reached`），不夹带任何指令字符串
-- **Flow Router 派发主流程** — Host 在子代理工具成功返回的同步边界跑 `Route(state)`，用 `coordinator.Steer` 把 `[Host 下达指令]` 注入当前 run 的下一轮；返回 nil 表示裁定场景，交回 LLM。Reminder 通道仅保留 StopGuard 与子代理 Guard
-- **StopGuard 物理守门** — `Phase ≠ Complete` 时 Coordinator 物理上不可 `end_turn`，连续阻拦超限才升级终止
-- **拒绝复杂编排** — 没有 task queue、没有 scheduler、没有 policy engine；Host 侧只有一个约 150 行的纯函数 Flow Router，不持有运行时任务状态
-- **模型越强收益越大** — 架构把创作与裁定权留在 prompt 和工具语义里，模型升级后直接吃到收益，Host 一行不用改
+- **可枚举的迁移归代码** — "下一个派谁"是读事实查表（`flow.Route` 纯函数，万级组合穷举测试），错误率趋近 0、零 LLM 开销
+- **边界清晰的判断归 Arbiter** — 选规划师、干预分诊、失败出路：事实进、结构化决策出、机械校验兜底、每次裁定落盘可回放
+- **开放式创作归 Worker** — 一章之内 Writer 完全自主；工具失败时返回结构化错误与出路提示，由 LLM 自行修正
+- **硬编码边界,不硬编码判断** — 代码只守可证明的不变量；无法枚举的创作取舍交给模型，不用关键词、评分阈值或规则表冒充理解
+- **工具只返事实** — 单文件原子 IO + 显式错误 + 幂等重放；章节提交用持久化 Saga + checkpoint，返回值是 JSON 事实字段（`final_verdict` / `pending_rewrites` / `arc_end`），不夹带任何指令字符串
+- **事实护栏,不是行为护栏** — Worker 的 CheckpointDeltaGuard 只认落盘产物：没提交就想收工会被拦下；护栏在模型行为正确时零成本
+- **拒绝复杂编排** — 没有 task queue、没有 policy engine。一个串行循环 + 一张决策表 + 几个裁定函数就是全部控制流
+- **模型越强收益越大** — 创作与裁定质量随模型升级线性受益；确定性外壳一行不用改
 
 ### 全自动闭环
 
@@ -613,22 +675,22 @@ output/{novel_name}/
                 → 弧级摘要 → 角色快照 → 完整成书
 ```
 
-- **Coordinator 自主调度** — 在一次长循环里读事实层 + Reminder 决定下一步，无需 Host 干预
+- **Engine 确定性调度** — 每轮读事实层按决策表派发，无会话、无转发；崩溃恢复 = 读 store 续跑
 - **Writer 自主创作** — 每章独立完成 plan → draft → check → commit 的完整闭环
 - **Editor 自主评审** — 跨章节分析结构问题，输出裁定及影响范围
-- **Architect 自主构建** — 从一句话需求推导出完整设定，弧/卷边界时自主展开后续规划
+- **Architect 自主构建** — 从一句话需求推导出完整设定，弧/卷边界时自主展开后续规划（参考 Writer 落盘的大纲反馈池）
 - **自动伏笔管理** — 埋设、推进、回收全程由 Agent 自行追踪
 - **自动节奏调控** — 追踪叙事线和钩子类型历史，避免连续章节结构雷同
 
 ### 事实与指令解耦
 
-工具只返事实，指令由 Reminder 每轮从事实层重算：
+工具只返事实，"下一步"由 Engine 每轮从事实层重算：
 
-- `commit_chapter` / `save_review` 返回结构化事实（`final_verdict` / `pending_rewrites` / `arc_end_reached` / `next_chapter`），不夹带任何 `[系统]` 字符串
-- `internal/host/reminder/` 下的纯函数 generator 读 `Progress` + `Outline`，每轮 pre-turn 生成 `<system-reminder>`：`flow`（当前该做什么 / 弧末刹车）/ `queue_guard`（队列未清禁止新章）/ `book_complete`（全书完成才放行）。物理兜底由 `StopGuard` 在 `phase≠Complete` 时拒绝 `end_turn` 承担
-- Reminder 只存活一轮，不进历史、不参与压缩；规则有单元测试，退化可被回归捕获
+- `commit_chapter` / `save_review` 落盘结构化事实（`final_verdict` / `pending_rewrites` / `arc_end` / 大纲反馈池），不夹带任何 `[系统]` 字符串
+- `flow.Route` 读 `Progress` + `Outline` 等事实推导下一步指令；决策表的每次改动必须先改穷举规格再改实现
+- 语义决策（裁定）全部落 `meta/decisions.jsonl`：审计、离线重放、A/B 回归
 
-这样指令不会被链式调用吞掉，也不会在工具产物里漂移。改 bug 只需加一个 generator + 一个测试。
+这样指令不会被链式调用吞掉，也不会在工具产物里漂移。改流程 bug 只需改一个分支 + 一条规格。
 
 ## 技术栈
 

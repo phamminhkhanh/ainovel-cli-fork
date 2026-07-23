@@ -50,21 +50,34 @@ func projectConfigPath() string {
 	return filepath.Join(configDirName, "config.json")
 }
 
+// EffectiveConfigPath 返回 TUI 改动（/config、/model）应写回的配置文件：
+// 项目目录有 ./.ainovel/config.json 就写它——与读取时项目层覆盖全局的方向一致，
+// 保证"改当前生效的那份"、改完立刻生效；否则写全局 ~/.ainovel/config.json。
+// 仅编辑已存在的项目配置，不会凭空创建（创建项目覆盖是用户主动放文件的动作）。
+func EffectiveConfigPath() string {
+	rel := projectConfigPath()
+	if _, err := os.Stat(rel); err == nil {
+		if abs, err := filepath.Abs(rel); err == nil {
+			return abs
+		}
+		return rel
+	}
+	return DefaultConfigPath()
+}
+
 // LoadConfig 按优先级加载并合并配置：
 //  1. ~/.ainovel/config.json（全局）
 //  2. ./.ainovel/config.json（项目级覆盖）
-//  3. flagPath 指定的路径（最高优先级）
-func LoadConfig(flagPath string) (Config, error) {
+func LoadConfig() (Config, error) {
 	var cfg Config
 
-	// 1. 全局配置。它是最低优先级基底，坏文件降级为告警而非阻断——可被项目级
-	//    / --config 覆盖；硬失败会把"坏全局 + 有效 --config"的用户挡在门外，
-	//    违反 --config"我明确指定这个"的语义。
+	// 1. 全局配置。它是最低优先级基底，坏文件降级为告警而非阻断——可被项目级覆盖；
+	//    硬失败会把"坏全局 + 有效项目配置"的用户挡在门外。
 	if p := DefaultConfigPath(); p != "" {
 		global, found, err := loadOptionalJSON(p)
 		switch {
 		case err != nil:
-			slog.Warn("全局配置解析失败，已忽略（可被项目级/--config 覆盖）", "module", "config", "path", p, "err", err)
+			slog.Warn("全局配置解析失败，已忽略（可被项目级覆盖）", "module", "config", "path", p, "err", err)
 		case found:
 			cfg = global
 		}
@@ -78,15 +91,6 @@ func LoadConfig(flagPath string) (Config, error) {
 	}
 	if found {
 		cfg = mergeConfig(cfg, project)
-	}
-
-	// 3. CLI flag 覆盖
-	if flagPath != "" {
-		override, err := loadJSONFile(flagPath)
-		if err != nil {
-			return cfg, fmt.Errorf("load config %s: %w", flagPath, err)
-		}
-		cfg = mergeConfig(cfg, override)
 	}
 
 	return cfg, nil
@@ -166,7 +170,7 @@ func mergeConfig(base, overlay Config) Config {
 				existing.BaseURL = v.BaseURL
 			}
 			if len(v.Models) > 0 {
-				existing.Models = append([]string(nil), v.Models...)
+				existing.Models = append([]ModelConfig(nil), v.Models...)
 			}
 			if len(v.ExtraBody) > 0 {
 				existing.ExtraBody = cloneMap(v.ExtraBody)
@@ -221,6 +225,43 @@ func cloneMap(m map[string]any) map[string]any {
 		c[k] = v
 	}
 	return c
+}
+
+// CloneConfig 深拷贝配置中会在运行时修改的 map/slice，避免候选配置污染当前配置。
+func CloneConfig(cfg Config) Config {
+	clone := cfg
+	clone.Providers = make(map[string]ProviderConfig, len(cfg.Providers))
+	for name, pc := range cfg.Providers {
+		pc.Models = append([]ModelConfig(nil), pc.Models...)
+		pc.Extra = cloneMap(pc.Extra)
+		pc.ExtraBody = cloneMap(pc.ExtraBody)
+		clone.Providers[name] = pc
+	}
+	clone.Roles = make(map[string]RoleConfig, len(cfg.Roles))
+	for role, rc := range cfg.Roles {
+		rc.Fallbacks = append([]ModelRef(nil), rc.Fallbacks...)
+		clone.Roles[role] = rc
+	}
+	clone.Notify.Events = append([]string(nil), cfg.Notify.Events...)
+	return clone
+}
+
+// SaveProviderConfig 补丁式更新目标配置层里单个 provider 的凭证与模型库。
+// 只动 providers 段，绝不触碰顶层 provider/model 选择——“当前用哪个”归 /model。
+// 目标不存在时创建最小配置；目标损坏时拒绝覆盖。
+func SaveProviderConfig(path string, provider string, pc ProviderConfig) error {
+	target, found, err := loadOptionalJSON(path)
+	if err != nil {
+		return err
+	}
+	if !found {
+		target = Config{}
+	}
+	if target.Providers == nil {
+		target.Providers = make(map[string]ProviderConfig)
+	}
+	target.Providers[provider] = pc
+	return SaveConfig(path, target)
 }
 
 // stripJSONComments 去除 JSON 中的 // 行注释，跟踪引号状态避免误删字符串内容。
@@ -305,5 +346,33 @@ func SaveConfig(path string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }

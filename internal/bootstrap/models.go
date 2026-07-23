@@ -7,19 +7,12 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/errs"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
-
-// 长输出 + 长 ctx 场景下，reasoning-aware provider（mimo / deepseek-r1 等）
-// 思考阶段如果 server 端不流式发 reasoning delta，SSE 整段会保持沉默。
-// litellm 默认 watchdog 是 2 分钟，对 8000 字写作章节经常触发误杀。
-// 5 分钟覆盖绝大多数实测案例（参见 tasks/todo.md plan→draft 思考时长统计），
-// 仍小于 RequestTimeout 10 分钟，网络真死时仍能兜底。
-const streamIdleTimeout = 5 * time.Minute
 
 // FailoverEvent 表示一次显式 provider 切换。
 // Reason 为短标签（rate_limit / timeout / stream_idle / network），用于结构化日志。
@@ -37,9 +30,10 @@ type FailoverEvent struct {
 type FailoverReporter func(FailoverEvent)
 
 type modelTarget struct {
-	provider string
-	name     string
-	model    agentcore.ChatModel
+	provider   string
+	name       string
+	model      agentcore.ChatModel
+	jsonSchema *bool
 }
 
 // SwappableModel 是可热切换的 ChatModel 包装器。
@@ -49,13 +43,17 @@ type SwappableModel struct {
 	mu       sync.RWMutex
 	provider string
 	name     string
+	// jsonSchema 是当前选中模型的 config json_schema 三态声明，与 provider/name
+	// 同锁原子切换；llmcontract.Resolve 经结构匹配接口每次现读。
+	jsonSchema *bool
 }
 
-func NewSwappableModel(provider, name string, model agentcore.ChatModel) *SwappableModel {
+func NewSwappableModel(provider, name string, model agentcore.ChatModel, jsonSchema *bool) *SwappableModel {
 	return &SwappableModel{
 		SwappableModel: agentcore.NewSwappableModel(model),
 		provider:       provider,
 		name:           name,
+		jsonSchema:     jsonSchema,
 	}
 }
 
@@ -66,9 +64,23 @@ func (m *SwappableModel) ProviderName() string {
 }
 
 func (m *SwappableModel) Info() llm.ModelInfo {
+	return m.StructuredOutputFacts().Info
+}
+
+// StructuredOutputFacts 在同一把锁下读取模型实例、身份和配置覆盖，保证一次
+// 结构化协议选择只观察到一个完整版本。
+func (m *SwappableModel) StructuredOutputFacts() llmcontract.ModelFacts {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if info, ok := m.SwappableModel.Current().(interface{ Info() llm.ModelInfo }); ok {
+	current := m.SwappableModel.Current()
+	facts := llmcontract.ModelFacts{
+		Info:               llm.ModelInfo{Name: m.name, Provider: m.provider},
+		JSONSchemaOverride: cloneBoolPtr(m.jsonSchema),
+	}
+	if cp, ok := current.(llm.CapabilityProvider); ok {
+		facts.Capabilities = cp.Capabilities()
+	}
+	if info, ok := current.(interface{ Info() llm.ModelInfo }); ok {
 		modelInfo := info.Info()
 		if modelInfo.Name == "" {
 			modelInfo.Name = m.name
@@ -76,27 +88,35 @@ func (m *SwappableModel) Info() llm.ModelInfo {
 		if modelInfo.Provider == "" {
 			modelInfo.Provider = m.provider
 		}
-		return modelInfo
+		facts.Info = modelInfo
 	}
-	return llm.ModelInfo{
-		Name:     m.name,
-		Provider: m.provider,
-	}
+	return facts
 }
 
 func (m *SwappableModel) Capabilities() llm.Capabilities {
-	if cp, ok := m.SwappableModel.Current().(llm.CapabilityProvider); ok {
-		return cp.Capabilities()
-	}
-	return llm.Capabilities{}
+	return m.StructuredOutputFacts().Capabilities
 }
 
-func (m *SwappableModel) Swap(provider, name string, model agentcore.ChatModel) {
+func (m *SwappableModel) Swap(provider, name string, model agentcore.ChatModel, jsonSchema *bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.SwappableModel.Swap(model)
 	m.provider = provider
 	m.name = name
+	m.jsonSchema = jsonSchema
+}
+
+// JSONSchemaOverride 返回当前选中模型的 config json_schema 三态声明。
+func (m *SwappableModel) JSONSchemaOverride() *bool {
+	return m.StructuredOutputFacts().JSONSchemaOverride
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (m *SwappableModel) Current() (provider, name string) {
@@ -107,6 +127,7 @@ func (m *SwappableModel) Current() (provider, name string) {
 
 // ModelSet 持有按角色分配的模型实例，未配置的角色回退到默认模型。
 type ModelSet struct {
+	mu        sync.RWMutex
 	Default   *SwappableModel
 	models    map[string]*SwappableModel
 	fallbacks map[string][]modelTarget
@@ -115,6 +136,8 @@ type ModelSet struct {
 
 // ForRole 返回指定角色的模型，未配置时返回默认模型。
 func (ms *ModelSet) ForRole(role string) agentcore.ChatModel {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	if m, ok := ms.models[role]; ok {
 		return m
 	}
@@ -124,6 +147,8 @@ func (ms *ModelSet) ForRole(role string) agentcore.ChatModel {
 // ForRoleWithFailover 返回带有单次请求级 fallback 的角色模型。
 // 仅当该角色显式配置了 fallbacks 时生效；未配置时退化为普通模型。
 func (ms *ModelSet) ForRoleWithFailover(role string, report FailoverReporter) agentcore.ChatModel {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	primary, ok := ms.models[role]
 	if !ok {
 		return ms.Default
@@ -133,15 +158,14 @@ func (ms *ModelSet) ForRoleWithFailover(role string, report FailoverReporter) ag
 		return primary
 	}
 	return &failoverModel{
-		role:      role,
-		primary:   primary,
-		fallbacks: append([]modelTarget(nil), targets...),
-		report:    report,
+		role: role, primary: primary, set: ms, report: report,
 	}
 }
 
 // Summary 返回模型分配摘要（供日志使用）。
 func (ms *ModelSet) Summary() string {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	var parts []string
 	for role, m := range ms.models {
 		provider, name := m.Current()
@@ -158,6 +182,8 @@ func (ms *ModelSet) Summary() string {
 // CurrentSelection 返回角色当前生效的 provider/model。
 // role 为空或 "default" 时返回默认模型。
 func (ms *ModelSet) CurrentSelection(role string) (provider, model string, explicit bool) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	if role == "" || role == "default" {
 		provider, model = ms.Default.Current()
 		return provider, model, true
@@ -173,6 +199,8 @@ func (ms *ModelSet) CurrentSelection(role string) (provider, model string, expli
 // Swap 切换默认模型或指定角色模型。
 // role 为空或 "default" 时切换默认模型；其他角色切换为显式覆盖。
 func (ms *ModelSet) Swap(role, provider, model string) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	pc, ok := ms.config.Providers[provider]
 	if !ok {
 		return fmt.Errorf("provider %q is not configured: %w", provider, errs.ErrConfig)
@@ -182,8 +210,11 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 		return fmt.Errorf("切换模型失败: %w", err)
 	}
 
+	jsonSchema := ms.config.ModelJSONSchema(provider, model)
 	if role == "" || role == "default" {
-		ms.Default.Swap(provider, model, next)
+		ms.Default.Swap(provider, model, next, jsonSchema)
+		ms.config.Provider = provider
+		ms.config.ModelName = model
 		return nil
 	}
 
@@ -192,11 +223,59 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 	}
 
 	if existing, ok := ms.models[role]; ok {
-		existing.Swap(provider, model, next)
-		return nil
+		existing.Swap(provider, model, next, jsonSchema)
+	} else {
+		ms.models[role] = NewSwappableModel(provider, model, next, jsonSchema)
 	}
-	ms.models[role] = NewSwappableModel(provider, model, next)
+	if ms.config.Roles == nil {
+		ms.config.Roles = make(map[string]RoleConfig)
+	}
+	rc := ms.config.Roles[role]
+	rc.Provider = provider
+	rc.Model = model
+	ms.config.Roles[role] = rc
 	return nil
+}
+
+// ResolveContextWindow 使用 ModelSet 的最新配置解析窗口，供运行时热切换后的
+// ContextManagerFactory 使用，避免捕获启动时的 Config 副本。
+func (ms *ModelSet) ResolveContextWindow(provider, model string) (int, ContextWindowSource) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return ms.config.ResolveContextWindow(provider, model)
+}
+
+// ApplyPrepared 提交一个已成功构建的候选 ModelSet。已有 SwappableModel 的地址
+// 保持不变，因此已装配的 Worker/Arbiter 会在下一次请求自动使用新客户端。
+func (ms *ModelSet) ApplyPrepared(candidate *ModelSet) {
+	if candidate == nil {
+		return
+	}
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	defaultProvider, defaultName := candidate.Default.Current()
+	ms.Default.Swap(defaultProvider, defaultName, candidate.Default.SwappableModel.Current(), candidate.Default.JSONSchemaOverride())
+
+	nextModels := make(map[string]*SwappableModel, len(candidate.models))
+	for role, next := range candidate.models {
+		provider, name := next.Current()
+		if existing, ok := ms.models[role]; ok {
+			existing.Swap(provider, name, next.SwappableModel.Current(), next.JSONSchemaOverride())
+			nextModels[role] = existing
+		} else {
+			nextModels[role] = next
+		}
+	}
+	ms.models = nextModels
+	ms.fallbacks = candidate.fallbacks
+	ms.config = CloneConfig(candidate.config)
+}
+
+func (ms *ModelSet) fallbackTargets(role string) []modelTarget {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return append([]modelTarget(nil), ms.fallbacks[role]...)
 }
 
 // ModelName 从 ChatModel 中提取当前模型名，失败返回空字符串。
@@ -204,6 +283,17 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 func ModelName(m agentcore.ChatModel) string {
 	if info, ok := m.(interface{ Info() llm.ModelInfo }); ok {
 		return info.Info().Name
+	}
+	return ""
+}
+
+// ModelProvider 从 ChatModel 中提取当前 provider 名称，失败返回空字符串。
+func ModelProvider(m agentcore.ChatModel) string {
+	if info, ok := m.(interface{ Info() llm.ModelInfo }); ok {
+		return info.Info().Provider
+	}
+	if provider, ok := m.(interface{ ProviderName() string }); ok {
+		return provider.ProviderName()
 	}
 	return ""
 }
@@ -221,7 +311,7 @@ func NewModelSet(cfg Config) (*ModelSet, error) {
 	}
 
 	ms := &ModelSet{
-		Default:   NewSwappableModel(cfg.Provider, cfg.ModelName, defaultModel),
+		Default:   NewSwappableModel(cfg.Provider, cfg.ModelName, defaultModel, cfg.ModelJSONSchema(cfg.Provider, cfg.ModelName)),
 		models:    make(map[string]*SwappableModel),
 		fallbacks: make(map[string][]modelTarget),
 		config:    cfg,
@@ -237,7 +327,7 @@ func NewModelSet(cfg Config) (*ModelSet, error) {
 		if err != nil {
 			return nil, fmt.Errorf("role %s model: %w", role, err)
 		}
-		ms.models[role] = NewSwappableModel(rc.Provider, rc.Model, m)
+		ms.models[role] = NewSwappableModel(rc.Provider, rc.Model, m, cfg.ModelJSONSchema(rc.Provider, rc.Model))
 		slog.Info("角色模型分配", "module", "config", "role", role, "provider", rc.Provider, "model", rc.Model)
 		if len(rc.Fallbacks) == 0 {
 			continue
@@ -254,9 +344,10 @@ func NewModelSet(cfg Config) (*ModelSet, error) {
 				return nil, fmt.Errorf("role %s fallback %s/%s: %w", role, fallback.Provider, fallback.Model, err)
 			}
 			targets = append(targets, modelTarget{
-				provider: fallback.Provider,
-				name:     fallback.Model,
-				model:    fm,
+				provider:   fallback.Provider,
+				name:       fallback.Model,
+				model:      fm,
+				jsonSchema: cfg.ModelJSONSchema(fallback.Provider, fallback.Model),
 			})
 		}
 		ms.fallbacks[role] = targets
@@ -284,10 +375,15 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 		providerExtra["api"] = pc.API
 	}
 
+	streamIdle, err := pc.StreamIdleTimeoutValue()
+	if err != nil {
+		return nil, fmt.Errorf("provider %s stream_idle_timeout: %w: %w", providerKey, errs.ErrConfig, err)
+	}
+
 	m, err := llm.NewModel(providerType, model,
 		llm.WithAPIKey(pc.APIKey),
 		llm.WithBaseURL(pc.BaseURL),
-		llm.WithStreamIdleTimeout(streamIdleTimeout),
+		llm.WithStreamIdleTimeout(streamIdle),
 		llm.WithProviderExtra(providerExtra),
 		llm.WithExtra(pc.ExtraBody),
 	)
@@ -299,10 +395,10 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 }
 
 type failoverModel struct {
-	role      string
-	primary   *SwappableModel
-	fallbacks []modelTarget
-	report    FailoverReporter
+	role    string
+	primary *SwappableModel
+	set     *ModelSet
+	report  FailoverReporter
 }
 
 func (m *failoverModel) Generate(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
@@ -312,7 +408,7 @@ func (m *failoverModel) Generate(ctx context.Context, messages []agentcore.Messa
 		return resp, nil
 	}
 
-	next, reason, ok := m.pickFallback(current, err)
+	next, reason, ok := m.pickFallback(current, err, requestsJSONSchema(opts))
 	if !ok {
 		return nil, err
 	}
@@ -333,7 +429,7 @@ func (m *failoverModel) GenerateStream(ctx context.Context, messages []agentcore
 		source, resp, err := m.startAttempt(ctx, current, messages, tools, opts...)
 		if err != nil {
 			if !fallbackUsed {
-				if next, reason, ok := m.pickFallback(current, err); ok {
+				if next, reason, ok := m.pickFallback(current, err, requestsJSONSchema(opts)); ok {
 					fallbackUsed = true
 					m.reportFailover(current, next, reason, err)
 					current = next
@@ -357,7 +453,7 @@ func (m *failoverModel) GenerateStream(ctx context.Context, messages []agentcore
 			switch ev.Type {
 			case agentcore.StreamEventError:
 				if ev.Err != nil && !forwarded && !fallbackUsed {
-					if next, reason, ok := m.pickFallback(current, ev.Err); ok {
+					if next, reason, ok := m.pickFallback(current, ev.Err, requestsJSONSchema(opts)); ok {
 						fallbackUsed = true
 						m.reportFailover(current, next, reason, ev.Err)
 						current = next
@@ -397,19 +493,35 @@ func (m *failoverModel) Info() llm.ModelInfo {
 	return m.primary.Info()
 }
 
+func (m *failoverModel) Capabilities() llm.Capabilities {
+	return m.StructuredOutputFacts().Capabilities
+}
+
+func (m *failoverModel) JSONSchemaOverride() *bool {
+	return m.StructuredOutputFacts().JSONSchemaOverride
+}
+
+func (m *failoverModel) StructuredOutputFacts() llmcontract.ModelFacts {
+	if m.primary == nil {
+		return llmcontract.ModelFacts{}
+	}
+	return m.primary.StructuredOutputFacts()
+}
+
 func (m *failoverModel) currentTarget() modelTarget {
 	if m.primary == nil {
 		return modelTarget{}
 	}
 	provider, name := m.primary.Current()
 	return modelTarget{
-		provider: provider,
-		name:     name,
-		model:    m.primary,
+		provider:   provider,
+		name:       name,
+		model:      m.primary,
+		jsonSchema: m.primary.JSONSchemaOverride(),
 	}
 }
 
-func (m *failoverModel) pickFallback(current modelTarget, err error) (modelTarget, string, bool) {
+func (m *failoverModel) pickFallback(current modelTarget, err error, requireJSONSchema bool) (modelTarget, string, bool) {
 	if err == nil || current.model == nil {
 		return modelTarget{}, "", false
 	}
@@ -421,16 +533,36 @@ func (m *failoverModel) pickFallback(current modelTarget, err error) (modelTarge
 		return modelTarget{}, agentcore.FailoverReason(err), false
 	}
 	reason := agentcore.FailoverReason(err)
-	for _, target := range m.fallbacks {
+	var targets []modelTarget
+	if m.set != nil {
+		targets = m.set.fallbackTargets(m.role)
+	}
+	for _, target := range targets {
 		if target.provider == current.provider && target.name == current.name {
 			continue
 		}
 		if target.model == nil {
 			continue
 		}
+		if requireJSONSchema && !supportsJSONSchema(target) {
+			continue
+		}
 		return target, reason, true
 	}
 	return modelTarget{}, reason, false
+}
+
+func requestsJSONSchema(opts []agentcore.CallOption) bool {
+	format := agentcore.ResolveCallConfig(opts).ResponseFormat
+	return format != nil && format.Type == agentcore.ResponseFormatJSONSchema
+}
+
+func supportsJSONSchema(target modelTarget) bool {
+	if target.jsonSchema != nil {
+		return *target.jsonSchema
+	}
+	cp, ok := target.model.(llm.CapabilityProvider)
+	return ok && cp.Capabilities().Structured.JSONSchema == llm.SupportYes
 }
 
 func (m *failoverModel) reportFailover(from, to modelTarget, reason string, err error) {

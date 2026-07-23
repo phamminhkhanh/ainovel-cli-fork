@@ -1549,9 +1549,6 @@ func TestResumeFailedWithSteerPersisted(t *testing.T) {
 	if meta.PendingSteer != steerText {
 		t.Errorf("pending_steer = %q, want %q", meta.PendingSteer, steerText)
 	}
-	if len(meta.SteerHistory) != 1 || meta.SteerHistory[0].Input != steerText {
-		t.Errorf("steer_history = %+v, want 1 entry %q", meta.SteerHistory, steerText)
-	}
 }
 
 // TestResumeFailedEmptySteerDoesNotWriteRunJSON verifies ResumeFailed(id, "")

@@ -44,6 +44,24 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 	durStr := renderEventDuration(ev.Duration)
 
 	switch {
+	case ev.Category == "DECISION":
+		var icon string
+		switch {
+		case running:
+			icon = lipgloss.NewStyle().Foreground(colorContext).Bold(true).Render(runningSpinner(spinnerFrame))
+		case ev.Failed:
+			icon = lipgloss.NewStyle().Foreground(colorError).Bold(true).Render("✕")
+		default:
+			icon = lipgloss.NewStyle().Foreground(colorSuccess).Render("✓")
+		}
+		name := lipgloss.NewStyle().Foreground(colorContext).Bold(true).Render("ARBITER")
+		label := lipgloss.NewStyle().Foreground(colorMuted).Render("（" + truncate(ev.Summary, maxSumW-9) + "）")
+		line := tsStr + " " + icon + " " + name + label
+		if !running {
+			line += durStr
+		}
+		return line
+
 	case ev.Category == "DISPATCH":
 		// 三态：进行中（accent spinner + 加粗）/ 失败（红 ✕）/ 完成（绿 ✓）
 		var icon string
@@ -66,35 +84,8 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 		}
 		return line
 
-	case ev.Category == "DONE":
-		// 兼容旧 replay 数据；新流程不再产生 DONE 独立事件
-		icon := lipgloss.NewStyle().Foreground(colorSuccess).Render("✓")
-		color := eventAgentColor(ev.Agent)
-		name := lipgloss.NewStyle().Foreground(color).Render(agentDisplayName(ev.Agent))
-		return tsStr + " " + icon + " " + name + durStr
-
-	case ev.Category == "TOOL" && ev.Depth == 0:
-		// coordinator 自身工具
-		var icon, sum string
-		switch {
-		case running:
-			icon = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(runningSpinner(spinnerFrame))
-			sum = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(truncate(ev.Summary, maxSumW))
-		case ev.Failed:
-			icon = lipgloss.NewStyle().Foreground(colorError).Bold(true).Render("✕")
-			sum = lipgloss.NewStyle().Foreground(colorError).Render(truncate(ev.Summary, maxSumW))
-		default:
-			icon = lipgloss.NewStyle().Foreground(colorTool).Render("◇")
-			sum = lipgloss.NewStyle().Foreground(colorTool).Render(truncate(ev.Summary, maxSumW))
-		}
-		line := tsStr + " " + icon + " " + sum
-		if !running {
-			line += durStr
-		}
-		return line
-
 	case ev.Category == "TOOL":
-		// subagent 内部工具（Depth=1）
+		// Worker 内部工具（Depth=1）
 		var icon, sum string
 		switch {
 		case running:
@@ -133,7 +124,12 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 		if ev.Level == "warn" {
 			sumColor = colorAccent
 		}
-		sum := lipgloss.NewStyle().Foreground(sumColor).Render(truncate(ev.Summary, maxSumW))
+		text := truncate(ev.Summary, maxSumW)
+		if cd := retryCountdown(ev.RetryAt, time.Now()); cd != "" {
+			cd = " · " + cd
+			text = truncate(ev.Summary, max(20, maxSumW-lipgloss.Width(cd))) + cd
+		}
+		sum := lipgloss.NewStyle().Foreground(sumColor).Render(text)
 		return tsStr + " " + indent + icon + " " + sum
 
 	case ev.Category == "USER":
@@ -162,6 +158,21 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 		icon := lipgloss.NewStyle().Foreground(colorDim).Render("·")
 		return tsStr + " " + indent + icon + " " + truncate(ev.Summary, maxSumW)
 	}
+}
+
+// retryCountdown 返回重试倒计时文案（"7s 后重试"）；未设截止或已到点（请求已在途）返回空。
+// 事件只携带截止时刻，剩余秒数在渲染时计算——spinner tick 驱动重绘即形成逐秒倒数，
+// 事件面板与导入面板共用（对齐"同 ID/Key 一行跳动"的原地更新机制）。
+func retryCountdown(retryAt, now time.Time) string {
+	if retryAt.IsZero() {
+		return ""
+	}
+	remain := retryAt.Sub(now)
+	if remain <= 0 {
+		return ""
+	}
+	secs := int((remain + time.Second - 1) / time.Second)
+	return fmt.Sprintf("%ds 后重试", secs)
 }
 
 // renderDispatchSummary 渲染 DISPATCH 摘要：Agent 名用角色色，任务用淡色。

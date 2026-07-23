@@ -59,6 +59,7 @@ type Model struct {
 	cocreate       *cocreateState
 	help           *helpState
 	modelSwitch    *modelSwitchState
+	modelConfig    *modelConfigState
 	report         *reportState
 	version        string
 	importer       *importState
@@ -68,6 +69,7 @@ type Model struct {
 	compItems      []commandPaletteItem
 	compIdx        int
 	compActive     bool
+	commandToken   string // 当前已注册的命令 token；仅渲染该段，不染参数
 	snapshot       host.UISnapshot
 	events         []host.Event
 	eventIndex     map[string]int   // event.ID → m.events 下标；调用类事件到达时原地更新
@@ -93,6 +95,7 @@ type Model struct {
 	mode           appMode
 	starting       bool // UI 已进入工作台，Host 正在执行启动初始化
 	startupMode    startupMode
+	importHint     string // 启动时检测到未完成导入的提示（欢迎屏显示；发起导入后清空）
 	cocreateSeq    int
 	reportSeq      int
 	err            error
@@ -133,6 +136,13 @@ func NewModel(rt *host.Host, bridge *askUserBridge, version string) Model {
 	stvp := viewport.New(32, 20)
 	stvp.SetContent("")
 
+	// 启动时检测一次未完成导入（LoadState 重算工件 digest，不进快照轮询）；
+	// 半路书若不主动告知，用户只有在创作被门禁拒绝时才会发现（RFC §18.2）。
+	importHint := ""
+	if rt != nil {
+		importHint = rt.ImportResumeHint()
+	}
+
 	return Model{
 		runtime:      rt,
 		askBridge:    bridge,
@@ -141,6 +151,7 @@ func NewModel(rt *host.Host, bridge *askUserBridge, version string) Model {
 		streamScroll: true,
 		mode:         modeNew,
 		startupMode:  startupModeQuick,
+		importHint:   importHint,
 		textarea:     ta,
 		viewport:     vp,
 		streamVP:     svp,
@@ -293,7 +304,11 @@ func (m *Model) updateViewportSize() {
 	m.detailVP.Height = bodyH
 	leftW := m.sidebarWidth()
 	m.stateVP.Width = max(1, leftW-2)
-	m.stateVP.Height = max(1, bodyH-2) // -2 为状态栏 Padding(1,1) 的上下留白
+	m.stateVP.Height = max(1, bodyH-1) // -1 为顶部留白，底行直接显示内容
+	// 高度或内容变短后，自由滚动的左右两栏可能停在越界偏移上（bubbles 的
+	// SetContent 只防越过末行），viewport 会用空行补满底部。SetYOffset 自钳。
+	m.stateVP.SetYOffset(m.stateVP.YOffset)
+	m.detailVP.SetYOffset(m.detailVP.YOffset)
 }
 
 // splitHeights 计算事件流和流式输出的高度分配。
@@ -401,6 +416,7 @@ func (m *Model) tryHistoryUp() bool {
 	m.historyIdx--
 	m.textarea.SetValue(m.inputHistory[m.historyIdx])
 	m.textarea.CursorEnd()
+	m.syncCommandInputHighlight()
 	m.refitTextareaHeight()
 	return true
 }
@@ -418,6 +434,7 @@ func (m *Model) tryHistoryDown() bool {
 		m.textarea.SetValue(m.inputHistory[m.historyIdx])
 	}
 	m.textarea.CursorEnd()
+	m.syncCommandInputHighlight()
 	m.refitTextareaHeight()
 	return true
 }
@@ -548,14 +565,22 @@ func (m *Model) syncRuntimePlaceholder() {
 	}
 	switch m.snapshot.RuntimeState {
 	case "completed":
-		m.textarea.Placeholder = "创作已完成"
+		m.textarea.Placeholder = donePlaceholder
 	case "pausing":
 		m.textarea.Placeholder = "正在暂停创作..."
 	case "paused":
-		m.textarea.Placeholder = "创作已暂停，输入任意内容继续创作"
+		if m.snapshot.AdvanceMode == "review" && m.snapshot.Phase == "writing" {
+			m.textarea.Placeholder = "逐章验收等待中：输入修改意见，或 /next 放行下一章"
+		} else {
+			m.textarea.Placeholder = "创作已暂停，输入任意内容继续创作"
+		}
 	default:
 		if !m.snapshot.IsRunning {
-			m.textarea.Placeholder = "运行中断，输入任意内容恢复创作"
+			if m.snapshot.AdvanceMode == "review" && m.snapshot.Phase == "writing" {
+				m.textarea.Placeholder = "逐章验收等待中：输入修改意见，或 /next 放行下一章"
+			} else {
+				m.textarea.Placeholder = "运行中断，输入任意内容恢复创作"
+			}
 		} else {
 			m.textarea.Placeholder = defaultSteerPlaceholder()
 		}
@@ -563,8 +588,9 @@ func (m *Model) syncRuntimePlaceholder() {
 }
 
 func (m *Model) renderBottomBar() string {
+	inputView := highlightCommandToken(m.textarea.View(), m.textarea.Value(), m.commandToken)
 	inputBox := renderInputBox(
-		m.textarea.View(),
+		inputView,
 		m.inputHints(),
 		m.snapshot,
 		m.outputDir(),
@@ -613,7 +639,8 @@ func (m Model) View() string {
 		return renderReportModal(m.width, m.height, m.report)
 	}
 	if m.importer != nil {
-		return renderImportModal(m.width, m.height, m.importer)
+		// 导入不依赖 Engine 运行态，动画帧直接取 spinnerIdx（currentSpinnerFrame 在引擎停机时返回空）。
+		return renderImportModal(m.width, m.height, m.importer, m.spinnerIdx)
 	}
 	if m.simulator != nil {
 		return renderSimulationModal(m.width, m.height, m.simulator)
@@ -629,7 +656,7 @@ func (m Model) View() string {
 		if m.err != nil {
 			errMsg = m.err.Error()
 		}
-		body = renderWelcome(m.width, bodyH, errMsg, m.startupMode)
+		body = renderWelcome(m.width, bodyH, errMsg, m.startupMode, m.importHint)
 	} else {
 		leftW := m.sidebarWidth()
 		rightW := m.detailWidth()
@@ -660,6 +687,8 @@ func (m Model) View() string {
 	if m.modelSwitch != nil {
 		commandBar := renderModelSwitchBar(m.width, m.modelSwitch)
 		view = overlayAboveInput(view, commandBar, inputH)
+	} else if m.modelConfig != nil {
+		view = overlayAboveInput(view, renderModelConfigModal(m.width, m.modelConfig), inputH)
 	} else if m.compActive {
 		commandBar := renderCommandPalette(m.width, m.compItems, m.compIdx)
 		view = overlayAboveInput(view, commandBar, inputH)

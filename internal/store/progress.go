@@ -105,7 +105,8 @@ func (s *ProgressStore) UpdatePhase(phase domain.Phase) error {
 	})
 }
 
-// StartChapter 标记某章进入写作中状态。纯 IO，不做状态验证。
+// StartChapter 标记某章进入写作中状态。它不能承担阶段迁移职责；调用方必须先由
+// foundation/import 流程把 Progress 明确推进到 writing，避免错误派单绕过规划阶段。
 func (s *ProgressStore) StartChapter(chapter int) error {
 	if chapter <= 0 {
 		return fmt.Errorf("chapter must be > 0")
@@ -116,9 +117,11 @@ func (s *ProgressStore) StartChapter(chapter int) error {
 			return err
 		}
 		if p == nil {
-			p = &domain.Progress{}
+			return fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
 		}
-		p.Phase = domain.PhaseWriting
+		if p.Phase != domain.PhaseWriting {
+			return fmt.Errorf("章节写作仅允许在 writing 阶段（当前 phase=%s）: %w", p.Phase, errs.ErrToolPrecondition)
+		}
 		if p.Flow != domain.FlowRewriting && p.Flow != domain.FlowPolishing {
 			p.Flow = domain.FlowWriting
 		}
@@ -131,13 +134,17 @@ func (s *ProgressStore) StartChapter(chapter int) error {
 	})
 }
 
-// IsChapterCompleted 检查章节是否已提交完成。
-func (s *ProgressStore) IsChapterCompleted(chapter int) bool {
+// IsChapterCompleted 检查章节是否已提交完成。读取失败显式返回，不能把损坏的
+// progress 当成“未完成”后继续覆盖章节。
+func (s *ProgressStore) IsChapterCompleted(chapter int) (bool, error) {
 	p, err := s.Load()
-	if err != nil || p == nil {
-		return false
+	if err != nil {
+		return false, err
 	}
-	return slices.Contains(p.CompletedChapters, chapter)
+	if p == nil {
+		return false, nil
+	}
+	return slices.Contains(p.CompletedChapters, chapter), nil
 }
 
 // MarkChapterComplete 标记章节完成，原子性更新进度。
@@ -244,6 +251,28 @@ func (s *ProgressStore) Reopen(chapters []int, reason string) error {
 	})
 }
 
+// ReopenContinue 把已完结的书重开为续写态：仅 phase complete→writing，不入返工队列、
+// 不置 ReopenedFromComplete（那是"返工排空后按原结构自动重新完结"的 drain 语义，
+// 续写重开恰恰要扩展结构）。与 Reopen 同为 phaseOrder"只前进"约束的豁免出口，
+// 同受 phase=complete 前置守卫保护；重开后由卷末路由派发架构师续卷。
+func (s *ProgressStore) ReopenContinue() error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			return fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
+		}
+		if p.Phase != domain.PhaseComplete {
+			return fmt.Errorf("重开仅适用于已完结的书（当前 phase=%s）: %w", p.Phase, errs.ErrToolPrecondition)
+		}
+		p.Phase = domain.PhaseWriting
+		p.ReopenCount++ // 审计 + 保证再完结的 progress digest 与上次不同（见字段注释）
+		return s.saveUnlocked(p)
+	})
+}
+
 // ClearInProgress 清除进度中间状态。
 func (s *ProgressStore) ClearInProgress() error {
 	return s.io.WithWriteLock(func() error {
@@ -330,6 +359,47 @@ func (s *ProgressStore) SetPendingRewrites(chapters []int, reason string) error 
 	})
 }
 
+// ApplyReviewOutcome 原子应用审阅产生的流程状态。审阅语义由上层决定；Store 只负责
+// 校验 Flow 迁移和返工章节，并保证 Flow、PendingRewrites、RewriteReason 不出现中间态。
+func (s *ProgressStore) ApplyReviewOutcome(flow domain.FlowState, chapters []int, reason string) (*domain.Progress, error) {
+	var latest *domain.Progress
+	err := s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			return fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
+		}
+		if len(chapters) > 0 {
+			if flow == domain.FlowWriting {
+				return fmt.Errorf("返工章节非空时 flow 不能为 writing: %w", errs.ErrToolConflict)
+			}
+			if err := domain.ValidateFlowTransition(p.Flow, flow); err != nil {
+				return err
+			}
+			normalized, err := normalizePendingRewrites(chapters, p.CompletedChapters)
+			if err != nil {
+				return err
+			}
+			p.PendingRewrites = normalized
+			p.RewriteReason = reason
+			p.Flow = flow
+		} else if len(p.PendingRewrites) == 0 {
+			if err := domain.ValidateFlowTransition(p.Flow, flow); err != nil {
+				return err
+			}
+			p.Flow = flow
+		}
+		if err := s.saveUnlocked(p); err != nil {
+			return err
+		}
+		latest = p
+		return nil
+	})
+	return latest, err
+}
+
 // ValidatePendingRewrites 校验章节列表是否可进入返工队列，不修改状态。
 func (s *ProgressStore) ValidatePendingRewrites(chapters []int) error {
 	s.io.mu.RLock()
@@ -396,14 +466,18 @@ func (s *ProgressStore) ClearPendingRewrites() error {
 }
 
 // ValidateChapterWork 校验当前章节是否允许被规划或提交。
-// 打磨/重写流程下，只允许处理 PendingRewrites 中的章节。
+// Writer 只能在 writing 阶段工作；打磨/重写流程下，只允许处理 PendingRewrites
+// 中的章节。阶段约束在 Store 边界再守一次，避免错误的 Arbiter 派单绕过 Router。
 func (s *ProgressStore) ValidateChapterWork(chapter int) error {
 	p, err := s.Load()
 	if err != nil {
 		return err
 	}
 	if p == nil {
-		return nil
+		return fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
+	}
+	if p.Phase != domain.PhaseWriting {
+		return fmt.Errorf("章节写作仅允许在 writing 阶段（当前 phase=%s）: %w", p.Phase, errs.ErrToolPrecondition)
 	}
 	if p.Flow != domain.FlowRewriting && p.Flow != domain.FlowPolishing {
 		return nil

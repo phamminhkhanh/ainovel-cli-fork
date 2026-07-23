@@ -235,7 +235,7 @@ function openImport() { closeCmd(); $('#impOverlay').hidden = false; }
 async function submitImport() {
   const path = $('#impPath').value.trim();
   if (!path) { toast('Nhập đường dẫn nguồn', 'error'); return; }
-  const res = await post('/api/import', { path, from: parseInt($('#impFrom').value, 10) || 0 });
+  const res = await post('/api/import', { path });
   if (res) { toast('Đã bắt đầu nhập — xem tiến trình ở thanh dưới', 'ok'); $('#impOverlay').hidden = true; }
 }
 async function runSimulate() {
@@ -434,7 +434,7 @@ const COMMAND_HELP = [
   { key: 'help', aliases: [], usage: '/help', desc: 'Hiển thị trợ giúp lệnh và phím tắt.' },
   { key: 'model', aliases: [], usage: '/model [role]', desc: 'Chuyển đổi model mặc định hoặc theo vai trò.' },
   { key: 'diag', aliases: [], usage: '/diag', desc: 'Chẩn đoán sức khỏe tiến trình sáng tác.' },
-  { key: 'import', aliases: [], usage: '/import <path> [from=N]', desc: 'Phản suy truyện ngoài để tiếp tục viết.' },
+  { key: 'import', aliases: [], usage: '/import <path>', desc: 'Phản suy truyện ngoài để tiếp tục viết.' },
   { key: 'cocreate', aliases: ['plan'], usage: '/cocreate', desc: 'Tạm dừng và cùng AI lập kế hoạch tiếp theo.' },
   { key: 'simulate', aliases: [], usage: '/simulate', desc: 'Đọc ./simulate để tạo/cập nhật hồ sơ văn phong.' },
   { key: 'importsim', aliases: [], usage: '/importsim <profile.json>', desc: 'Nhập hồ sơ văn phong .json có sẵn.' },

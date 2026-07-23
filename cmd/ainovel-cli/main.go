@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -49,7 +50,7 @@ func main() {
 	headlessMode = opts.Headless
 
 	// 首次引导
-	if bootstrap.NeedsSetup(opts.ConfigPath) {
+	if bootstrap.NeedsSetup() {
 		if opts.Headless || opts.Web {
 			die("error: headless / web 模式不支持首次引导，请先运行一次 TUI 完成配置")
 		}
@@ -63,7 +64,7 @@ func main() {
 	}
 
 	// 加载配置
-	cfg, err := bootstrap.LoadConfig(opts.ConfigPath)
+	cfg, err := bootstrap.LoadConfig()
 	if err != nil {
 		die("config: %v", err)
 	}
@@ -104,7 +105,10 @@ func runWithConfig(cfg bootstrap.Config, opts cliOptions, args []string) {
 		die("error: 不再支持命令行直接传入小说需求，请启动后在 TUI 输入框中输入")
 	}
 
-	bundle := assets.Load(cfg.Style)
+	// FillDefaults 必须先于资产加载:OutputDir 是运行时字段,默认值在此归一——
+	// 否则默认配置下 <书目录>/style/ 的本书级文风覆盖永远不会被加载。
+	cfg.FillDefaults()
+	bundle := assets.Load(cfg.Style, assets.DefaultLoadOptions(cfg.OutputDir))
 	if opts.Web && opts.Headless {
 		die("error: --web 与 --headless 不能同时使用")
 	}
@@ -176,12 +180,6 @@ func parseCLIOptions(argv []string) (cliOptions, []string, error) {
 			if i+1 < len(argv) {
 				return opts, nil, fmt.Errorf("update 只接受一个可选版本参数")
 			}
-		case "--config":
-			if i+1 >= len(argv) {
-				return opts, nil, fmt.Errorf("--config 缺少值")
-			}
-			opts.ConfigPath = argv[i+1]
-			i++
 		case "--headless":
 			opts.Headless = true
 		case "--web":
@@ -257,6 +255,10 @@ func runSelfUpdate(target string) error {
 }
 
 func loadPrompt(opts cliOptions) (string, error) {
+	return loadPromptFrom(opts, os.Stdin)
+}
+
+func loadPromptFrom(opts cliOptions, stdin io.Reader) (string, error) {
 	if opts.PromptFile == "" {
 		return strings.TrimSpace(opts.Prompt), nil
 	}
@@ -264,7 +266,7 @@ func loadPrompt(opts cliOptions) (string, error) {
 	var data []byte
 	var err error
 	if opts.PromptFile == "-" {
-		data, err = os.ReadFile("/dev/stdin")
+		data, err = io.ReadAll(stdin)
 	} else {
 		data, err = os.ReadFile(opts.PromptFile)
 	}

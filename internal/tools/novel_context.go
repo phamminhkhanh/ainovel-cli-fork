@@ -61,7 +61,7 @@ func (t *ContextTool) ConcurrencySafe(_ json.RawMessage) bool { return true }
 
 func (t *ContextTool) Schema() map[string]any {
 	return schema.Object(
-		schema.Property("chapter", schema.Int("章节号。不传则返回进度状态和基础设定（Coordinator 用于判断下一步）；传入则额外返回该章的写作上下文（Writer 用）")),
+		schema.Property("chapter", schema.Int("章节号。不传则返回进度状态和基础设定（Architect 用）；传入则额外返回该章的写作上下文（Writer/Editor 用）")),
 	)
 }
 
@@ -95,14 +95,19 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		state := t.prepareChapterContext(a.Chapter, &seed, warn)
 		seed.apply(result)
 		t.buildChapterContext(result, state, warn)
+		// 该章的机械违规事实(commit 时按 user_rules 检查并落盘):
+		// editor 评审据此映射进七维(editor.md §机械检查映射);writer 返工时自查。
+		if violations := t.store.World.LoadRuleViolations(a.Chapter); len(violations) > 0 {
+			result["rule_violations"] = violations
+		}
 		// 数据语义标注（治复读交代）：episodic 是已写入正文的备忘，不是待写素材。
 		// 只挂容器内，不进顶层镜像。
 		if epi, ok := result["episodic_memory"].(map[string]any); ok && len(epi) > 0 {
 			epi["_usage"] = "本容器为已写入正文的事实备忘（供一致性与衔接对照）；在新章正文中原样复述这些内容属于重复缺陷"
 		}
 	} else {
-		// Coordinator/Architect 路径：只返回状态 + 结构化数据，不加载全量原文
-		t.buildProgressStatus(result)
+		// Architect 路径：只返回状态 + 结构化数据，不加载全量原文
+		t.buildProgressStatus(result, warn)
 		t.buildArchitectContext(result, warn)
 	}
 
@@ -115,7 +120,7 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		t.buildSimulationProfile(result, "planning_memory", warn)
 	}
 
-	t.buildUserRules(result)
+	t.buildUserRules(result, warn)
 
 	if len(warnings) > 0 {
 		result["_warnings"] = warnings
@@ -125,7 +130,7 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 	if a.Chapter > 0 {
 		trimByBudget(result, 100*1024) // Writer: 100KB
 	} else {
-		trimByBudget(result, 60*1024) // Coordinator/Architect: 60KB
+		trimByBudget(result, 60*1024) // Architect: 60KB
 	}
 
 	result["_loading_summary"] = buildLoadingSummary(result, a.Chapter)
@@ -441,13 +446,28 @@ func (t *ContextTool) architectReferences() map[string]string {
 // 与 save_foundation 工具共用 store.FoundationMissing 判定逻辑，保证 LLM 从
 // novel_context 看到的 ready/missing 与 save_foundation 返回的 foundation_ready
 // 永远一致（长篇 compass 必需项等细节不会漂移）。
-func (t *ContextTool) foundationStatus() map[string]any {
-	missing := t.store.FoundationMissing()
+func (t *ContextTool) foundationStatus() (map[string]any, error) {
+	missing, err := t.store.FoundationMissing()
+	if err != nil {
+		return nil, err
+	}
 	status := map[string]any{"ready": len(missing) == 0}
 	if len(missing) > 0 {
 		status["missing"] = missing
 	}
-	return status
+	if len(missing) == 1 && missing[0] == "foundation_audit" {
+		fingerprint, err := t.store.FoundationFingerprint()
+		if err != nil {
+			return nil, err
+		}
+		status["fingerprint"] = fingerprint
+	}
+	if audit, err := t.store.Outline.LoadFoundationAudit(); err != nil {
+		return nil, err
+	} else if audit != nil && !audit.Ready {
+		status["last_audit"] = audit
+	}
+	return status, nil
 }
 
 // ContextSummary 返回当前状态的简要摘要（供日志使用）。

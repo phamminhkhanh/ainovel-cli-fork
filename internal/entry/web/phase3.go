@@ -171,7 +171,6 @@ func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Path string `json:"path"`
-		From int    `json:"from"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -186,7 +185,7 @@ func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, fmt.Errorf("已有后台任务在运行，请等待其完成"))
 		return
 	}
-	ch, err := s.eng.ImportFrom(jobCtx, imp.Options{SourcePath: strings.TrimSpace(body.Path), ResumeFrom: body.From})
+	ch, err := s.eng.ImportFrom(jobCtx, imp.Options{SourcePath: strings.TrimSpace(body.Path)})
 	if err != nil {
 		s.endJob()
 		writeErr(w, http.StatusConflict, err)

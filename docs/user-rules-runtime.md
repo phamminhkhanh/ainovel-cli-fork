@@ -18,27 +18,26 @@ novel_context 注入
 Architect / Writer / Editor / commit 检查共用
 ```
 
-## 实现状态（2026-06-28，已落地 + 经 review 修缺）
+## 实现状态（2026-07-19，已落地 + 经 review 修缺）
 
 本设计已实现，24 包 `go build` / `go vet` / `go test` 全绿。一轮 code review 后修掉 4 个缺口（均已修复）：①启动 prompt 规则只接在死方法 `Host.Start` 上、真实入口走 `StartPrepared` 而漏建快照——已把原始 prompt 经 `Plan.RawPrompt` 透传到 quick/cocreate 两条入口，统一调 `Host.PrepareUserRules`；②快照落盘失败被吞——`PrepareUserRules` 改为落盘失败即返 error 中止开书（resume 路径保持 best-effort，避免给老书引入新失败模式）；③rules 文件读取错误静默跳过——`raw.go` 对非"不存在"错误（权限等）打日志；④README 仍教旧 YAML/front matter 且链向已删文件——已重写。
 
-落地与本文档基本一致，两处实现选择与字面表述不同，记录于此：
+落地与本文档基本一致，结构化输出升级后的实现选择如下：
 
-1. **归一化不是"provider schema 约束的调用"，而是"prompt 内 JSON 指令 + Go 侧校验"。**
-   原因：litellm 的结构化输出依赖各 provider（OpenAI/Gemini 支持 JSONSchema，Anthropic 不支持），
-   为跨 provider 一致，归一化用 system prompt 约定 JSON 形状 + Go 解析/类型校验/值域 sanitize 兜底，
-   不向模型下发 JSONSchema。下文出现的"schema 约束"均指此口径（Go 侧 schema 校验，非 provider 端约束）。
+1. **归一化只有一份 `Contract.Schema`，不维护两套提示词。**
+   模型声明支持时下发原生 JSON Schema；不支持或能力未知时，统一契约层把同一份 Schema 注入提示词。
+   两种模式都会在 Go 侧复核 Schema，随后执行值域和跨字段业务校验。
 2. **单个字段值非法时降级到"该字段缺失"，而非降级整个来源。**
-   如 `chapter_words` 出现 `min>max`，sanitize 把该字段丢弃（视为未声明）、保留该来源其余合法字段；
+   如某字段是空占位或类型非法，sanitize 把该字段丢弃（视为未声明）、保留该来源其余合法字段；
    只有"整条归一化失败"（网络/模型/非法 JSON/解析失败）才把整个来源降级为 raw preferences、
-   置 `status=degraded`。这样一个坏字段不会连累同来源的其它有效规则。技术错误进日志，
-   有限重试 1 次后降级（`normalizeMaxAttempts=2`）。
+   置 `status=degraded`。这样一个坏字段不会连累同来源的其它有效规则。可由模型修复的输出错误会携带
+   精确原因继续自愈，生命周期由 `context` 控制；明确的终止错误进入日志并按来源降级。
 
 代码落点：`internal/rules`（纯数据 + 确定性合并：snapshot.go / raw.go / types.go）、`internal/userrules`
 （LLM 归一化 + 编排 + 落盘：normalize.go / service.go）、`internal/store/user_rules.go`（快照存储）、
-`internal/tools/save_user_rules.go`（运行中工具壳）、`assets/prompts/coordinator.md`（三类分流）。
+`internal/userrules/service.go`（运行中规则落盘）、`assets/prompts/arbiter-intervention.md`（三类分流）。
 系统默认机械基线已从 `assets/rules/default.md` 迁入代码内置 `rules.SystemDefaults()`，YAML 解析路径与
-yaml.v3 依赖已删除。**未验**：真实 LLM 开书 / 运行中 `save_user_rules` 全链路（normalizer 离线原型已验 10/10）。
+yaml.v3 依赖已删除。**未验**：真实 LLM 开书 / 运行中 Arbiter rules 动作全链路（normalizer 离线原型已验 10/10）。
 
 ## 为什么
 
@@ -64,7 +63,6 @@ output/novel/meta/user_rules.json
   "status": "ready",
   "structured": {
     "genre": "修仙",
-    "chapter_words": {"min": 1200, "max": 1600},
     "forbidden_chars": [],
     "forbidden_phrases": ["某种程度上"],
     "fatigue_words": {}
@@ -98,7 +96,7 @@ output/novel/meta/user_rules.json
 1. **启动 prompt**：用户开书时写的长期要求。
 2. **用户 rules 文件**：全局或项目级长期偏好，按普通自然语言读取。
 3. **系统默认规则**：代码内置的机械基线。
-4. **运行中长期要求**：用户中途说“以后都怎样”，经 `save_user_rules` 进入。
+4. **运行中长期要求**：用户中途说“以后都怎样”，Arbiter 提取 `rules` 动作，Host 调用 `AddRuntimeRule`。
 
 这些输入源不直接进入 Writer prompt，也不在运行时被反复读取。它们只在生成或更新快照时参与归一化，结果合并进 `meta/user_rules.json`。
 
@@ -120,10 +118,9 @@ rules 文件是普通长期提示词，不是运行时 prompt，也不是配置�
 ```json
 {
   "structured": {
-    "chapter_words": {"min": 1200, "max": 1600},
     "forbidden_phrases": ["某种程度上"]
   },
-  "preferences": "主角冷静克制，不要圣母；少解释，多用行动和对话推进。"
+  "preferences": "每章 1200-1600 字；主角冷静克制，不要圣母；少解释，多用行动和对话推进。"
 }
 ```
 
@@ -172,7 +169,7 @@ LLM 侧职责：
 - 只有用户明确、无歧义表达时，才写入 `structured`。
 - `forbidden_chars` / `forbidden_phrases` 是 error 级字段，必须尤其保守；只有“不要出现 X”“禁用 X”“别写 X”这类明确禁止才提升。
 - `fatigue_words` 只有用户给出明确词和阈值时才提升；“少用比喻”“别太书面”“减少口头禅”这类无阈值要求进入 `preferences`。
-- `chapter_words` 只有用户给出明确范围、上限、下限或目标字数时才提升；模糊要求如“短一点”“节奏快点”进入 `preferences`。
+- 字数/篇幅类意愿（“每章 3000 字”“短一点”）一律进入 `preferences`：章节长短是叙事节奏的语义裁量，不做机械检查——数字化成硬线会诱导模型为跨线注水。
 - 不可机械化、无明确阈值、依赖语境判断的要求都进入 `preferences`。
 
 原则：
@@ -189,13 +186,14 @@ LLM 侧职责：
 归一化是增强路径，不是主创作的前置条件。模型理解失败，绝不能阻断写书。
 
 - **按来源降级**：某个来源归一化失败（网络 / 模型 / 非法 JSON / schema 校验失败），该来源降级为 raw preferences、不产 `structured`；其它成功来源照常贡献 `structured`。
-- **有限重试**：失败可重试有限次（如 1 次），仍失败即降级，不做无界重试。
+- **上下文控制自愈**：可重试请求错误、提示词模式的格式/Schema 错误和业务校验错误持续自愈，直到成功或 `context` 结束；不设固定次数。原生契约违约、拒答、截断、错误终止和不可重试请求错误立即暴露并按来源降级。
 - **技术错误进日志**：JSON / schema / 网络等技术错误写入日志，不进 `working_memory.user_rules`，不作为创作输入。
 - **快照标记**：任一来源降级时，快照 `status=degraded`。
 - **能落盘就继续**：只要 `meta/user_rules.json` 能写入，主创作必须继续。
 - **只有落盘失败才中止**：快照无法写入磁盘时才中止，因为后续运行没有稳定事实源。
 
-`save_user_rules` 工具契约（运行中）：永远尽量返回规则事实；normalizer 失败时保存 degraded 快照、返回 `status=degraded`，**不把技术错误当作 tool error 抛给 Coordinator**（否则 JSON/schema/网络错误会污染主流程，本项目历史上这类污染引发过死循环）；只有落盘失败这类无法继续的问题才返回 tool error。
+`AddRuntimeRule` 契约（运行中）：normalizer 失败时保存 degraded 快照，
+不把 JSON/schema/网络等归一化错误注入创作流程；只有落盘失败才返回 error。
 
 ## 系统默认规则
 
@@ -232,8 +230,8 @@ System defaults
 
 归一化、合并、落盘是同一套逻辑，但有两个调用方，必须分清，否则会把启动准备混进主创作上下文：
 
-- **开书 / 刷新（启动侧，确定性）**：由 Host / 启动流程直接调用这套逻辑生成初始快照，不经 Coordinator、不进主创作 Run。这是确定性的启动准备任务。
-- **运行中更新（Coordinator 工具）**：`save_user_rules` 是运行时工具壳，复用同一套校验 / 合并 / 落盘逻辑，把无进度起点的新规则作为 `Runtime user update` 合并进快照。
+- **开书 / 刷新（启动侧，确定性）**：由 Host / 启动流程直接调用这套逻辑生成初始快照，不进主创作循环。这是确定性的启动准备任务。
+- **运行中更新（干预裁定动作）**：Arbiter 分诊出的 `rules` 动作由 Host 直接调 `userrules.Service.AddRuntimeRule`，复用同一套校验 / 合并 / 落盘逻辑，把无进度起点的新规则作为 `Runtime user update` 合并进快照。
 
 （实现上建议把这套逻辑收敛成一个内部服务，两个调用方共用；具体命名留给实现。）
 
@@ -250,7 +248,7 @@ System defaults
 - 不静默吞掉非法字段（记录并降级，见 §失败与降级）。
 - 不把原始文本当成最终 prompt 直接注入。
 
-运行中更新示例：用户说“以后都怎样”（无进度起点）→ Coordinator 调 `save_user_rules` → 归一化该条 → 作为 `Runtime user update` 以最高优先级合并进快照 → Coordinator 基于返回事实做简短回显。
+运行中更新示例：用户说“以后都怎样”（无进度起点）→ Arbiter 裁定为 `rules` 动作 → Host 经 `AddRuntimeRule` 归一化该条 → 作为 `Runtime user update` 以最高优先级合并进快照 → 事件流回显。
 
 ## 回显
 
@@ -264,7 +262,7 @@ System defaults
 ```
 
 - 启动 / 刷新：复用现有启动规则日志能力打印快照，不新增机制；共创场景可把回显并入共创确认环节。
-- 运行中：调用 `save_user_rules` 后由 Coordinator 基于工具返回事实简短回显。
+- 运行中：`AddRuntimeRule` 成功后经事件流回显（"写作规则已更新并持久化"）。
 - 降级：`status=degraded` 时，回显明确说明哪些来源未能解析、当前已按 raw preferences 运行、可重新生成快照。
 
 回显不是二次审批闸门；它的作用是让用户知道系统理解成了什么，发现错误后可以重新生成快照。
@@ -279,51 +277,38 @@ working_memory.user_rules
 
 职责分配：
 
-- Architect：用 `chapter_words` 调整每章剧情密度和拆章数量。
+- Architect：按 `preferences` 中的字数意愿调整每章剧情密度和拆章数量。
 - Writer：按 `structured` 的硬规则写作，按 `preferences` 调整风格。
 - Editor：按同一份规则审阅。
 - `commit_chapter`：用 `structured` 做机械检查并返回 violations。
 
 Writer 不重新理解原始启动 prompt，也不读原始 rules 文件。
 
-## 干预分类：三类去向（save_directive 已废弃）
+## 干预分类：三类去向
 
-长期写作要求统一走 `save_user_rules`，不再有独立的 `save_directive` 通道。运行中干预按"要改什么"分三类：
+运行中干预按"要改什么"分三类：
 
-- **怎么写**（写作笔法 / 风格 / 质量：字数、用词、禁语、句式、对话占比、标题格式等）→ `save_user_rules`，归一化合并进 `meta/user_rules.json`。例：“每章 1500 字”“标题只用中文”“主角整体冷静克制”“对话占比高一点”。
+- **怎么写**（写作笔法 / 风格 / 质量：字数、用词、禁语、句式、对话占比、标题格式等）→ Arbiter `rules` 动作，归一化合并进 `meta/user_rules.json`。例：“每章 1500 字”“标题只用中文”“主角整体冷静克制”“对话占比高一点”。
 - **写什么**（剧情 / 结构 / 人物走向 / 篇幅）→ architect，落进 compass / outline / 角色档案。例：“这一卷多写战斗线”“从第 30 章起主角语气转冷”“增加到 40 章”。
 - **改已写的**（重写 / 修订指定章节）→ editor，入队 PendingRewrites。
 
-判据：**“怎么写” → save_user_rules；“写什么” → architect；“改已写的” → editor**。
-
-> 早期曾有 `save_directive`（带 `at_chapter` 进度锚点）与 `save_user_rules` 并存。实践发现两者在自由文本偏好上重叠，而“带不带进度锚点”是道模糊分类题（多数运行中要求天然都是“从现在起”），徒增 Coordinator 分类负担并曾引路由问题。真正绑定剧情进度的需求本就该由 architect 承载，故 2026-06-28 砍掉 `save_directive`。这是有意的 breaking change：老书遗留的 `meta/user_directives.json` 不再读取、不迁移，书仍可恢复续写，但旧 directive 里的历史偏好不会继续生效。
-
-## 老书处理
-
-老书如果没有 `meta/user_rules.json`：
-
-1. 首次启动时用现有启动 prompt、用户 rules 文件和系统默认规则惰性生成快照。
-2. 保存到 `meta/user_rules.json`。
-3. 打印启动回显，明确快照来源。
-
-之后运行时只读快照，不再因为外部 rules 文件变化而漂移。旧版 `meta/user_directives.json` 被忽略；需要保留的历史要求应由用户重新输入，走 `save_user_rules` 写入新快照。
+判据：**“怎么写” → rules；“写什么” → architect；“改已写的” → editor**。
 
 ## 实施步骤
 
 1. 新增 `meta/user_rules.json` store。
 2. 新增独立的 LLM 归一化 pass（按来源），使用 schema 约束输出候选 `structured/preferences/sources/uncertain`。
 3. 新增 Go 侧确定性合并：按优先级对各来源做字段覆盖与文本拼接，生成快照。
-4. 把归一化 / 合并 / 落盘收敛成一套逻辑，两个调用方共用：启动侧直接调用生成初始快照（不经 Coordinator）；新增 `save_user_rules` 运行时工具壳复用它（挂给 Coordinator）。失败时按 §失败与降级 处理：来源降级为 raw preferences、快照 `status=degraded`、主创作继续；`save_user_rules` 不向 Coordinator 抛技术 tool error。
+4. 把归一化 / 合并 / 落盘收敛成一套逻辑，两个调用方共用：启动侧直接调用生成初始快照；运行中由干预裁定的 `rules` 动作经 `AddRuntimeRule` 复用。失败时按 §失败与降级 处理：来源降级为 raw preferences、快照 `status=degraded`、主创作继续。
 5. 把当前 `assets/rules/default.md` 的系统默认机械规则迁到代码内置结构或 JSON asset，保留阈值来源注释；删除用户 rules 的 YAML 解析路径，不做兼容层。
 6. rules 文件读取后不再直接把正文当 prompt 注入，而是归一化后合并进 `user_rules` 快照。
-7. 无快照的老书首次启动时惰性生成快照，并回显来源。
-8. `novel_context` 只注入 `meta/user_rules.json` 中的 `working_memory.user_rules`。
-9. `commit_chapter` 使用同一份 `user_rules.structured` 检查。
-10. Coordinator prompt 明确按"要改什么"三类分流：写作风格 / 质量类长期要求先 `save_user_rules` 再规划或续写；剧情 / 结构 / 人物 / 篇幅走 architect；已写章节返工走 editor（详见 §干预分类：三类去向）。
+7. `novel_context` 只注入 `meta/user_rules.json` 中的 `working_memory.user_rules`。
+8. `commit_chapter` 使用同一份 `user_rules.structured` 检查。
+10. 干预分诊（现由 Arbiter 承担,arbiter-intervention.md）明确按"要改什么"三类分流：写作风格 / 质量类长期要求走 `rules` 动作落快照；剧情 / 结构 / 人物 / 篇幅走 architect；已写章节返工走 editor（详见 §干预分类：三类去向）。
 
 ## 验收标准
 
-- 用户启动 prompt 写“每章 1200-1600 字”，Writer 第一章的 `novel_context` 能看到 `chapter_words`。
+- 用户启动 prompt 写“每章 1200-1600 字”，Writer 第一章的 `novel_context` 能在 `preferences` 里看到这条意愿原文。
 - rules 文件只写自然语言，也能在生成快照时归一化进同一份 `user_rules`。
 - rules 文件不需要也不支持 YAML；全部按自然语言规则归一化。
 - 运行时不再读取 rules 文件；只读 `meta/user_rules.json`。
@@ -332,9 +317,9 @@ Writer 不重新理解原始启动 prompt，也不读原始 rules 文件。
 - 模糊规则不会被提升为 error 级 `structured` 字段。
 - 系统默认规则不经 LLM，直接进 Go 合并。
 - 来源优先级与字段覆盖由 Go 确定性执行，相同输入产出相同快照。
-- 运行中用户说“以后都怎样”，经 `save_user_rules` 合并进快照，后续章节的 `novel_context` 能看到更新。
+- 运行中用户说“以后都怎样”，经 Arbiter rules 动作合并进快照，后续章节的 `novel_context` 能看到更新。
 - 归一化失败不阻断写书：失败来源降级为 raw preferences，快照 `status=degraded`，主创作继续；只有快照无法落盘才中止。
-- `save_user_rules` 遇 normalizer 失败返回 `status=degraded`，不向 Coordinator 抛技术 tool error。
+- 归一化失败返回 `status=degraded`，不把技术错误上抛污染主流程。
 - 生成或更新快照后会回显 `structured` / `preferences` / 未提升项；降级时回显说明降级来源。
 - 新开一本书不会继承上一本书的 `user_rules`。
 - 非法结构化字段不静默忽略：记录并降级该来源，不阻断主流程。

@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,14 +13,14 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
-	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/agents"
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
+	"github.com/voocel/ainovel-cli/internal/arbiter"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/flow"
 	"github.com/voocel/ainovel-cli/internal/host/exp"
-	"github.com/voocel/ainovel-cli/internal/host/flow"
 	"github.com/voocel/ainovel-cli/internal/host/imp"
 	"github.com/voocel/ainovel-cli/internal/host/sim"
 	modelreg "github.com/voocel/ainovel-cli/internal/models"
@@ -30,27 +31,25 @@ import (
 	"github.com/voocel/ainovel-cli/internal/userrules"
 )
 
-// Host 是运行时薄外壳。
-// 职责：启动/恢复/干预注入/事件投影/模型管理。
-// 不做任何调度决策，不做空闲续跑。
+// Host 是运行时外壳:生命周期/干预入口/事件投影/模型管理。
+// 调度与执行在 engine(确定性循环);语义裁定在 arbiter(LLM-as-function)。
 type Host struct {
-	cfg               bootstrap.Config
-	bundle            assets.Bundle
-	store             *storepkg.Store
-	models            *bootstrap.ModelSet
-	coordinator       *agentcore.Agent
-	coordinatorCtxMgr *corecontext.ContextEngine // 切 default/coordinator 模型时联动 SetContextWindow + SetReserveTokens
-	thinkingApplier   agents.ApplyThinking       // /model 调推理强度时联动 live agent（coordinator + 子代理）
-	askUser           *tools.AskUserTool
-	writerRestore     *ctxpack.WriterRestorePack
-	observer          *observer
-	router            *flow.Dispatcher
-	usage             *UsageTracker
-	usageCancel       context.CancelFunc // 停掉 autoSaveLoop 并触发最后一次 flush
-	budget            *BudgetSentinel    // 预算政策；未启用为 nil（方法 nil 安全）
-	budgetDetach      func()
-	pauser            *PausePointSentinel // 用户停靠点政策（方法 nil 安全）
-	notifier          *notify.Notifier    // 无人值守告警；未启用为 nil（Send nil 安全）
+	cfg             bootstrap.Config
+	bundle          assets.Bundle
+	store           *storepkg.Store
+	models          *bootstrap.ModelSet
+	engine          *engine
+	thinkingApplier agents.ApplyThinking // /model 调推理强度时联动各 Worker
+	askUser         *tools.AskUserTool
+	writerRestore   *ctxpack.WriterRestorePack
+	userRules       *userrules.Service
+	observer        *observer
+	usage           *UsageTracker
+	usageCancel     context.CancelFunc  // 停掉 autoSaveLoop 并触发最后一次 flush
+	budget          *BudgetSentinel     // 预算政策；未启用为 nil（方法 nil 安全）
+	gate            *ChapterAdvanceGate // 章节许可与一次性暂停的统一政策组件
+	notifier        *notify.Notifier    // 无人值守告警；未启用为 nil（Send nil 安全）
+	configPath      string              // 配置写盘目标：/config、/model 就近写当前生效的那份（项目级存在则写它，否则全局）
 
 	events   chan Event
 	streamCh chan string
@@ -58,8 +57,22 @@ type Host struct {
 
 	mu         sync.Mutex
 	lifecycle  lifecycle
-	cocreating bool // 阶段共创占用：paused 窗口内堵住 import/simulate/continue 的并发介入
-	closeOnce  sync.Once
+	cocreating bool   // 阶段共创占用：paused 窗口内堵住 import/simulate/continue 的并发介入
+	exclusive  string // 后台独占作业占用（导入/仿写）：非空表示某作业在跑，堵住并发独占入口
+	// exclusiveCancel 是当前独占作业的取消函数：预算硬停/手动暂停须能停掉正在烧钱的
+	// 导入，而不仅是 Engine——abortWithEvent 在 Engine 未运行时取消它（预算哨兵的
+	// abort 回调与手动 Abort 共用同一停机机制）。releaseExclusive 一并清空。
+	exclusiveCancel context.CancelFunc
+	closeOnce       sync.Once
+	asyncWG         sync.WaitGroup
+	closing         bool
+
+	interMu sync.Mutex // 干预裁定 FIFO 串行(同一时刻至多一次在途咨询)
+
+	// runCtx 约束宿主侧的 LLM 裁定调用(启动裁定/干预分诊);Close 取消,
+	// 避免退出时仍有裁定在途且无法中断。
+	runCtx    context.Context
+	runCancel context.CancelFunc
 }
 
 type lifecycle string
@@ -86,6 +99,11 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	if err := store.Init(); err != nil {
 		return nil, fmt.Errorf("init store: %w", err)
 	}
+	// RunMeta 是所有控制语义的事实源，必须在构造模型/后台任务之前完成校验。
+	// 未知 advance mode 直接返回结构化错误；禁止猜测降级后继续写盘。
+	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
+		return nil, fmt.Errorf("init run meta: %w", err)
+	}
 
 	models, err := bootstrap.NewModelSet(cfg)
 	if err != nil {
@@ -95,7 +113,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 
 	usage := NewUsageTracker(models, store)
 	// 优先读 meta/usage.json；以下情况都走 sessions/*.jsonl 一次性回填：
-	//   - 文件不存在（首次升级到带持久化的版本）
+	//   - 文件不存在（首次持久化前）
 	//   - schema 版本不匹配（未来升级后丢弃旧格式）
 	//   - 文件存在但损坏 / IO 错误（不能让坏数据让累计永久归零）
 	// 回填完立即 SaveNow，把结果固化下来，下次启动直接 Load 命中。
@@ -116,116 +134,107 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	usageCtx, usageCancel := context.WithCancel(context.Background())
 	usage.StartAutoSave(usageCtx)
 
-	var router *flow.Dispatcher
-	var budget *BudgetSentinel
-	var pauser *PausePointSentinel
-	// onGuardBlock 与 router/budget 同款前置声明：h 构造后才能挂事件浮出闭包。
+	// onGuardBlock 前置声明:h 构造后才能挂事件浮出闭包。
 	var onGuardBlock func(agent, reason string, consecutive int32)
-	coordinator, askUser, restore, coordinatorCtxMgr, applyThinking := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record, func(string) {
-		if budget != nil && budget.HandleBoundary() {
-			return
-		}
-		// 预算止损优先于验收暂停；停靠点命中则短路本轮派发
-		if pauser.HandleBoundary() {
-			return
-		}
-		if router != nil {
-			router.Dispatch()
-		}
-	}, func(agent, reason string, consecutive int32) {
-		if onGuardBlock != nil {
-			onGuardBlock(agent, reason, consecutive)
-		}
-	})
+	workers, askUser, restore, applyThinking := agents.BuildWorkers(cfg, store, models, bundle, usage.Record,
+		func(agent, reason string, consecutive int32) {
+			if onGuardBlock != nil {
+				onGuardBlock(agent, reason, consecutive)
+			}
+		})
 	store.Signals.ClearStaleSignals()
 
 	h := &Host{
-		cfg:               cfg,
-		bundle:            bundle,
-		store:             store,
-		models:            models,
-		coordinator:       coordinator,
-		coordinatorCtxMgr: coordinatorCtxMgr,
-		thinkingApplier:   applyThinking,
-		askUser:           askUser,
-		writerRestore:     restore,
-		usage:             usage,
-		usageCancel:       usageCancel,
-		events:            make(chan Event, 100),
-		streamCh:          make(chan string, 256),
-		done:              make(chan struct{}, 4),
-		lifecycle:         lifecycleIdle,
+		cfg:             cfg,
+		bundle:          bundle,
+		store:           store,
+		models:          models,
+		thinkingApplier: applyThinking,
+		askUser:         askUser,
+		writerRestore:   restore,
+		userRules:       userrules.NewService(store, models.Default, rules.DefaultOptions()),
+		usage:           usage,
+		usageCancel:     usageCancel,
+		configPath:      bootstrap.EffectiveConfigPath(),
+		events:          make(chan Event, 100),
+		streamCh:        make(chan string, 256),
+		done:            make(chan struct{}, 4),
+		lifecycle:       lifecycleIdle,
 	}
-	h.observer = newObserver(coordinator, store, h.emitEvent, h.emitDelta, h.emitClear)
+	h.runCtx, h.runCancel = context.WithCancel(context.Background())
+	h.observer = newObserver(store, h.emitEvent, h.emitDelta, h.emitClear)
+	// 宿主侧 Arbiter 与 Worker 共用同一条 ToolProgress → observer → 工作台链路。
+	h.runCtx = agentcore.WithToolProgress(h.runCtx, h.observer.workerProgress)
 	if cfg.Notify.IsEnabled() {
 		h.notifier = notify.New(cfg.Notify.Command, cfg.Notify.Events)
 	}
-	// 预算哨兵订阅子代理边界事件执行停机；Dispatcher 由工具执行链同步触发，
-	// 不再通过事件订阅抢占下一轮模型调用。
+	// 预算哨兵:Engine 在每轮循环边界直接调用 HandleBoundary(不再经事件订阅)。
 	if sentinel := NewBudgetSentinel(cfg.Budget,
 		func() float64 { c, _, _, _, _ := usage.Totals(); return c },
 		func(reason string) { h.abortWithEvent(reason, "error") },
 		func(level, summary string) {
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
-			h.notifier.Send(notify.Notification{Kind: "budget", Level: level, Title: "ainovel: 预算", Body: summary})
+			h.notifier.Send(notify.Notification{Kind: notify.KindBudget, Level: level, Title: "ainovel: 预算", Body: summary})
 		},
 	); sentinel != nil {
 		h.budget = sentinel
-		budget = sentinel
 		usage.SetOnCost(sentinel.OnCost)
-		h.budgetDetach = coordinator.Subscribe(sentinel.HandleEvent)
 		// 计费盲区告警：模型不报 usage 时成本恒 0，预算永不触发——保险丝没接上必须喊人。
 		usage.SetOnMissingUsage(func() {
 			const blind = "预算盲区: 模型未返回 usage 数据，成本统计为 0，预算上限不会触发（自定义模型请确认注册表价格或上游 include_usage）"
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: blind, Level: "warn"})
-			h.notifier.Send(notify.Notification{Kind: "budget", Level: "warn", Title: "ainovel: 预算", Body: blind})
+			h.notifier.Send(notify.Notification{Kind: notify.KindBudget, Level: "warn", Title: "ainovel: 预算", Body: blind})
 		})
 	}
-	// 停靠点哨兵：执行用户预约的"重写完暂停"指令，事件+notify 成对（架构 §2.3）。
-	// abort 注入必须自带 notify：暂停把 lifecycle 置 paused，waitDone 的 run_end
-	// 通知会因 wasRunning=false 跳过——不在这里发，挂机用户在最该被叫回来的
-	// 时刻收不到任何推送（abortWithEvent 本身只发屏内事件）。
-	h.pauser = NewPausePointSentinel(store,
+	// 统一前进闸门：执行一次性 hold，并阻止 review 模式下无许可的新章。
+	h.gate = NewChapterAdvanceGate(store,
 		func(reason string) {
 			h.abortWithEvent(reason, "info")
-			h.notifier.Send(notify.Notification{Kind: "pause_point", Level: "info", Title: "ainovel: 验收停靠点", Body: reason})
+			h.notifier.Send(notify.Notification{Kind: notify.KindAdvanceGate, Level: "info", Title: "ainovel: 等待验收", Body: reason})
 		},
 		func(level, summary string) {
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
-			h.notifier.Send(notify.Notification{Kind: "pause_point", Level: level, Title: "ainovel: 验收停靠点", Body: summary})
+			h.notifier.Send(notify.Notification{Kind: notify.KindAdvanceGate, Level: level, Title: "ainovel: 章节推进", Body: summary})
 		},
 	)
-	pauser = h.pauser
-	h.router = flow.NewDispatcher(coordinator, store)
-	router = h.router
-	// 重复指令告警：纯 telemetry，挂机时"模型可能在原地打转"值得喊人看一眼。
-	// 事件流与 notify 成对发出——notify 只是屏内事件的离屏副本（架构 §2.3）。
-	h.router.SetOnRepeat(func(agent, task string, n int) {
-		body := fmt.Sprintf("同一指令已第 %d 次下达（%s）：%s", n, agent, task)
-		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "指令重复: " + body, Level: "warn"})
-		h.notifier.Send(notify.Notification{Kind: "repeat", Level: "warn", Title: "ainovel: 指令重复", Body: body})
-	})
 	// StopGuard 拦截浮出：blocked 是高频自愈动作，只进屏内事件流（推送会刷屏）；
-	// escalated / hard_stop 意味着本轮子任务报废重派，事件+notify 成对发出（架构 §2.3）。
-	// 没有这层，拦截只进日志，用户在 TUI 上只看到"卡顿+token 变快"（issue #75）。
+	// escalated / hard_stop 意味着本轮子任务报废，事件+notify 成对发出（架构 §2.3）。
 	onGuardBlock = func(agent, reason string, n int32) {
 		switch reason {
 		case "escalated":
-			body := fmt.Sprintf("%s 连续 %d 次空转未落盘必要产物，本轮任务终止，交回 Coordinator 裁定", agent, n)
+			body := fmt.Sprintf("%s 连续 %d 次空转未落盘必要产物，本轮任务终止，交回 Engine 处理", agent, n)
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Agent: agent, Summary: "StopGuard 升级: " + body, Level: "warn"})
-			h.notifier.Send(notify.Notification{Kind: "stop_guard", Level: "warn", Title: "ainovel: StopGuard", Body: body})
+			h.notifier.Send(notify.Notification{Kind: notify.KindStopGuard, Level: "warn", Title: "ainovel: StopGuard", Body: body})
 		case "hard_stop":
 			body := fmt.Sprintf("%s 遭 provider 拒答（safety/content_filter），本轮任务立即终止", agent)
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Agent: agent, Summary: "StopGuard 升级: " + body, Level: "warn"})
-			h.notifier.Send(notify.Notification{Kind: "stop_guard", Level: "warn", Title: "ainovel: StopGuard", Body: body})
+			h.notifier.Send(notify.Notification{Kind: notify.KindStopGuard, Level: "warn", Title: "ainovel: StopGuard", Body: body})
 		default: // blocked
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Agent: agent,
 				Summary: fmt.Sprintf("StopGuard: %s 未完成必要产物就试图结束，已拦截催促（连续第 %d 次）", agent, n), Level: "info"})
 		}
 	}
-
-	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
-		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
+	// Engine:确定性执行引擎(docs/engine-rfc.md)。arbiter 用 Default 模型(过渡限制,
+	// 见 engine-arbiter.md §4.2)。
+	h.engine = &engine{
+		store:           store,
+		workers:         workers,
+		arbiterModel:    newUsageTrackedModel(models.Default, "arbiter", usage.Record),
+		failurePrompt:   bundle.Prompts.ArbiterFailure,
+		planStartPrompt: bundle.Prompts.ArbiterPlanStart,
+		style:           cfg.Style,
+		// 同步重询:阻塞引擎循环一次裁定(数秒),换取"干预先于后续创作生效"。
+		reconsult: h.handleIntervention,
+		observer:  h.observer,
+		budget:    h.budget,
+		gate:      h.gate,
+		refresh:   h.refreshWriterRestore,
+		emitEvent: h.emitEvent,
+		notify: func(kind, level, title, body string) {
+			h.notifier.Send(notify.Notification{Kind: kind, Level: level, Title: title, Body: body})
+		},
+		onPause: func(summary string) { h.abortWithEvent(summary, "warn") },
+		onDone:  h.runEnded,
 	}
 
 	return h, nil
@@ -233,7 +242,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 
 // ── 生命周期 ──
 
-// PrepareUserRules 在新建模式下生成本书用户规则快照（启动侧确定性，不经 Coordinator、不进主创作 Run）。
+// PrepareUserRules 在新建模式下生成本书用户规则快照（启动侧确定性，不进主创作 Run）。
 //
 // 入参是用户的**原始**创作要求（未经 BuildStartPrompt 包装）——归一化要的是用户规则本身，
 // 不是启动脚手架。入口须在 StartPrepared 之前调用一次（quick/cocreate 两条新建路径都走这里）。
@@ -241,6 +250,9 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 // 归一化失败只降级不报错（增强路径）；只有快照无法落盘才返回 error 中止开书——
 // 后续运行将没有稳定事实源（见设计 §失败与降级）。
 func (h *Host) PrepareUserRules(rawPrompt string) error {
+	if err := h.refuseNewBookOverExisting(); err != nil {
+		return err
+	}
 	svc := userrules.NewService(h.store, h.models.Default, rules.DefaultOptions())
 	snap, err := svc.Build(context.Background(), rawPrompt)
 	if err != nil {
@@ -250,8 +262,8 @@ func (h *Host) PrepareUserRules(rawPrompt string) error {
 	return nil
 }
 
-// ensureUserRules 惰性确保快照存在（老书无快照时按 system_defaults + rules 文件生成）。
-// 恢复路径调用，让老书也能拿到 rules 文件的归一化结果。
+// ensureUserRules 在恢复路径确保快照存在；缺失时按
+// system_defaults + rules 文件生成。
 func (h *Host) ensureUserRules() {
 	svc := userrules.NewService(h.store, h.models.Default, rules.DefaultOptions())
 	snap, err := svc.GetOrBuild(context.Background())
@@ -267,15 +279,10 @@ func logUserRulesSnapshot(snap *rules.Snapshot) {
 	if snap == nil {
 		return
 	}
-	words := "未设置"
-	if w := snap.Structured.ChapterWords; w != nil {
-		words = fmt.Sprintf("%d-%d", w.Min, w.Max)
-	}
 	slog.Info("用户规则快照",
 		"module", "rules",
 		"status", string(snap.Status),
 		"来源", snap.Sources,
-		"章节字数", words,
 		"禁用短语", len(snap.Structured.ForbiddenPhrases),
 		"疲劳词", len(snap.Structured.FatigueWords),
 	)
@@ -285,8 +292,12 @@ func logUserRulesSnapshot(snap *rules.Snapshot) {
 	}
 }
 
-// StartPrepared 使用已编排完成的启动 prompt 开始创作。
-func (h *Host) StartPrepared(promptText string) error {
+// StartPrepared 用用户的**原始**创作要求开始创作:plan_start 裁定选规划师并扩充
+// 需求，裁定结果先固化为
+// 事实(PlanStartRecord)再启动 Engine——恢复永远依赖已落盘事实,不重做已有裁定。
+// 输入事实(StartPrompt)在裁定之前落盘:裁定失败时它是引擎补裁的依据,
+// 启动失败可从任何恢复入口(Resume/继续)自愈,不是死局。
+func (h *Host) StartPrepared(rawRequirement string) error {
 	h.mu.Lock()
 	if h.lifecycle == lifecycleRunning {
 		h.mu.Unlock()
@@ -298,9 +309,12 @@ func (h *Host) StartPrepared(promptText string) error {
 	}
 	h.mu.Unlock()
 
-	promptText = strings.TrimSpace(promptText)
-	if promptText == "" {
+	rawRequirement = strings.TrimSpace(rawRequirement)
+	if rawRequirement == "" {
 		return fmt.Errorf("prompt is required")
+	}
+	if err := h.refuseNewBookOverExisting(); err != nil {
+		return err
 	}
 	if err := h.budget.Refuse(); err != nil {
 		return err
@@ -311,24 +325,141 @@ func (h *Host) StartPrepared(promptText string) error {
 	if err := h.store.Progress.Init("", 0); err != nil {
 		return fmt.Errorf("init progress: %w", err)
 	}
-
-	slog.Info("开始创作", "module", "host", "prompt_len", len(promptText))
-	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "开始创作", Level: "info"})
-	h.observer.setAborting(false)
-	// 先重置重复追踪并启用路由，再启动 Prompt，避免首轮事件先于 Enable 抵达
-	h.router.ResetRepeat()
-	h.router.Enable()
-	if err := h.coordinator.Prompt(context.Background(), promptText); err != nil {
-		return fmt.Errorf("prompt: %w", err)
+	// 输入事实先于裁定落盘:裁定失败(模型故障等)后 StartPrompt 仍在,
+	// 恢复/继续时引擎据此补裁(planStartFallback),启动失败不再是死局。
+	if err := h.store.RunMeta.SetStartPrompt(rawRequirement); err != nil {
+		return fmt.Errorf("记录创作需求: %w", err)
 	}
-	// 主动派发一次首条指令：若已进入写作阶段（Phase=Writing），Host 立即下达；
-	// 规划阶段 Route 返回 nil，无副作用。
-	h.router.Dispatch()
 
+	// 启动裁定:失败显式报错中止(启动期用户在场,报错优于猜测)。
+	start := time.Now()
+	decision, derr := runObservedDecision(h.observer, "启动裁定", func() (arbiter.PlanStartDecision, error) {
+		return arbiter.DecidePlanStart(h.runCtx, h.arbiterModel(),
+			h.bundle.Prompts.ArbiterPlanStart, rawRequirement, h.cfg.Style)
+	})
+	rec := storepkg.DecisionRecord{Kind: "plan_start", Decider: "arbiter", Input: rawRequirement,
+		Reason: decision.Reason, DurationMs: time.Since(start).Milliseconds()}
+	if derr == nil {
+		if data, err := json.Marshal(decision); err == nil {
+			rec.Decision = data
+		}
+	} else {
+		rec.Error = derr.Error()
+	}
+	var recErr error
+	if rec, recErr = h.store.Decisions.Append(rec); recErr != nil {
+		slog.Warn("启动裁定审计落盘失败", "module", "host", "err", recErr)
+	}
+	if derr != nil {
+		return fmt.Errorf("启动裁定失败: %w", derr)
+	}
+	if err := h.store.RunMeta.SetPlanStart(domain.PlanStartRecord{
+		RawPrompt: rawRequirement, Planner: decision.Planner, PlannerTask: decision.Task, DecisionID: rec.ID,
+	}); err != nil {
+		return fmt.Errorf("记录启动裁定: %w", err)
+	}
+
+	slog.Info("开始创作", "module", "host", "planner", decision.Planner)
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM",
+		Summary: fmt.Sprintf("开始创作（规划师: %s——%s）", decision.Planner, decision.Reason), Level: "info"})
+	if !h.startEngine(&flow.Instruction{Agent: decision.Planner, Task: decision.Task, Reason: decision.Reason}) {
+		return fmt.Errorf("Engine 已在运行或正在停止，无法启动新书")
+	}
+	return nil
+}
+
+// refuseNewBookOverExisting 拒绝在已有成章的书目录里开新书：StartPrepared 会重置
+// checkpoints 与 progress，误触即静默清掉整本书的进度链（导入完成后停在欢迎页
+// 误按 Enter 是最典型场景）。只看已完成章数——规划阶段/启动失败的残留没有成章，
+// 放行以保留共创 Ctrl+S 同会话重试与恢复补裁的自愈路径。
+func (h *Host) refuseNewBookOverExisting() error {
+	progress, err := h.store.Progress.Load()
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if progress == nil || len(progress.CompletedChapters) == 0 {
+		return nil
+	}
+	name := strings.TrimSpace(progress.NovelName)
+	if name == "" {
+		name = "未定书名"
+	}
+	return fmt.Errorf("输出目录已有《%s》的 %d 章创作进度，新建会重置其进度与检查点：续写请走恢复入口（重启应用自动恢复），新书请更换输出目录",
+		name, len(progress.CompletedChapters))
+}
+
+// startEngine 统一的引擎启动入口(Start/Resume/Continue/干预重启共用)。
+// lifecycle 必须先于 goroutine 启动置为 running:引擎可能立即结束(完本/无路由),
+// runEnded 会把 lifecycle 落到终态;若顺序颠倒,runEnded 先跑、这里再写 running,
+// UI 将永远显示"运行中"而引擎实际已停。
+func (h *Host) startEngine(initial *flow.Instruction) bool {
+	// 跨重启门禁：存在未完成导入工作区时，禁止普通 Engine 消费半发布状态（RFC §12.5）。
+	active, done, importErr := imp.ResumeStatus(h.store)
+	if importErr != nil {
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Level: "error",
+			Summary: "导入状态读取失败，已阻止普通创作覆盖现有工件：" + importErr.Error()})
+		return false
+	}
+	if active && !done {
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
+			Summary: "存在未完成的外部小说导入，请先执行 /import 恢复完成后再继续创作"})
+		return false
+	}
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closing {
+		return false
+	}
+	// 后台独占作业（导入/仿写）进行中时，引擎不得抢跑，避免与其写入竞争。这是所有引擎启动路径
+	// （Resume/Continue 重启/自动接力/next）的统一 backstop——入口守卫是第一道，这里是最后一道。
+	if h.exclusive != "" {
+		return false
+	}
+	// lifecycle 可能已经是 paused，但旧 Engine goroutine 仍在执行退出 defer。
+	// 必须同时核对 Engine 真状态；否则会把 lifecycle 改回 running，而 start
+	// 实际 no-op，随后旧 runEnded 又把它落成 idle。
+	if h.engine.isRunning() {
+		return false
+	}
+	h.observer.setAborting(false)
+	previous := h.lifecycle
 	h.lifecycle = lifecycleRunning
+	if !h.engine.start(initial) {
+		h.lifecycle = previous
+		return false
+	}
+	return true
+}
+
+// Reopen 把已完结的书强制重开为创作态。完本与重开都是重决策：完本可由架构师裁定，
+// 重开只能由用户显式发起（/reopen），不经模型裁定。direction 非空时登记为待处理干预，
+// 恢复时先经 Arbiter 裁定注入（与停机期干预同通道），再续跑引擎（卷末路由派发续卷）。
+func (h *Host) Reopen(direction string) error {
+	h.mu.Lock()
+	switch {
+	case h.lifecycle == lifecycleRunning:
+		h.mu.Unlock()
+		return fmt.Errorf("创作引擎运行中，无需重开")
+	case h.cocreating:
+		h.mu.Unlock()
+		return fmt.Errorf("阶段共创进行中，请先结束共创")
+	case h.exclusive != "":
+		ex := h.exclusive
+		h.mu.Unlock()
+		return fmt.Errorf("%s进行中，请先完成后再重开", ex)
+	}
 	h.mu.Unlock()
-	go h.waitDone()
+
+	if err := h.store.Progress.ReopenContinue(); err != nil {
+		return err
+	}
+	slog.Info("重开已完结书为创作状态", "module", "host", "direction", direction)
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "已重开本书为创作状态（用户撤销完结裁定）", Level: "info"})
+	if d := strings.TrimSpace(direction); d != "" {
+		if err := h.store.RunMeta.SetPendingSteer(d); err != nil {
+			return fmt.Errorf("已重开，但续写方向登记失败：%v，请直接在输入框重新输入方向", err)
+		}
+	}
 	return nil
 }
 
@@ -343,9 +474,14 @@ func (h *Host) Resume() (string, error) {
 		h.mu.Unlock()
 		return "", fmt.Errorf("阶段共创进行中，请先结束共创")
 	}
+	if h.exclusive != "" {
+		ex := h.exclusive
+		h.mu.Unlock()
+		return "", fmt.Errorf("%s进行中，请先完成后再恢复创作", ex)
+	}
 	h.mu.Unlock()
 
-	prompt, label, err := buildResumePrompt(h.store)
+	label, err := resumeLabel(h.store)
 	if err != nil {
 		return "", err
 	}
@@ -362,41 +498,187 @@ func (h *Host) Resume() (string, error) {
 		slog.Warn("一致性告警", "module", "host", "detail", w)
 		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "一致性告警: " + w, Level: "warn"})
 	}
-	// 老书无快照时惰性生成（按 system_defaults + rules 文件归一化）；已有则廉价读取。
+	// 确保用户规则快照存在；已有则廉价读取。
 	h.ensureUserRules()
 	h.refreshWriterRestore()
-	h.observer.setAborting(false)
-	h.router.ResetRepeat()
-	h.router.Enable()
-	if err := h.coordinator.Prompt(context.Background(), prompt); err != nil {
-		return "", fmt.Errorf("resume prompt: %w", err)
+	// 待处理干预(停机期留下的/裁定期崩溃残留的)必须先于引擎续跑裁定——
+	// 否则引擎可能抢在裁定前继续写出与干预相悖的章节。同步执行(阻塞数秒可接受,
+	// UI 已显示"恢复创作");doIntervention 成功后自行清除 PendingSteer 并按
+	// restart=true 拉起引擎。无待处理干预 → 直接续跑。
+	meta, err := h.store.RunMeta.Load()
+	if err != nil {
+		return label, fmt.Errorf("读取待处理干预: %w", err)
 	}
-	// PendingSteer 已随恢复 prompt 交付给 Coordinator，清除以免下次 Resume 重复注入同一条旧干预。
-	// ClearHandledSteer 幂等：PendingSteer 为空 / Flow 非 steering 时均为 no-op。
-	if err := h.store.ClearHandledSteer(); err != nil {
-		slog.Warn("清除已处理的 PendingSteer 失败", "module", "host", "err", err)
+	if meta != nil && meta.PendingSteer != "" {
+		if err := h.doIntervention(meta.PendingSteer, true); err != nil {
+			return label, err
+		}
+	} else {
+		// 只恢复事实,不恢复会话(RFC §6):Engine 从 store 重算路由续跑。
+		if !h.startEngine(nil) {
+			return label, fmt.Errorf("Engine 正在完成上一轮停止，请稍后重试恢复")
+		}
 	}
-	// 停靠点对账：崩溃恰在"排空后、消费前"时，用户手动 Resume 即视为放行。
-	h.pauser.ReconcileOnResume()
-	// 主动派发一次首条指令，避免 Coordinator 对恢复 prompt 只回文字而 StopGuard 反复拦截。
-	h.router.Dispatch()
-
-	h.mu.Lock()
-	h.lifecycle = lifecycleRunning
-	h.mu.Unlock()
-	go h.waitDone()
+	// lifecycle 由 startEngine / runEnded 管理,此处不再覆写——
+	// 引擎立即结束(完本等)时覆写会把终态改回 running。
 	return label, nil
 }
 
-// interventionMsg 把用户文本包装成 Coordinator 可识别的干预消息。
-// Steer 与 Continue 共用同一 framing：两条入口的用户指令都带 `[用户干预]` 前缀，
-// 才能稳定触发 coordinator.md 的干预分类。否则 Continue 的裸文本会绕过路由规则，
-// Coordinator 失去分类锚点而误派子代理（曾导致"改已写章节"被派给 writer 撞 edit_chapter 守卫）。
-func interventionMsg(text string) agentcore.Message {
-	return agentcore.UserMsg("[用户干预] " + text)
+// handleIntervention 适配 Engine 的无返回值重询回调；错误已由 doIntervention 发出事件。
+func (h *Host) handleIntervention(text string) {
+	_ = h.doIntervention(text, false)
 }
 
-// Continue 用指定 prompt 继续。停机后用户在输入框输入时调用。
+// doIntervention 是用户干预的统一裁定路径:Collect → Decide → 执行。
+// FIFO 串行(同一时刻至多一次在途咨询);answer/rules 即时执行,控制态动作
+// (hold/reopen/dispatch)引擎运行中排队边界提交、停机时立即执行。
+// restart=true(Continue 语义)时干预处理完确保引擎运行。
+func (h *Host) doIntervention(text string, restart bool) error {
+	h.interMu.Lock()
+	defer h.interMu.Unlock()
+
+	// 崩溃保护:裁定前先持久化(PendingSteer),成功应用或已当面回显失败后原子清除
+	// (ClearHandledSteer 同时复位 FlowSteering)。裁定期间崩溃 → 下次 Resume 重放。
+	if err := h.store.RunMeta.SetPendingSteer(text); err != nil {
+		wrapped := fmt.Errorf("干预持久化失败，已停止裁定: %w", err)
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Agent: "arbiter",
+			Summary: wrapped.Error(), Detail: wrapped.Error(), Level: "error"})
+		return wrapped
+	}
+	clearPending := func() error {
+		if err := h.store.ClearHandledSteer(); err != nil {
+			return fmt.Errorf("清除已处理干预失败: %w", err)
+		}
+		return nil
+	}
+
+	facts, err := arbiter.CollectInterventionFacts(h.store)
+	if err != nil {
+		wrapped := fmt.Errorf("收集干预事实失败，未调用 Arbiter: %w", err)
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Agent: "arbiter",
+			Summary: wrapped.Error(), Detail: wrapped.Error(), Level: "error"})
+		return wrapped
+	}
+	facts.Running = h.engine.isRunning()
+
+	start := time.Now()
+	decision, derr := runObservedDecision(h.observer, "用户干预裁定", func() (arbiter.InterventionDecision, error) {
+		return arbiter.DecideIntervention(h.runCtx, h.arbiterModel(),
+			h.bundle.Prompts.ArbiterIntervention, facts, text)
+	})
+
+	rec := storepkg.DecisionRecord{Kind: "intervention", Decider: "arbiter", Input: text,
+		Reason: decision.Reason, DurationMs: time.Since(start).Milliseconds()}
+	if cp := h.store.Checkpoints.LatestGlobal(); cp != nil {
+		rec.CheckpointSeq = cp.Seq
+	}
+	if data, err := json.Marshal(facts); err == nil {
+		rec.Facts = data
+	}
+	if derr == nil {
+		if data, err := json.Marshal(decision); err == nil {
+			rec.Decision = data
+		}
+	} else {
+		rec.Error = derr.Error()
+	}
+	if _, err := h.store.Decisions.Append(rec); err != nil {
+		wrapped := fmt.Errorf("干预裁定审计落盘失败，拒绝执行动作: %w", err)
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Agent: "arbiter",
+			Summary: wrapped.Error(), Detail: wrapped.Error(), Level: "error"})
+		return wrapped
+	}
+
+	if derr != nil {
+		// 宁可不动,不可误动:不产生任何写入。调用错误与
+		// 输出校验错误共用同一 error 通道,必须原样回显,不得统一伪装成"未能理解"。
+		// 已当面告知 → 清除 pending(否则下次 Resume 会自动重放同一条失败干预)。
+		h.emitEvent(newInterventionFailureEvent(derr))
+		if err := clearPending(); err != nil {
+			return fmt.Errorf("%v；%w", derr, err)
+		}
+		return derr
+	}
+
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "裁定: " + decision.Reason, Level: "info"})
+	if decision.Answer != "" {
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: decision.Answer, Level: "info"})
+	}
+	// 任一动作持久化失败 → 保留 PendingSteer(恢复时整条重放重新裁定;
+	// hold/reopen 幂等、dispatch 经新事实重询,重放安全)。
+	var actionErr error
+	if decision.Rules != "" {
+		if snap, _, err := h.userRules.AddRuntimeRule(h.runCtx, decision.Rules); err != nil {
+			h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Summary: "写作规则落盘失败: " + err.Error(), Level: "error"})
+			actionErr = err
+		} else if snap != nil {
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "写作规则已更新并持久化", Level: "info"})
+		}
+	}
+
+	if decision.Hold != nil || decision.Reopen != nil || decision.Dispatch != nil {
+		op := controlOp{hold: decision.Hold, reopen: decision.Reopen, dispatch: decision.Dispatch, text: text, facts: facts}
+		if !h.engine.enqueue(op) {
+			// 引擎未运行:立即执行;持久化失败 → 保留 PendingSteer,恢复时重放整条干预。
+			if err := h.engine.applyControlOp(context.Background(), op); err != nil {
+				h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
+					Summary: "干预动作执行失败,已保留;恢复/继续时将自动重试"})
+				return err
+			}
+			// reopen/dispatch 表达了继续创作的意图,拉起引擎。
+			if decision.Reopen != nil || decision.Dispatch != nil {
+				restart = true
+			}
+		}
+	}
+	if actionErr != nil {
+		// 保留 PendingSteer:恢复/继续时整条重放重新裁定。
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
+			Summary: "部分干预动作未成功,干预已保留;恢复/继续时自动重试"})
+		return actionErr
+	}
+	// 动作已成功应用/入队,清除崩溃保护(入队后引擎侧失败或退出竞态由 engine
+	// 回存 PendingSteer 兜底)。
+	if err := clearPending(); err != nil {
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Level: "error", Summary: err.Error()})
+		return err
+	}
+
+	if restart && !h.engine.isRunning() {
+		if err := h.budget.Refuse(); err != nil {
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: err.Error(), Level: "warn"})
+			return err
+		}
+		h.refreshWriterRestore()
+		if !h.startEngine(nil) {
+			// 此时干预动作已生效并清除 PendingSteer，只是引擎未能立即拉起——不能谎称"已保存"。
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
+				Summary: "干预已生效，但 Engine 未能立即续跑；请稍后在输入框继续或重启应用恢复"})
+			return fmt.Errorf("干预已生效，但 Engine 未能立即续跑")
+		}
+	}
+	return nil
+}
+
+func newInterventionFailureEvent(err error) Event {
+	detail := err.Error()
+	return Event{
+		Time:     time.Now(),
+		Category: "ERROR",
+		Agent:    "arbiter",
+		Summary:  "干预裁定失败：" + detail + "（未做任何修改）",
+		Detail:   detail,
+		Kind:     errorKind(err, detail),
+		Level:    "error",
+	}
+}
+
+// arbiterModel 返回带用量追踪的裁定模型(token/成本进预算与 usage 系统)。
+func (h *Host) arbiterModel() agentcore.ChatModel {
+	return newUsageTrackedModel(h.models.Default, "arbiter", h.usage.Record)
+}
+
+// Continue 停机后用户在输入框输入时调用:干预裁定 + 确保引擎重新运行。
 func (h *Host) Continue(text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -407,63 +689,125 @@ func (h *Host) Continue(text string) error {
 		h.mu.Unlock()
 		return fmt.Errorf("阶段共创进行中，请先结束共创")
 	}
-	running := h.lifecycle == lifecycleRunning
-	h.mu.Unlock()
-
-	h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[继续] " + text, Level: "info"})
-
-	if running {
-		h.coordinator.FollowUp(interventionMsg(text))
-		return nil
+	if h.exclusive != "" {
+		ex := h.exclusive
+		h.mu.Unlock()
+		// 独占作业期间必须在裁定前挡住：否则 Arbiter 已改 PendingSteer/规则/控制态，引擎才被门禁拦下。
+		return fmt.Errorf("%s进行中，请先完成后再继续创作", ex)
 	}
-	// 停机后 → 注入并自动恢复（恢复 run 也受预算前置约束）
+	h.mu.Unlock()
 	if err := h.budget.Refuse(); err != nil {
 		return err
 	}
-	// 与 Resume 对称：若停机由预算/Esc 抢在停靠点消费之前，用户显式继续=放行，
-	// 对账解除已满足的停靠点，避免恢复后首个边界立即再暂停。
-	h.pauser.ReconcileOnResume()
-	h.refreshWriterRestore()
-	h.observer.setAborting(false)
-	h.router.ResetRepeat()
-	h.router.Enable()
-	_, err := h.coordinator.Inject(interventionMsg(text))
-	if err != nil {
-		return fmt.Errorf("inject: %w", err)
+
+	err, launched := h.runAsync(func() error {
+		h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[继续] " + text, Level: "info"})
+		return h.doIntervention(text, true)
+	})
+	if !launched {
+		return fmt.Errorf("Host 正在关闭，不能继续创作")
 	}
-	// 与 Resume 对称：干预注入后主动派发一次当前路由指令。否则 Coordinator 只有
-	// 用户文本没有 Host 指令，若它对干预只回文字，StopGuard 的拦截又要求执行
-	// Host 指令，会陷入"无指令可执行"的僵局（继续后连续拦截直至熔断）。
-	// 派发晚于 Inject：用户干预先入上下文，指令后到，干预优先级不受影响。
-	h.router.Dispatch()
+	return err
+}
+
+// SetAdvanceMode 确定性切换章节推进模式。它只写入用户运行意图，
+// 不调用 Arbiter，也不隐式启动已经暂停的 Engine。
+func (h *Host) SetAdvanceMode(mode domain.ChapterAdvanceMode) error {
+	h.interMu.Lock()
+	defer h.interMu.Unlock()
+	if err := h.store.RunMeta.SetAdvanceMode(mode); err != nil {
+		return err
+	}
+	label := "自动推进"
+	if mode == domain.ChapterAdvanceReview {
+		label = "逐章验收"
+	}
+	summary := "章节推进模式已切换为" + label
 	h.mu.Lock()
-	h.lifecycle = lifecycleRunning
+	state := h.lifecycle
 	h.mu.Unlock()
-	go h.waitDone()
+	if mode == domain.ChapterAdvanceAuto && state != lifecycleRunning && state != lifecycleCompleted {
+		summary += "；当前仍暂停，输入继续指令后恢复运行"
+	}
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "info"})
 	return nil
 }
 
-// Steer 提交用户干预。
-func (h *Host) Steer(text string) {
+// AdvanceOneChapter 在逐章验收模式下授权一个精确章节并启动 Engine。
+func (h *Host) AdvanceOneChapter() error {
+	h.interMu.Lock()
+	defer h.interMu.Unlock()
+
 	h.mu.Lock()
-	running := h.lifecycle == lifecycleRunning
+	running, cocreating, ex := h.lifecycle == lifecycleRunning, h.cocreating, h.exclusive
 	h.mu.Unlock()
-
-	h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[用户干预] " + text, Level: "info"})
-
-	msg := interventionMsg(text)
-	if running {
-		if _, err := h.coordinator.Inject(msg); err != nil {
-			slog.Error("steer inject 失败", "module", "host", "err", err)
-		}
-		return
+	if running || h.engine.isRunning() {
+		return fmt.Errorf("创作仍在运行或正在完成暂停，请稍后再执行 /next")
 	}
-	// 停机：持久化待下次启动 + 反馈系统状态（"已保存"是 USER 事件之外的系统提示）
-	_ = h.store.RunMeta.SetPendingSteer(text)
-	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "干预已保存，下次启动时生效", Level: "info"})
+	if cocreating {
+		return fmt.Errorf("阶段共创进行中，请先结束共创")
+	}
+	if ex != "" {
+		return fmt.Errorf("%s进行中，请先完成后再执行 /next", ex)
+	}
+	meta, err := h.store.RunMeta.Load()
+	if err != nil {
+		return err
+	}
+	if meta == nil {
+		return fmt.Errorf("RunMeta 未初始化")
+	}
+	if meta.AdvanceMode != domain.ChapterAdvanceReview {
+		return fmt.Errorf("/next 仅用于逐章验收模式，请先执行 /review on")
+	}
+	if meta.AdvanceHold != nil {
+		return fmt.Errorf("仍有一次性暂停意图待处理（%s），请先恢复或完成当前干预", meta.AdvanceHold.Reason)
+	}
+	if err := h.budget.Refuse(); err != nil {
+		return err
+	}
+	progress, err := h.store.Progress.Load()
+	if err != nil {
+		return err
+	}
+	if progress == nil || progress.Phase != domain.PhaseWriting {
+		phase := "<nil>"
+		if progress != nil {
+			phase = string(progress.Phase)
+		}
+		return fmt.Errorf("当前阶段不能授权新章（phase=%s）", phase)
+	}
+	target := progress.NextChapter()
+	if target <= 0 {
+		return fmt.Errorf("无法从当前进度推导下一章")
+	}
+	if err := h.store.RunMeta.GrantAdvancePermit(target); err != nil {
+		return err
+	}
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM",
+		Summary: fmt.Sprintf("已放行第 %d 章；该章提交后会先完成必要的评审与弧/卷结构维护，再次等待放行", target), Level: "info"})
+	h.refreshWriterRestore()
+	if !h.startEngine(nil) {
+		// 许可按章节号持久化且同目标幂等，调用方稍后重试不会重复授权。
+		return fmt.Errorf("章节许可已保存，但 Engine 仍在完成上一轮停止；请稍后重试 /next")
+	}
+	return nil
 }
 
-// Abort 暂停当前 coordinator。
+// Steer 提交用户干预（运行中随时可用；停机时裁定后视动作决定是否拉起引擎）。
+// TUI 通过 tea.Cmd 等待结果，因此能收到真实裁定/持久化错误而不会阻塞界面。
+func (h *Host) Steer(text string) error {
+	err, launched := h.runAsync(func() error {
+		h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[用户干预] " + text, Level: "info"})
+		return h.doIntervention(text, false)
+	})
+	if !launched {
+		return fmt.Errorf("Host 正在关闭，不能提交干预")
+	}
+	return err
+}
+
+// Abort 暂停当前引擎循环。
 func (h *Host) Abort() bool {
 	return h.abortWithEvent("用户手动暂停当前创作", "warn")
 }
@@ -476,70 +820,93 @@ func (h *Host) abortWithEvent(summary, level string) bool {
 	if running {
 		h.lifecycle = lifecyclePaused
 	}
+	cancelExclusive := h.exclusiveCancel
 	h.mu.Unlock()
-	if !running {
-		return false
+	if running {
+		// 置位必须在 engine.abort 之前：cancel 传播会立刻引发 stream init / worker
+		// 失败事件，observer 凭此标志识别为 abort 衍生噪声并抑制。
+		h.observer.setAborting(true)
+		h.engine.abort()
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
+		return true
 	}
-	// 置位必须在 coordinator.Abort 之前：cancel 传播会立刻引发 stream init / subagent
-	// 失败事件，observer 凭此标志识别为 abort 衍生噪声并抑制。
-	h.observer.setAborting(true)
-	h.coordinator.Abort()
-	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
-	return true
+	// Engine 未运行但独占作业（导入等）在跑：它同样在烧钱，预算硬停/手动暂停必须
+	// 能停掉它——否则预算政策对导入形同虚设（docs/import-pipeline.md §13.1）。
+	if cancelExclusive != nil {
+		cancelExclusive()
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
+		return true
+	}
+	return false
 }
 
-// Close 终止 coordinator 并关闭事件通道。
+// Close 终止引擎并关闭事件通道。
 //
 // Usage 持久化语义：先取消 autoSaveLoop（它自行 flush 最后一次 dirty 状态），
-// 再补一次同步 SaveNow 收尾。已知缺口：AbortSilent 之后若仍有 in-flight LLM
-// 调用回来，触发的 OnMessage → Record 会更新内存但**不会被持久化**。这部分
-// "最末几百 token" 的丢失在下次启动时会由 session jsonl replay 自动补回。
+// 再补一次同步 SaveNow 收尾。终止后 in-flight LLM 调用的最末几百 token
+// 丢失由下次启动时 session jsonl replay 自动补回。
 func (h *Host) Close() {
-	h.observer.setAborting(true)
-	h.coordinator.AbortSilent()
-	if h.budgetDetach != nil {
-		h.budgetDetach()
-		h.budgetDetach = nil
-	}
-	if h.usageCancel != nil {
-		h.usageCancel()
-		h.usageCancel = nil
-	}
-	if err := h.usage.SaveNow(); err != nil {
-		slog.Warn("usage 退出前落盘失败", "module", "usage", "err", err)
-	}
 	h.closeOnce.Do(func() {
+		h.mu.Lock()
+		h.closing = true
+		cancelExclusive := h.exclusiveCancel
+		h.mu.Unlock()
+
+		h.observer.setAborting(true)
+		if h.runCancel != nil {
+			h.runCancel() // 中断在途的宿主侧裁定调用与 supervisor 转发
+		}
+		if cancelExclusive != nil {
+			cancelExclusive()
+		}
+		h.engine.abort()
+		h.engine.wait()
+		h.asyncWG.Wait()
+
+		if h.usageCancel != nil {
+			h.usageCancel()
+			h.usageCancel = nil
+		}
+		h.usage.WaitAutoSave()
+		if err := h.usage.SaveNow(); err != nil {
+			slog.Warn("usage 退出前落盘失败", "module", "usage", "err", err)
+		}
 		close(h.done)
 		close(h.events)
 		close(h.streamCh)
 	})
 }
 
-// waitDone 等待 coordinator 停机并发布终态事件。
-//
-// 不做任何续跑。Run 结束 = Host 进入终态：
+// runEnded 引擎循环结束(任何原因)时由 engine.onDone 回调:按 store 事实定终态。
 //   - Phase=Complete  → 标记 completed，发"创作完成"事件
-//   - 其它            → 标记 idle，发"Coordinator 停止"事件
-//
-// 用户要继续创作只有两条路径：手动 Continue（停机注入）或重启进程走 Resume。
-// 见 docs/architecture.md §13.3、§8.3。
-func (h *Host) waitDone() {
-	// 运行中退出时 Close() 可能已 close(h.done)（AbortSilent 只 cancel 不 join 本 goroutine），
-	// 末尾向 h.done 的发送会 panic；与 emitEvent 一致用 recover 兜住这段退出期竞态。
-	defer func() { recover() }()
-	h.coordinator.WaitForIdle()
+//   - 其它            → 标记 idle/paused，发"创作停止"事件
+func (h *Host) runEnded() {
 	h.observer.finalize()
 
 	h.mu.Lock()
-	progress, _ := h.store.Progress.Load()
+	progress, err := h.store.Progress.Load()
+	if err != nil {
+		if h.lifecycle == lifecycleRunning {
+			h.lifecycle = lifecycleIdle
+		}
+		h.mu.Unlock()
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Level: "error",
+			Summary: "引擎结束时读取进度失败: " + err.Error()})
+		select {
+		case h.done <- struct{}{}:
+		default:
+		}
+		return
+	}
 	if progress != nil && progress.Phase == domain.PhaseComplete {
 		h.lifecycle = lifecycleCompleted
-		summary := fmt.Sprintf("创作完成: %d 章 %d 字", len(progress.CompletedChapters), progress.TotalWordCount)
+		// 完本收尾:确定性生成(store 已有全部事实,不花 LLM 调用;RFC 末节)。
+		summary := completionSummary(h.store)
 		h.mu.Unlock()
 		slog.Info(summary, "module", "host")
 		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "success"})
 		h.notifier.Send(notify.Notification{
-			Kind: "run_end", Level: "info", Title: "ainovel: 创作完成",
+			Kind: notify.KindRunEnd, Level: "info", Title: "ainovel: 创作完成",
 			Body: h.runEndBody(progress.NovelName, summary),
 		})
 	} else {
@@ -555,11 +922,11 @@ func (h *Host) waitDone() {
 		}
 		h.mu.Unlock()
 		if wasRunning {
-			summary := fmt.Sprintf("Coordinator 停止 (已完成 %d 章)", completed)
+			summary := fmt.Sprintf("引擎停止 (已完成 %d 章)", completed)
 			slog.Warn(summary, "module", "host")
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "warn"})
 			h.notifier.Send(notify.Notification{
-				Kind: "run_end", Level: "warn", Title: "ainovel: 创作停止",
+				Kind: notify.KindRunEnd, Level: "warn", Title: "ainovel: 创作停止",
 				Body: h.runEndBody(name, summary),
 			})
 		}
@@ -598,6 +965,9 @@ func (h *Host) AskUser() *tools.AskUserTool { return h.askUser }
 // ── 事件发射 ──
 
 func (h *Host) emitEvent(ev Event) {
+	// 退出期 Close() 可能已 close(h.events)，此时并发 emit 的通道发送会 panic
+	// （select/default 挡不住关通道发送）。emitEvent 是所有事件的唯一漏斗，在此兜住
+	// 竞态即可覆盖引擎/asyncWG 之外的同步 emit 者（Abort/abortWithEvent、预算哨兵等）。
 	defer func() { recover() }()
 	// 所有事件的唯一 slog 入口。observer 翻译的 agentcore 事件和 Host 自发的
 	// SYSTEM 事件（Start/Abort/Resume…）都在这里落日志，避免 ESC abort 与外部
@@ -636,6 +1006,7 @@ func (h *Host) emitEvent(ev Event) {
 }
 
 func (h *Host) emitDelta(delta string) {
+	// 同 emitEvent：兜住退出期 h.streamCh 已 close 时的并发发送竞态。
 	defer func() { recover() }()
 	select {
 	case h.streamCh <- delta:
@@ -662,10 +1033,12 @@ func (h *Host) Snapshot() UISnapshot {
 	h.mu.Lock()
 	state := h.lifecycle
 	provider, model, _ := h.models.CurrentSelection("default")
+	modelWindow, _ := h.cfg.ResolveContextWindow(provider, model)
+	thinkingLevel := h.cfg.ResolveReasoningEffort("default")
+	style := h.cfg.Style
 	h.mu.Unlock()
 
-	// 动态解析当前模型的上下文窗口，/model 切换后下一次 Snapshot 自动反映
-	modelWindow, _ := h.cfg.ResolveContextWindow(model)
+	// 动态解析当前模型的上下文窗口，/model 或 /config 切换后下一次 Snapshot 自动反映。
 	cost, tokIn, tokOut, cacheRead, cacheWrite := h.usage.Totals()
 	saved := h.usage.SavedUSD()
 	overallCapable := h.usage.OverallCacheCapable()
@@ -706,8 +1079,8 @@ func (h *Host) Snapshot() UISnapshot {
 		Provider:               provider,
 		ModelName:              model,
 		ModelContextWindow:     modelWindow,
-		ThinkingLevel:          h.cfg.ResolveReasoningEffort("default"),
-		Style:                  h.cfg.Style,
+		ThinkingLevel:          thinkingLevel,
+		Style:                  style,
 		RuntimeState:           string(state),
 		IsRunning:              state == lifecycleRunning,
 		TotalInputTokens:       tokIn,
@@ -751,6 +1124,12 @@ func (h *Host) Snapshot() UISnapshot {
 	}
 	if meta, _ := h.store.RunMeta.Load(); meta != nil {
 		snap.PendingSteer = meta.PendingSteer
+		snap.AdvanceMode = string(meta.AdvanceMode)
+		snap.AdvancePermitChapter = meta.AdvancePermitChapter
+		if meta.AdvanceHold != nil {
+			snap.HasAdvanceHold = true
+			snap.AdvanceHoldReason = meta.AdvanceHold.Reason
+		}
 	}
 
 	snap.Agents = h.observer.agentSnapshots()
@@ -758,7 +1137,8 @@ func (h *Host) Snapshot() UISnapshot {
 	snap.StatusLabel = deriveStatusLabel(snap)
 
 	// 恢复标签
-	if _, label, err := buildResumePrompt(h.store); err == nil && label != "" {
+	// 恢复标签
+	if label, err := resumeLabel(h.store); err == nil && label != "" {
 		snap.RecoveryLabel = label
 	}
 
@@ -767,36 +1147,11 @@ func (h *Host) Snapshot() UISnapshot {
 	return snap
 }
 
-// fillContextStatus 填充 Coordinator 上下文健康度信息。
-func (h *Host) fillContextStatus(snap *UISnapshot) {
-	if h.coordinator == nil {
-		return
-	}
-	if usage := h.coordinator.BaselineContextUsage(); usage != nil {
-		snap.ContextTokens = usage.Tokens
-		snap.ContextWindow = usage.ContextWindow
-		snap.ContextPercent = usage.Percent
-	}
-	if ctx := h.coordinator.ContextSnapshot(); ctx != nil {
-		snap.ContextScope = ctx.Scope
-		snap.ContextStrategy = ctx.LastStrategy
-		snap.ContextActiveMessages = ctx.ActiveMessages
-		snap.ContextSummaryCount = ctx.SummaryMessages
-		snap.ContextCompactedCount = ctx.LastCompactedCount
-		snap.ContextKeptCount = ctx.LastKeptCount
-		if snap.ContextTokens == 0 {
-			if ctx.BaselineUsage != nil {
-				snap.ContextTokens = ctx.BaselineUsage.Tokens
-				snap.ContextWindow = ctx.BaselineUsage.ContextWindow
-				snap.ContextPercent = ctx.BaselineUsage.Percent
-			} else if ctx.Usage != nil {
-				snap.ContextTokens = ctx.Usage.Tokens
-				snap.ContextWindow = ctx.Usage.ContextWindow
-				snap.ContextPercent = ctx.Usage.Percent
-			}
-		}
-	}
-}
+// fillContextStatus 填充上下文健康度信息。
+// 主循环无常驻 LLM 上下文；Worker 的上下文健康度经进度中继
+// (ProgressContext)进入 observer 的 per-agent 快照,由 Agents 面板展示。
+// 汇总字段留空,面板按 per-agent 数据渲染。
+func (h *Host) fillContextStatus(_ *UISnapshot) {}
 
 // fillDetails 填充详情区:设定、角色、最近 commit/review/摘要。
 func (h *Host) fillDetails(snap *UISnapshot, progress *domain.Progress) {
@@ -932,9 +1287,9 @@ func (h *Host) SwitchModel(role, provider, model string) error {
 		rc.Model = model
 		h.cfg.Roles[role] = rc
 	}
-	h.normalizeThinkingLocked(role)
-	if path := bootstrap.DefaultConfigPath(); path != "" {
-		if err := bootstrap.SaveConfig(path, h.cfg); err != nil {
+	// 换模型不改动已存的推理强度意图：只在下发时按新模型能力钳制。
+	if h.configPath != "" {
+		if err := bootstrap.SaveConfig(h.configPath, h.cfg); err != nil {
 			slog.Warn("保存配置失败", "module", "host", "err", err)
 		}
 	}
@@ -944,31 +1299,11 @@ func (h *Host) SwitchModel(role, provider, model string) error {
 	if logRole == "" {
 		logRole = "default"
 	}
-	window, source := h.cfg.ResolveContextWindow(model)
+	window, source := h.cfg.ResolveContextWindow(provider, model)
 	bootstrap.LogContextWindowChoice(logRole, model, window, source)
 
-	// 切到 default/coordinator 时，联动 coordinator engine 的窗口与 reserve。
-	// writer/architect/editor 走 ContextManagerFactory 自动按新模型重建，不需要联动。
-	// 不联动会导致：1M→128k 切换时 coordinator engine 仍按 1M 算 threshold，
-	// 累积 messages 超过 128k 就 API 报错；128k→1M 时阈值被钉在 96k，浪费长上下文。
-	//
-	// 关键：必须用 models.CurrentSelection("coordinator") 拿"coordinator 实际使用"的模型
-	// 算窗口——而不是直接用切换目标的 model。当用户配了 roles.coordinator 单独模型时，
-	// 切 default 不影响 coordinator 实际模型；用切换目标的窗口去 SetContextWindow 会错
-	// 把 coordinator 阈值调到不相干的值（例：default 切 1M 模型时把 200k 的 coordinator
-	// engine 阈值拉到 891k，写超 200k 直接爆 API）。
-	if h.coordinatorCtxMgr != nil && (role == "" || role == "default" || role == "coordinator") {
-		_, coordinatorModel, _ := h.models.CurrentSelection("coordinator")
-		coordinatorWindow, coordSource := h.cfg.ResolveContextWindow(coordinatorModel)
-		h.coordinator.SetContextWindow(coordinatorWindow)
-		h.coordinatorCtxMgr.SetContextWindow(coordinatorWindow)
-		h.coordinatorCtxMgr.SetReserveTokens(bootstrap.CompactReserveTokens(coordinatorWindow))
-		// coordinator 实际模型与切换目标不同（用户切 default 但 coordinator 有专属 role）时，
-		// 上面 LogContextWindowChoice 打的是 default 的窗口，与实际生效值不一致；补一行。
-		if coordinatorModel != model {
-			bootstrap.LogContextWindowChoice("coordinator", coordinatorModel, coordinatorWindow, coordSource)
-		}
-	}
+	// 无常驻上下文需要联动:writer/architect/editor 的 ContextManager 走
+	// ContextManagerFactory,下次 spawn 自动按新模型窗口重建。
 
 	h.emitEvent(Event{
 		Time:     time.Now(),
@@ -981,7 +1316,7 @@ func (h *Host) SwitchModel(role, provider, model string) error {
 
 // concreteThinkingRoles 是可应用推理强度的具体角色（与 agents.ApplyThinking 路由一致）。
 // 调 default 时按各角色 ResolveReasoningEffort 逐个重新应用。
-var concreteThinkingRoles = []string{"coordinator", "architect", "writer", "editor"}
+var concreteThinkingRoles = []string{"architect", "writer", "editor"}
 
 // CurrentThinking 返回某角色当前生效的推理强度原始串（供 /model 面板同步当前值）。
 func (h *Host) CurrentThinking(role string) string {
@@ -997,40 +1332,16 @@ func (h *Host) AvailableThinking(role string) []agentcore.ThinkingLevel {
 	return agents.AvailableThinkingForModel(model)
 }
 
-func (h *Host) normalizeThinkingLocked(role string) agentcore.ThinkingLevel {
-	role = strings.ToLower(strings.TrimSpace(role))
-	if role == "" || role == "default" {
-		parsed, _ := agents.ParseThinkingLevel(h.cfg.ReasoningEffort)
-		for _, r := range concreteThinkingRoles {
-			resolved, ok := agents.ResolveThinkingForModel(h.models.ForRole(r), parsed)
-			if !ok || resolved != parsed {
-				h.cfg.ReasoningEffort = string(resolved)
-				return resolved
-			}
-		}
-		h.cfg.ReasoningEffort = string(parsed)
-		return parsed
-	}
-
-	_, hasRoleThinking := h.cfg.Roles[role]
-	hasRoleThinking = hasRoleThinking && h.cfg.Roles[role].ReasoningEffort != ""
+// resolveThinkingForRoleLocked 计算某角色实际生效的推理强度：取其原始意图
+// （ResolveReasoningEffort：角色级 → 顶层默认），再按该角色当前模型的能力钳制。
+// 钳制只发生在这条“生效路径”上，不回写配置——存储始终保留用户的原始意图。
+func (h *Host) resolveThinkingForRoleLocked(role string) agentcore.ThinkingLevel {
 	parsed, _ := agents.ParseThinkingLevel(h.cfg.ResolveReasoningEffort(role))
 	resolved, _ := agents.ResolveThinkingForModel(h.models.ForRole(role), parsed)
-	if !hasRoleThinking {
-		if resolved != parsed {
-			h.cfg.ReasoningEffort = string(resolved)
-		}
-		return resolved
-	}
-	if h.cfg.Roles == nil {
-		h.cfg.Roles = make(map[string]bootstrap.RoleConfig)
-	}
-	rc := h.cfg.Roles[role]
-	rc.ReasoningEffort = string(resolved)
-	h.cfg.Roles[role] = rc
 	return resolved
 }
 
+// applyThinkingLocked 把生效强度下发给 live agent；每个角色各按自己的模型钳制。
 func (h *Host) applyThinkingLocked(role string) {
 	if h.thinkingApplier == nil {
 		return
@@ -1038,13 +1349,11 @@ func (h *Host) applyThinkingLocked(role string) {
 	role = strings.ToLower(strings.TrimSpace(role))
 	if role == "" || role == "default" {
 		for _, r := range concreteThinkingRoles {
-			lv, _ := agents.ParseThinkingLevel(h.cfg.ResolveReasoningEffort(r))
-			h.thinkingApplier(r, lv)
+			h.thinkingApplier(r, h.resolveThinkingForRoleLocked(r))
 		}
 		return
 	}
-	lv, _ := agents.ParseThinkingLevel(h.cfg.ResolveReasoningEffort(role))
-	h.thinkingApplier(role, lv)
+	h.thinkingApplier(role, h.resolveThinkingForRoleLocked(role))
 }
 
 // SetRoleThinking 设置某角色（或 default）的推理强度：校验→持久化→联动 live agent→事件。
@@ -1058,17 +1367,7 @@ func (h *Host) SetRoleThinking(role, level string) error {
 		return err
 	}
 	role = strings.ToLower(strings.TrimSpace(role))
-	if role == "" || role == "default" {
-		for _, r := range concreteThinkingRoles {
-			if resolved, ok := agents.ResolveThinkingForModel(h.models.ForRole(r), parsed); !ok || resolved != parsed {
-				parsed = resolved
-				break
-			}
-		}
-	} else {
-		parsed, _ = agents.ResolveThinkingForModel(h.models.ForRole(role), parsed)
-	}
-	// 持久化：具体角色写 Roles[role].ReasoningEffort，default/"" 写顶层 ReasoningEffort。
+	// 存储保留原始意图：直接持久化用户选定的强度，钳制只在下发(applyThinkingLocked)时按模型能力发生。
 	if role == "" || role == "default" {
 		h.cfg.ReasoningEffort = string(parsed)
 	} else {
@@ -1079,8 +1378,8 @@ func (h *Host) SetRoleThinking(role, level string) error {
 		rc.ReasoningEffort = string(parsed)
 		h.cfg.Roles[role] = rc
 	}
-	if path := bootstrap.DefaultConfigPath(); path != "" {
-		if err := bootstrap.SaveConfig(path, h.cfg); err != nil {
+	if h.configPath != "" {
+		if err := bootstrap.SaveConfig(h.configPath, h.cfg); err != nil {
 			slog.Warn("保存配置失败", "module", "host", "err", err)
 		}
 	}
@@ -1128,13 +1427,13 @@ func (h *Host) StageCoCreateStream(ctx context.Context, history []CoCreateMessag
 	return coCreateStream(ctx, h.models, h.store.Sessions, stageSystemPrompt(h.store), history, onProgress)
 }
 
-// stagePlanPrefix 把共创产出的"后续方向 brief"包装成一条阶段规划干预，交 Coordinator 裁定。
+// stagePlanPrefix 把共创产出的"后续方向 brief"包装成一条阶段规划干预，交 Arbiter 裁定。
 // 只贴 [阶段规划] 事实标记 + 中性陈述，不写死"怎么落地"——具体路由（compass / architect /
-// save_user_rules）交给 coordinator.md 的「阶段规划」判据，避免与 prompt 形成第二真相源、
+// user_rules）交给 arbiter-intervention.md 的「阶段规划」判据，避免与 prompt 形成第二真相源、
 // 也不堵死风格类要求走 user_rules（守"分类裁定归 LLM"）。Continue 再叠加 [用户干预] 前缀。
 const stagePlanPrefix = "[阶段规划] 我暂停创作，和共创助手一起梳理了下面的后续方向，请按你的干预分类裁定如何落地，然后继续创作。后续方向如下：\n\n"
 
-// PauseForCoCreate 进入阶段共创：置共创占用标记，运行中则一并暂停 coordinator。
+// PauseForCoCreate 进入阶段共创：置共创占用标记，运行中则一并暂停 Engine。
 // 返回 false 表示无法进入（全书已完成或已在共创中），调用方忽略即可。
 // 占用标记在共创窗口内堵住 import/simulate/start/resume/continue 的并发介入——
 // 运行中暂停后 lifecycle=paused，现有 ==running 互斥失效，靠该标记补缺；
@@ -1176,10 +1475,11 @@ func (h *Host) ResumeFromCoCreate(draft string) error {
 	h.cocreating = false
 	h.mu.Unlock()
 
-	// PauseForCoCreate 的 Abort 是异步的：恢复前等旧 run 收敛，回到与手动暂停后 Continue
-	// 一致的"真停机"前提，避免把续跑指令 steer 进正在退出的旧 run。非运行态进共创（未
-	// Abort）时 coordinator 本就 idle，WaitForIdle 立即返回。
-	h.coordinator.WaitForIdle()
+	// PauseForCoCreate 的 abort 是异步的:等引擎循环真正收敛再继续,回到与手动
+	// 暂停后 Continue 一致的"真停机"前提。共创窗口是人机交互时间尺度,短轮询无感。
+	for h.engine.isRunning() {
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "阶段共创完成，已注入后续方向并恢复创作", Level: "info"})
 	return h.Continue(stagePlanPrefix + draft)
@@ -1213,34 +1513,108 @@ func truncate(s string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "..."
 }
 
-// ImportFrom 启动一次外部小说反推导入：切分 → 反推 foundation → 逐章分析落盘。
-// 与 Coordinator 互斥；导入完成后调用方可立即 Resume() 续写。
-// 返回的事件通道由 imp.Run 关闭，调用方负责消费（满则丢弃以防阻塞分析协程）。
+// ImportFrom 启动一次外部小说语义编译导入：ingest → segment → analyze → synthesize → publish。
+// 模型只裁定开放语义（边界/事实/综合），Go 掌管坐标/覆盖/幂等；与 Engine 运行互斥，
+// 导入完成后由 AdvanceHold 决定是否续写。
+// 返回的事件通道由 imp.Run 关闭，调用方负责消费（满则丢弃以防阻塞管线协程）。
 func (h *Host) ImportFrom(ctx context.Context, opts imp.Options) (<-chan imp.Event, error) {
-	if err := h.guardExclusive("导入"); err != nil {
+	// 预算启动前置检查与 Start/Resume/Continue 同一纪律：导入是全流程模型调用，
+	// 预算已超时不得启动（§13.1「纳入现有预算哨兵」）。
+	if err := h.budget.Refuse(); err != nil {
 		return nil, err
 	}
+	if err := h.acquireExclusive("导入"); err != nil {
+		return nil, err
+	}
+	// 登记取消函数：预算硬停/手动暂停经 abortWithEvent 取消导入自己的 context
+	//（否则哨兵只会去暂停并未运行的 Engine，导入继续烧钱）。
+	ctx, cancel := context.WithCancel(ctx)
+	h.mu.Lock()
+	h.exclusiveCancel = cancel
+	h.mu.Unlock()
 
 	deps := imp.Deps{
-		Store:      h.store,
-		CommitTool: tools.NewCommitChapterTool(h.store),
-		LLM:        h.models.ForRole("architect"),
+		Store:         h.store,
+		CommitChapter: tools.NewCommitChapterTool(h.store),
+		Segment:       h.importCaller("segment"),
+		Analyze:       h.importCaller("analyze"),
+		Synthesize:    h.importCaller("synthesize"),
 		Prompts: imp.Prompts{
-			Foundation: h.bundle.Prompts.ImportFoundation,
-			Analyzer:   h.bundle.Prompts.ImportAnalyzer,
+			Segment:    h.bundle.Prompts.ImportSegment,
+			Analyze:    h.bundle.Prompts.ImportAnalyze,
+			Synthesize: h.bundle.Prompts.ImportSynthesize,
+			Range:      h.bundle.Prompts.ImportRange,
 		},
 	}
-	return imp.Run(ctx, deps, opts)
+	ch, err := imp.Run(ctx, deps, opts)
+	if err != nil {
+		h.releaseExclusive()
+		return nil, err
+	}
+	return h.superviseImport(ch, opts), nil
+}
+
+// ImportResumeHint 返回未完成导入的一行提示（无则空串），供 TUI 启动时主动告知（RFC §18.2）。
+// 只在启动时调用一次：内部会重算工作区各工件的 InputDigest，不适合放进快照轮询。
+func (h *Host) ImportResumeHint() string {
+	return imp.ResumeSummary(h.store)
+}
+
+// importCaller 解析一个导入语义函数的模型档位（RFC §13.1）：roles 配置存在 import_<fn>
+// 则用该档位（用量也记该角色的账），否则落 architect。这是调用配置，不改任何语义契约。
+func (h *Host) importCaller(fn string) imp.Caller {
+	role := "import_" + fn
+	if _, _, explicit := h.models.CurrentSelection(role); !explicit {
+		role = "architect"
+	}
+	model := h.models.ForRoleWithFailover(role, func(ev bootstrap.FailoverEvent) {
+		slog.Warn("导入 provider 切换", "module", "import", "role", ev.Role,
+			"reason", ev.Reason,
+			"from", fmt.Sprintf("%s/%s", ev.FromProvider, ev.FromModel),
+			"to", fmt.Sprintf("%s/%s", ev.ToProvider, ev.ToModel),
+			"err", ev.Err)
+	})
+	model = newUsageTrackedModel(model, role, h.usage.Record)
+	return imp.Caller{Model: model, Runtime: h.importModelRuntime(role, model)}
+}
+
+// importModelRuntime 探测所选档位角色模型的调用能力，供 imp 双预算 / thinking 自适应使用（RFC §13/§21）。
+// 探测失败的字段留零值，imp 侧回退保守默认，保证无能力信息也能正确运行。
+// 结构化输出由 imp 的 llmcontract 在每次请求前现读模型事实，不在 Runtime 重复缓存。
+func (h *Host) importModelRuntime(role string, model agentcore.ChatModel) imp.ModelRuntime {
+	var rt imp.ModelRuntime
+	provider, name, _ := h.models.CurrentSelection(role)
+	if name == "" {
+		name = bootstrap.ModelName(model)
+		provider = bootstrap.ModelProvider(model)
+	}
+	// context / completion 上限：registry 是唯一可信来源（被包装模型的 Info() 不含窗口）。
+	rt.ContextTokens, _ = h.cfg.ResolveContextWindow(provider, name)
+	if entry, ok := modelreg.DefaultRegistry().Resolve(name); ok {
+		rt.MaxOutputTokens = entry.MaxTokens
+	}
+	// thinking：按角色 reasoning effort 与模型能力 resolve；不支持则不发（与 arbiter 同策略）。
+	if level, err := agents.ParseThinkingLevel(h.cfg.ResolveReasoningEffort(role)); err == nil {
+		if resolved, ok := agents.ResolveThinkingForModel(model, level); ok {
+			rt.Thinking = resolved
+		}
+	}
+	return rt
 }
 
 // Simulate 读取 simulate 目录并生成或增量更新仿写画像。
 func (h *Host) Simulate(ctx context.Context) (<-chan sim.Event, error) {
-	if err := h.guardExclusive("生成仿写画像"); err != nil {
+	if err := h.acquireExclusive("生成仿写画像"); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	h.mu.Lock()
+	h.exclusiveCancel = cancel
+	h.mu.Unlock()
 
 	wd, err := os.Getwd()
 	if err != nil {
+		h.releaseExclusive()
 		return nil, fmt.Errorf("get working dir: %w", err)
 	}
 	deps := sim.Deps{
@@ -1251,35 +1625,190 @@ func (h *Host) Simulate(ctx context.Context) (<-chan sim.Event, error) {
 			Merge:  h.bundle.Prompts.SimulationMerge,
 		},
 	}
-	return sim.Run(ctx, deps, sim.Options{SourceDir: filepath.Join(wd, "simulate")})
+	ch, err := sim.Run(ctx, deps, sim.Options{SourceDir: filepath.Join(wd, "simulate")})
+	if err != nil {
+		h.releaseExclusive()
+		return nil, err
+	}
+	return superviseExclusive(h, ch), nil
 }
 
 // ImportSimulationProfile 导入此前生成的仿写画像。
 func (h *Host) ImportSimulationProfile(ctx context.Context, path string) (<-chan sim.Event, error) {
-	if err := h.guardExclusive("导入仿写画像"); err != nil {
+	if err := h.acquireExclusive("导入仿写画像"); err != nil {
 		return nil, err
 	}
-	return sim.RunImport(ctx, h.store, path)
+	ctx, cancel := context.WithCancel(ctx)
+	h.mu.Lock()
+	h.exclusiveCancel = cancel
+	h.mu.Unlock()
+	ch, err := sim.RunImport(ctx, h.store, path)
+	if err != nil {
+		h.releaseExclusive()
+		return nil, err
+	}
+	return superviseExclusive(h, ch), nil
 }
 
-// guardExclusive 检查独占占用：coordinator 运行中或阶段共创窗口内时拒绝会改写状态的入口
-// （import/simulate）。补上 paused 期间只查 ==running 的并发缺口。
-func (h *Host) guardExclusive(action string) error {
+// acquireExclusive 原子占用后台独占作业槽（import/simulate）：Engine 运行中、阶段共创窗口内、
+// 或已有独占作业在跑时拒绝。成功即登记占用，作业结束须调 releaseExclusive 释放——否则两个导入
+// 或导入+仿写会并发抢改同一状态。补上此前只查 ==running/cocreating、不登记作业本身的缺口。
+func (h *Host) acquireExclusive(action string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	switch {
-	case h.lifecycle == lifecycleRunning:
-		return fmt.Errorf("coordinator 运行中，请先暂停后再%s", action)
+	case h.closing:
+		return fmt.Errorf("Host 正在关闭，不能%s", action)
+	// engine.isRunning() 必查：Abort 先置 lifecycle=paused 再异步等 goroutine 退出，
+	// 该窗口内 lifecycle 已非 running 但引擎仍可能在写 store（与启动门禁同一纪律）。
+	case h.lifecycle == lifecycleRunning || h.engine.isRunning():
+		return fmt.Errorf("创作引擎运行中或正在停止，请稍候再%s", action)
 	case h.cocreating:
 		return fmt.Errorf("阶段共创进行中，请先结束共创后再%s", action)
+	case h.exclusive != "":
+		return fmt.Errorf("%s进行中，请先完成后再%s", h.exclusive, action)
 	}
+	h.exclusive = action
 	return nil
+}
+
+// releaseExclusive 释放后台独占作业槽（连同已登记的取消函数）。
+func (h *Host) releaseExclusive() {
+	h.mu.Lock()
+	cancel := h.exclusiveCancel
+	h.exclusive = ""
+	h.exclusiveCancel = nil
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel() // 作业已结束：释放派生 context；对已退出的 runner 无副作用
+	}
+}
+
+// superviseExclusive 转发独占作业事件，通道关闭（作业结束）时释放占用槽。
+func superviseExclusive[T any](h *Host, src <-chan T) <-chan T {
+	out := make(chan T, 32)
+	if !h.launchAsync(func() {
+		defer close(out)
+		defer h.releaseExclusive()
+		for ev := range src {
+			select {
+			case out <- ev:
+			case <-h.runCtx.Done():
+				// 关闭期继续排空源通道，避免 producer 因终态事件阻塞而无法退出。
+				for range src {
+				}
+				return
+			}
+		}
+	}) {
+		close(out)
+		h.releaseExclusive()
+	}
+	return out
+}
+
+// superviseImport 是"导入完成后是否接力"的唯一所有者：转发导入事件，成功完成时先释放独占槽、
+// 再决定并执行接力，最后把真实接力结果写进 StageDone 事件的 Continued 字段。TUI 只据此渲染，
+// 不再用本地 --continue 标志臆测运行态（消除 Runner/Host/TUI 三方各自解释导致的时序竞态）。
+func (h *Host) superviseImport(src <-chan imp.Event, opts imp.Options) <-chan imp.Event {
+	out := make(chan imp.Event, 32)
+	if !h.launchAsync(func() {
+		defer close(out)
+		released := false
+		release := func() {
+			if !released {
+				released = true
+				h.releaseExclusive()
+			}
+		}
+		defer release()
+		for ev := range src {
+			if ev.Stage == imp.StageDone {
+				release() // 先释放独占槽，接力的 startEngine 才能通过独占门禁
+				ev.Continued = h.continueAfterImport(opts)
+			}
+			select {
+			case out <- ev:
+			case <-h.runCtx.Done():
+				for range src {
+				}
+				return
+			}
+		}
+	}) {
+		close(out)
+		h.releaseExclusive()
+	}
+	return out
+}
+
+// launchAsync 在 Host 生命周期内登记一个后台任务。closing 与 WaitGroup.Add 受同一
+// 把锁保护，保证 Close 开始 Wait 后不会再出现新的 Add。
+func (h *Host) launchAsync(fn func()) bool {
+	h.mu.Lock()
+	if h.closing {
+		h.mu.Unlock()
+		return false
+	}
+	h.asyncWG.Add(1)
+	h.mu.Unlock()
+	go func() {
+		defer h.asyncWG.Done()
+		fn()
+	}()
+	return true
+}
+
+// runAsync 复用 Host 已有的后台任务登记，同时把业务错误交还调用方。
+func (h *Host) runAsync(fn func() error) (error, bool) {
+	result := make(chan error, 1)
+	if !h.launchAsync(func() { result <- fn() }) {
+		return nil, false
+	}
+	return <-result, true
+}
+
+// continueAfterImport 决定并执行 --continue 的真正自动接力，返回 Engine 是否已启动。
+// 有效接力意图 = 本次 opts 或工作区持久化 intent（覆盖崩溃后无参数 /import 恢复的场景）；
+// 仅 auto 推进模式接力，由自适应扩弧规划承接开放故事、或让已完结故事收尾；review 交用户 /next。
+func (h *Host) continueAfterImport(opts imp.Options) bool {
+	want := opts.ContinueAfter
+	if !want {
+		in, err := imp.OpenWorkspace(h.store.Dir()).LoadIntent()
+		if err != nil {
+			slog.Warn("导入自动接力读取 Intent 失败", "module", "host", "err", err)
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
+				Summary: "导入已完成，但自动接力意图读取失败：" + err.Error()})
+		} else if in != nil {
+			want = in.ContinueAfterImport
+		}
+	}
+	if !want {
+		return false
+	}
+	meta, err := h.store.RunMeta.Load()
+	if err != nil || meta == nil {
+		slog.Warn("导入自动接力读取 RunMeta 失败", "module", "host", "err", err)
+		return false
+	}
+	if meta.AdvanceMode != domain.ChapterAdvanceAuto {
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "info",
+			Summary: "导入完成；当前为逐章验收模式，输入继续或 /next 接力续写"})
+		return false
+	}
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "info", Summary: "导入完成，自动接力续写"})
+	if !h.startEngine(nil) {
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
+			Summary: "自动接力启动失败，请输入继续指令手动恢复"})
+		return false
+	}
+	return true
 }
 
 // Export 导出已完成章节为外部文件（当前仅支持 TXT）。
 //
 // 与 ImportFrom 不同：导出是只读操作（不动 Progress / Checkpoint），
-// 因此**不要求 Coordinator 空闲**——写作中途也可以随时导出"现阶段成品"。
+// 因此**不要求 Engine 停机**——写作中途也可以随时导出"现阶段成品"。
 // 只读到 Progress.CompletedChapters + 章节终稿 + 大纲 + premise 的一致快照。
 func (h *Host) Export(ctx context.Context, opts exp.Options) (*exp.Result, error) {
 	return exp.Run(ctx, exp.Deps{Store: h.store}, opts)

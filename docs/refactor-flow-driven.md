@@ -1,6 +1,8 @@
 # 重构提案：Hybrid Coordinator — Host 路由 × LLM 裁定
 
-> 状态：**已采纳并落地**（2026-04-20）
+> **历史文档，已废弃。** Hybrid Coordinator 于 2026-07-12 被 Engine + Arbiter 架构取代；现行设计见 `docs/architecture.md`、`docs/engine-rfc.md`。本文仅保留决策演进记录，不得作为实现依据。
+>
+> 原状态：**已采纳并落地**（2026-04-20）
 > 调研时间：2026-04-20
 > 对应现行文档：`docs/architecture.md` §2 / §3 / §7 / §8 / §13 已同步更新
 >
@@ -79,15 +81,14 @@ SubAgent 执行
 
 **LLM 实际上只是在"执行" Reminder 给它的指令**。这中间环节既消耗 tokens，又引入不确定性（LLM 可能不完全遵守 reminder，比如观察到的 mid 路由错误）。
 
-### 2.3 工具层已经承担大量判断
+### 2.3 工具层曾承担过多语义判断
 
-- `save_review.evaluateScorecardGate()`：评分卡门禁，自动把 accept 升级到 polish/rewrite
-- `save_review.ContractStatus` 检查：contract=missed 自动升级为 rewrite
+- `save_review` 旧实现曾按固定评分阈值和 contract 状态覆盖 Editor verdict；现已删除，文学裁定归 Editor，工具只做协议校验与原子状态映射
 - `commit_chapter.CheckArcBoundary()`：即时计算 `arc_end / needs_expansion / needs_new_volume`
 - `commit_chapter.applyCompletion()`：即时判定 `book_complete`
 - `CommitResult` 返回 17 个事实字段
 
-**结论**：工具层已经把大部分"判断"代码化了，Coordinator 拿到这些事实做的决策基本就是 if-else。
+**结论**：确定性的存储与阶段不变量留在工具层，文学和语义判断交给模型。
 
 ### 2.4 现状的实际成本
 
@@ -505,7 +506,7 @@ LLM 驱动创作与裁定，Host 驱动流程路由。
 ### 6.3 事实层一致性的前置依赖
 
 - Router 基于 Progress + Checkpoint 做决策，事实层必须可靠
-- 当前 `withWriteLock` 封装良好，commit_chapter 的三件套原子完成
+- 单文件 `withWriteLock` + tmp/rename 保证原子替换；`commit_chapter` 跨文件步骤由 PendingCommit 完整载荷、正文快照和阶段化幂等重放恢复，结构操作则按同参数修复派生视图；均不宣称数据库式原子事务
 - 但如果事实层出现不一致（如 Progress 说第 3 章完成但 chapters/ 下没有），Router 会做错决策
 - 建议：启动时加一次**事实层一致性检查**（如发现 Progress.CompletedChapters 与 chapters/ 目录对不上，报 warning）
 
@@ -650,5 +651,5 @@ Hybrid 方案规避了前 4 条问题，第 5 条降为微调，第 6 条通过"
 - `internal/host/observer.go` — 新订阅 EventToolExecEnd 触发 Router
 - `internal/host/flow/` — 新增包
 - `internal/tools/commit_chapter.go` L220-280 — CommitResult 17 字段已完备
-- `internal/tools/save_review.go` L76-116 — verdict 升级与 Flow 迁移已代码化
+- `internal/tools/save_review.go` — Editor verdict 到 Flow/返工队列的原子映射
 - `internal/store/outline.go` `CheckArcBoundary` — 弧边界事实 API

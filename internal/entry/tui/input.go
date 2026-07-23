@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -9,7 +8,76 @@ import (
 	"github.com/voocel/ainovel-cli/internal/host"
 )
 
-// renderInputBox 渲染底部输入区。
+const resetForeground = "\x1b[39m"
+
+// highlightCommandToken 只给已确认的命令 token 着色，保留 textarea 原有的
+// 光标、反色和换行 ANSI 序列。参数从第一个空白字符开始，始终使用正文颜色。
+func highlightCommandToken(inputView, inputValue, commandToken string) string {
+	if commandToken == "" {
+		return inputView
+	}
+	fields := strings.Fields(inputValue)
+	if len(fields) == 0 || fields[0] != commandToken {
+		return inputView
+	}
+	plain := ansi.Strip(inputView)
+	start := strings.Index(plain, commandToken)
+	if start < 0 {
+		return inputView
+	}
+	return highlightANSIByteRange(inputView, start, start+len(commandToken))
+}
+
+// highlightANSIByteRange 在剥离 ANSI 后的字节区间上覆盖前景色。区间内若遇到
+// textarea 自己的 SGR（例如反色光标），会在其后重新下发强调色；区间结束只重置
+// 前景色，不清掉光标的其他终端属性。
+func highlightANSIByteRange(value string, start, end int) string {
+	if start < 0 || end <= start {
+		return value
+	}
+	marker := lipgloss.NewStyle().Foreground(colorAccent).Render("x")
+	markerAt := strings.IndexByte(marker, 'x')
+	if markerAt <= 0 {
+		return value
+	}
+	accent := marker[:markerAt]
+
+	var out strings.Builder
+	out.Grow(len(value) + len(accent)*2 + len(resetForeground))
+	plainPos := 0
+	active := false
+	var state byte
+	for len(value) > 0 {
+		sequence, _, size, nextState := ansi.DecodeSequence(value, state, nil)
+		state = nextState
+		plain := ansi.Strip(sequence)
+		if plain == "" {
+			out.WriteString(sequence)
+			if active {
+				out.WriteString(accent)
+			}
+			value = value[size:]
+			continue
+		}
+		if !active && plainPos == start {
+			out.WriteString(accent)
+			active = true
+		}
+		out.WriteString(sequence)
+		value = value[size:]
+		plainPos += len(plain)
+		if active && plainPos >= end {
+			out.WriteString(resetForeground)
+			active = false
+		}
+	}
+	if active {
+		out.WriteString(resetForeground)
+	}
+	return out.String()
+}
+
+// renderInputBox 渲染底部输入区：输入框、快捷键提示行、最底部用量状态栏。
 // 输入框单独负责输入与提示，不承载启动模式栏。
 func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir string, width int) string {
 	innerW := width - 4 // border + padding
@@ -21,9 +89,8 @@ func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir str
 	prompt := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("❯ ")
 	inputLine := prompt + inputView
 
-	// 提示行：左快捷键，右进度
-	info := buildRightInfo(snap, outputDir)
-	line2 := joinInlineSides(hints, info, innerW)
+	// 提示行：快捷键独占整行——模型/花费等运行信息移入底部状态栏，不再挤在右侧互相截断。
+	line2 := fitInlineLine(hints, innerW)
 
 	// 输入区（单一盒子，避免视觉上出现双输入框）
 	inputStyle := lipgloss.NewStyle().
@@ -39,57 +106,10 @@ func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir str
 		Padding(0, 2)
 	hintBlock := hintStyle.Render(line2)
 
-	return inputBlock + "\n" + hintBlock + "\n"
-}
+	// 状态栏占用输入区原有的末尾空行：整块高度不变，layoutHeights 无需调整。
+	statusBlock := hintStyle.Render(renderStatusBar(snap, outputDir, innerW))
 
-// buildRightInfo 构建右侧信息：provider · model(window) · 花费 · 目录。
-// 章节/字数等进度信息由左侧"概览"面板承载，这里不再重复。
-func buildRightInfo(snap host.UISnapshot, outputDir string) string {
-	var parts []string
-
-	if snap.Provider != "" {
-		parts = append(parts, snap.Provider)
-	}
-	if snap.ModelName != "" {
-		if suffix := modelInfoSuffix(snap); suffix != "" {
-			parts = append(parts, snap.ModelName+"("+suffix+")")
-		} else {
-			parts = append(parts, snap.ModelName)
-		}
-	}
-	if cost := formatCostUSD(snap.TotalCostUSD); cost != "" {
-		parts = append(parts, cost)
-	}
-	if outputDir != "" {
-		parts = append(parts, "./"+filepath.Base(outputDir))
-	}
-
-	if len(parts) == 0 {
-		return lipgloss.NewStyle().Foreground(colorDim).Render("READY")
-	}
-	return lipgloss.NewStyle().Foreground(colorDim).Render(strings.Join(parts, " · "))
-}
-
-func modelInfoSuffix(snap host.UISnapshot) string {
-	var parts []string
-	if w := formatContextWindow(snap.ModelContextWindow); w != "" {
-		parts = append(parts, w)
-	}
-	if t := formatThinkingLevel(snap.ThinkingLevel); t != "" {
-		parts = append(parts, t)
-	}
-	return strings.Join(parts, ",")
-}
-
-func formatThinkingLevel(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "":
-		return "auto"
-	case "medium":
-		return "med"
-	default:
-		return strings.ToLower(strings.TrimSpace(level))
-	}
+	return inputBlock + "\n" + hintBlock + "\n" + statusBlock
 }
 
 func joinInlineSides(left, right string, width int) string {

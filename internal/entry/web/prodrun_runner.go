@@ -821,7 +821,7 @@ func (pm *prodRunManager) ApproveFoundation(id string) (*ProdRun, error) {
 // natively từ sandbox dir có sẵn output.
 //
 // steer (tùy chọn):干预文本, ghi vào sandbox meta/run.json qua store API
-// (SetPendingSteer + AppendSteerEntry) TRƯỚC khi start child. Headless Resume()
+// (SetPendingSteer) TRƯỚC khi start child. Headless Resume()
 // (host.go:374) đọc pending_steer và inject vào Coordinator ngay chương kế — đây
 // là seam host đã có sẵn, web adapter chỉ ghi file, zero đụng host/headless.
 // Lưu ý: steer là干预 mềm (Coordinator đánh giá & áp theo coordinator.md), không
@@ -866,11 +866,6 @@ func (pm *prodRunManager) ResumeFailed(id, steer string) (*ProdRun, error) {
 			st := store.NewStore(runOutDir)
 			if err := st.RunMeta.SetPendingSteer(steer); err != nil {
 				fmt.Fprintf(os.Stderr, "prodrun: resume steer SetPendingSteer %s: %v\n", id, err)
-			} else if err := st.RunMeta.AppendSteerEntry(domain.SteerEntry{
-				Input:     steer,
-				Timestamp: time.Now().Format(time.RFC3339),
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "prodrun: resume steer AppendSteerEntry %s: %v\n", id, err)
 			}
 		} else {
 			fmt.Fprintf(os.Stderr, "prodrun: resume steer skipped %s: no existing output (fresh StartPrepared, not Resume)\n", id)

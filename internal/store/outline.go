@@ -1,9 +1,12 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
+	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
@@ -143,6 +146,8 @@ type ArcBoundary struct {
 	IsVolumeEnd    bool
 	Volume         int
 	Arc            int
+	StartChapter   int
+	EndChapter     int
 	NextVolume     int
 	NextArc        int
 	NeedsExpansion bool
@@ -166,21 +171,24 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 		volume, arc    int
 		chInArc        int
 		arcLen         int
+		arcStart       int
 	}
 
 	ch := 1
 	var cur *arcPos
 	for vi, v := range volumes {
 		for ai, a := range v.Arcs {
+			arcStart := ch
 			for ci := range a.Chapters {
 				if ch == chapter {
 					cur = &arcPos{
-						volIdx:  vi,
-						arcIdx:  ai,
-						volume:  v.Index,
-						arc:     a.Index,
-						chInArc: ci,
-						arcLen:  len(a.Chapters),
+						volIdx:   vi,
+						arcIdx:   ai,
+						volume:   v.Index,
+						arc:      a.Index,
+						chInArc:  ci,
+						arcLen:   len(a.Chapters),
+						arcStart: arcStart,
 					}
 				}
 				ch++
@@ -192,8 +200,10 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 	}
 
 	b := &ArcBoundary{
-		Volume: cur.volume,
-		Arc:    cur.arc,
+		Volume:       cur.volume,
+		Arc:          cur.arc,
+		StartChapter: cur.arcStart,
+		EndChapter:   cur.arcStart + cur.arcLen - 1,
 	}
 
 	isLastChInArc := cur.chInArc == cur.arcLen-1
@@ -235,7 +245,17 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 }
 
 // expandArcUnlocked 内部方法，在 Store.ExpandArc 跨域协调中调用。
-func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, chapters []domain.OutlineEntry) ([]domain.VolumeOutline, error) {
+func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, expansion domain.ArcExpansion) ([]domain.VolumeOutline, error) {
+	if strings.TrimSpace(expansion.Title) == "" {
+		return nil, fmt.Errorf("弧标题不能为空")
+	}
+	if strings.TrimSpace(expansion.Goal) == "" {
+		return nil, fmt.Errorf("弧目标不能为空")
+	}
+	if len(expansion.Chapters) == 0 {
+		return nil, fmt.Errorf("展开弧必须至少包含一章")
+	}
+
 	var volumes []domain.VolumeOutline
 	if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
 		return nil, fmt.Errorf("load layered_outline: %w", err)
@@ -249,7 +269,23 @@ func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, chapters []domai
 			if volumes[vi].Arcs[ai].Index != arcIdx {
 				continue
 			}
-			volumes[vi].Arcs[ai].Chapters = chapters
+			if volumes[vi].Arcs[ai].IsExpanded() {
+				current := domain.ArcExpansion{
+					Title:    volumes[vi].Arcs[ai].Title,
+					Goal:     volumes[vi].Arcs[ai].Goal,
+					Chapters: volumes[vi].Arcs[ai].Chapters,
+				}
+				if reflect.DeepEqual(current, expansion) {
+					// 幂等重试仍须重写下方所有派生视图；上次可能只完成了
+					// layered_outline.json，尚未写 flat outline/Markdown。
+					found = true
+					break
+				}
+				return nil, fmt.Errorf("arc already expanded: volume=%d, arc=%d", volumeIdx, arcIdx)
+			}
+			volumes[vi].Arcs[ai].Title = expansion.Title
+			volumes[vi].Arcs[ai].Goal = expansion.Goal
+			volumes[vi].Arcs[ai].Chapters = expansion.Chapters
 			volumes[vi].Arcs[ai].EstimatedChapters = 0
 			found = true
 			break
@@ -283,10 +319,17 @@ func (s *OutlineStore) appendVolumeUnlocked(vol domain.VolumeOutline) ([]domain.
 	if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
 		return nil, fmt.Errorf("load layered_outline: %w", err)
 	}
-	if err := validateAppendVolume(volumes, vol); err != nil {
-		return nil, err
+	// AppendVolume 的下一步还要更新 Progress。若进程在“大纲已追加、Progress
+	// 未更新”之间中断，恢复会用同一持久化载荷重试；完全相同的末卷应视为幂等，
+	// 让同参数重试继续补齐 Progress，而不是因重复 Index 永久卡死。
+	if len(volumes) == 0 || !reflect.DeepEqual(volumes[len(volumes)-1], vol) {
+		if err := validateAppendVolume(volumes, vol); err != nil {
+			return nil, err
+		}
+		volumes = append(volumes, vol)
 	}
-	volumes = append(volumes, vol)
+	// 即使末卷已存在也重写全部派生视图；上次可能恰好在 layered JSON 落盘后、
+	// flat outline/Markdown 写入前中断。
 	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
 		return nil, err
 	}
@@ -339,6 +382,23 @@ func (s *OutlineStore) LoadCompass() (*domain.StoryCompass, error) {
 	return &c, nil
 }
 
+// SaveFoundationAudit 保存 Architect 对当前基础设定版本的语义审查。
+func (s *OutlineStore) SaveFoundationAudit(a domain.FoundationAudit) error {
+	return s.io.WriteJSON("meta/foundation_audit.json", a)
+}
+
+// LoadFoundationAudit 读取最近一次基础设定语义审查。
+func (s *OutlineStore) LoadFoundationAudit() (*domain.FoundationAudit, error) {
+	var a domain.FoundationAudit
+	if err := s.io.ReadJSON("meta/foundation_audit.json", &a); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &a, nil
+}
+
 func renderLayeredOutline(volumes []domain.VolumeOutline) string {
 	var b strings.Builder
 	b.WriteString("# 分层大纲\n\n")
@@ -384,4 +444,97 @@ func renderOutline(entries []domain.OutlineEntry) string {
 		}
 	}
 	return b.String()
+}
+
+// ── Writer 大纲反馈池 ──
+//
+// commit_chapter 的 feedback(偏离/建议)持久化于此,architect 下次结构操作
+// (expand_arc / append_volume / update_compass)经 novel_context 消费后清空。
+// 事实闭环:工具落盘 → 上下文注入 → 结构操作即消费(docs/engine-arbiter.md 阻断1)。
+
+// ChapterFeedback 一条带章节号的大纲反馈。
+type ChapterFeedback struct {
+	Chapter    int    `json:"chapter"`
+	Deviation  string `json:"deviation,omitempty"`
+	Suggestion string `json:"suggestion,omitempty"`
+	At         string `json:"at"`
+}
+
+const outlineFeedbackFile = "meta/outline_feedback.jsonl"
+
+// AppendOutlineFeedback 追加一条 writer 反馈。相同章节与内容视为同一事实，
+// 使 commit 在 ProgressMarked 前崩溃重放时不会重复累加附属反馈。
+func (s *OutlineStore) AppendOutlineFeedback(fb ChapterFeedback) error {
+	return s.io.WithWriteLock(func() error {
+		existing, err := s.io.ReadFileUnlocked(outlineFeedbackFile)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		currentFeedback, err := parseOutlineFeedback(existing)
+		if err != nil {
+			return err
+		}
+		for _, current := range currentFeedback {
+			if current.Chapter == fb.Chapter && current.Deviation == fb.Deviation && current.Suggestion == fb.Suggestion {
+				return nil
+			}
+		}
+		if fb.At == "" {
+			fb.At = time.Now().Format(time.RFC3339)
+		}
+		data, err := json.Marshal(fb)
+		if err != nil {
+			return err
+		}
+		return s.io.AppendLineUnlocked(outlineFeedbackFile, append(data, '\n'))
+	})
+}
+
+// LoadPendingOutlineFeedback 读取未消费的反馈(旧→新)。损坏行显式返回错误，
+// 防止 Architect 在缺失部分反馈的上下文上继续结构操作并随后清空原文件。
+func (s *OutlineStore) LoadPendingOutlineFeedback() ([]ChapterFeedback, error) {
+	s.io.mu.RLock()
+	defer s.io.mu.RUnlock()
+	data, err := os.ReadFile(s.io.path(outlineFeedbackFile))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseOutlineFeedback(data)
+}
+
+func parseOutlineFeedback(data []byte) ([]ChapterFeedback, error) {
+	var out []ChapterFeedback
+	for lineNo, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var fb ChapterFeedback
+		if err := json.Unmarshal([]byte(line), &fb); err != nil {
+			return nil, fmt.Errorf("parse %s line %d: %w", outlineFeedbackFile, lineNo+1, err)
+		}
+		out = append(out, fb)
+	}
+	return out, nil
+}
+
+// ClearOutlineFeedback 清空反馈池(architect 结构操作成功 = 反馈已被参考)。
+func (s *OutlineStore) ClearOutlineFeedback() error {
+	s.io.mu.Lock()
+	defer s.io.mu.Unlock()
+	data, err := os.ReadFile(s.io.path(outlineFeedbackFile))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := parseOutlineFeedback(data); err != nil {
+		return err
+	}
+	err = os.Remove(s.io.path(outlineFeedbackFile))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

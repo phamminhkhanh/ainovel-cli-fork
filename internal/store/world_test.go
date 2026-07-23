@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/rules"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -153,6 +154,23 @@ func TestForeshadow_UpdateLifecycle(t *testing.T) {
 	active, _ := s.World.LoadActiveForeshadow()
 	if len(active) != 1 || active[0].ID != "f1" {
 		t.Errorf("active: want [f1], got %v", active)
+	}
+}
+
+func TestForeshadow_RejectsUnknownAndInvalidOperations(t *testing.T) {
+	s := newTestStore(t)
+	for _, update := range []domain.ForeshadowUpdate{
+		{ID: "missing", Action: "advance"},
+		{ID: "missing", Action: "resolve"},
+		{ID: "f1", Action: "unknown"},
+		{ID: "f1", Action: "plant"},
+	} {
+		if err := s.World.UpdateForeshadow(1, []domain.ForeshadowUpdate{update}); err == nil {
+			t.Fatalf("expected rejection for %+v", update)
+		}
+	}
+	if ledger, err := s.World.LoadForeshadowLedger(); err != nil || len(ledger) != 0 {
+		t.Fatalf("invalid operations must not mutate ledger: %+v err=%v", ledger, err)
 	}
 }
 
@@ -363,5 +381,40 @@ func TestRenderWorldRules(t *testing.T) {
 	// 无 boundary 不应输出空边界行
 	if strings.Contains(md, "边界：\n") {
 		t.Error("empty boundary rendered")
+	}
+}
+
+// TestRuleViolationsContract 违规事实存储契约(第五轮评审):
+// 同章最新覆盖旧记录;重写后空列表视为已清;跨重启可读。
+func TestRuleViolationsContract(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.World.SaveRuleViolations(3, []rules.Violation{
+		{Rule: "fatigue_words", Target: "不禁", Actual: 9, Severity: rules.SeverityWarning},
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got := s.World.LoadRuleViolations(3); len(got) != 1 || got[0].Target != "不禁" {
+		t.Fatalf("首次读取: %+v", got)
+	}
+
+	// 同章重写:最新记录(空列表=已清)覆盖旧违规
+	if err := s.World.SaveRuleViolations(3, nil); err != nil {
+		t.Fatalf("save empty: %v", err)
+	}
+	if got := s.World.LoadRuleViolations(3); len(got) != 0 {
+		t.Fatalf("重写后旧违规应被清除: %+v", got)
+	}
+
+	// 其他章不受影响 + 跨重启(新 Store 实例)可读
+	if err := s.World.SaveRuleViolations(5, []rules.Violation{{Rule: "forbidden_phrases", Target: "某种程度上", Actual: 2, Severity: rules.SeverityWarning}}); err != nil {
+		t.Fatalf("save ch5: %v", err)
+	}
+	s2 := NewStore(dir)
+	if got := s2.World.LoadRuleViolations(5); len(got) != 1 || got[0].Rule != "forbidden_phrases" {
+		t.Fatalf("跨重启读取: %+v", got)
+	}
+	if got := s2.World.LoadRuleViolations(99); got != nil {
+		t.Fatalf("无记录章节应返回 nil: %+v", got)
 	}
 }
