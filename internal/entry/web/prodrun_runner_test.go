@@ -1830,6 +1830,108 @@ func TestRunnerStartFiltersRulesByLanguage(t *testing.T) {
 	}
 }
 
+// TestRunnerStartContinueNeutralizesSeededAdvanceGate guards the stall fix: the
+// workspace seed copies meta/, so a host workspace left in /review on mode would
+// hand the sandbox advance_mode=review. The gate would then pause every new
+// chapter waiting for /next, which the Cockpit cannot grant (no advance
+// endpoint, headless child has no TUI) — the job would hang forever. The
+// sandbox must be forced back to auto with permit/hold cleared, while the facts
+// that make run.json unexcludable (plan_start / start_prompt) survive.
+func TestRunnerStartContinueNeutralizesSeededAdvanceGate(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	hostDir := t.TempDir()
+	writeWorkspaceProgress(t, hostDir, []int{1, 2}, domain.PhaseWriting)
+	if err := os.MkdirAll(filepath.Join(hostDir, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "chapters", "01.md"), []byte("chapter 1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Host workspace as left by a TUI session that ran /review on and signed a
+	// one-shot hold, plus the planning facts that must not be dropped.
+	hostMeta := domain.RunMeta{
+		StartedAt:            "2026-07-25T00:00:00Z",
+		Model:                "m",
+		StartPrompt:          "viết tiếp truyện",
+		AdvanceMode:          domain.ChapterAdvanceReview,
+		AdvancePermitChapter: 3,
+		AdvanceHold:          &domain.AdvanceHold{After: domain.AdvanceHoldAtBoundary, Reason: "kiểm tra nhịp"},
+	}
+	hostMetaData, err := json.Marshal(hostMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostRunJSON := filepath.Join(hostDir, "meta", "run.json")
+	if err := os.WriteFile(hostRunJSON, hostMetaData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err := newProdRunStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newProdRunRunner(ps, "ainovel-cli", repoRoot, hostDir, bootstrap.Config{})
+	runner.pollInterval = 10 * time.Second
+	runner.cmdFactory = func(name string, args ...string) *exec.Cmd { return helperCommand(100) }
+
+	seed, err := seedMetaForWorkspace(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ps.createWithOptions(prodRunCreateOptions{
+		Kind:           prodRunKindContinueWorkspace,
+		Name:           "continue-review",
+		TargetChapters: 5,
+		BudgetUSD:      1,
+		SeededFrom:     seed,
+		Chapters:       seed.CompletedChapters,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := runner.start(r.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	sandboxRunJSON := filepath.Join(ps.runDir(r.ID), "output", "novel", "meta", "run.json")
+	data, err := os.ReadFile(sandboxRunJSON)
+	if err != nil {
+		t.Fatalf("read sandbox run.json: %v", err)
+	}
+	var got domain.RunMeta
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse sandbox run.json: %v", err)
+	}
+	if got.AdvanceMode != domain.ChapterAdvanceAuto {
+		t.Fatalf("sandbox advance_mode = %q, want auto (review mode would stall the job)", got.AdvanceMode)
+	}
+	if got.AdvancePermitChapter != 0 {
+		t.Fatalf("sandbox advance_permit_chapter = %d, want 0 (engine rejects auto mode carrying a permit)", got.AdvancePermitChapter)
+	}
+	if got.AdvanceHold != nil {
+		t.Fatalf("sandbox advance_hold = %+v, want nil (one-shot hold would pause the job)", got.AdvanceHold)
+	}
+	// run.json is seeded (not excluded) precisely because these survive.
+	if got.StartPrompt != hostMeta.StartPrompt {
+		t.Fatalf("sandbox start_prompt = %q, want %q", got.StartPrompt, hostMeta.StartPrompt)
+	}
+
+	// The host workspace must be untouched: the gate is neutralized in the
+	// sandbox only, and the seed fingerprint check runs against the host.
+	hostAfter, err := os.ReadFile(hostRunJSON)
+	if err != nil {
+		t.Fatalf("read host run.json: %v", err)
+	}
+	var hostGot domain.RunMeta
+	if err := json.Unmarshal(hostAfter, &hostGot); err != nil {
+		t.Fatalf("parse host run.json: %v", err)
+	}
+	if hostGot.AdvanceMode != domain.ChapterAdvanceReview || hostGot.AdvancePermitChapter != 3 || hostGot.AdvanceHold == nil {
+		t.Fatalf("host run.json was mutated: %+v", hostGot)
+	}
+}
+
 // TestHasPauseMarker pins the pause-marker list that poll uses to flip a
 // running run to paused. It guards the regression fix for the Engine+Arbiter
 // merge: the new engine emits 已暂停 (e.g. 已暂停，等待人工介入) on self-pause,

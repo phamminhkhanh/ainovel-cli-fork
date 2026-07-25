@@ -249,4 +249,5 @@ output/
 - **Mỗi job = 1 cuốn sách mới** — vì `--prompt-file` luôn truyền prompt → engine luôn `StartPrepared` (sách mới), không bao giờ `Resume` (tiếp tục dở).
 - **Sách thủ công không bị đụng** — vì job chạy ở `output/jobs/run-XXX/`, tách biệt với workspace chính `output/novel/`.
 - **Sync ngược về workspace** — nếu workspace đã có chương, sync bị chặn (409). Cần `force: true` → **xóa sạch** chương thủ công + toàn bộ meta, rồi copy sách của job vào. **Không có merge** — đây là overwrite.
+- **Job continue luôn chạy chế độ tự động** — job `continue_workspace` copy cả `meta/` của workspace chính sang sandbox, trong đó có chế độ duyệt chương (`advance_mode`). Nếu bạn từng bật `/review on` trên TUI, sandbox sẽ thừa hưởng chế độ duyệt và job đứng chờ `/next` mãi (Cockpit không có nút này). Vì vậy sau khi seed, Cockpit **tự ép sandbox về `auto`** và xoá lệnh tạm dừng một lần. Workspace chính của bạn **không bị đổi** — muốn duyệt từng chương thì làm trên TUI.
 - **Crash Web UI** → run đang `running` bị `failed` + `PossiblyOrphaned` → kiểm tra PID cũ và kill tay nếu cần.

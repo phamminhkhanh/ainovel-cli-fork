@@ -481,6 +481,17 @@ func prepareRunDir(runDir, repoRoot, hostDir string, r *ProdRun, baseCfg bootstr
 		if _, err := copyWorkspaceSeed(runOutDir, hostDir); err != nil {
 			return fmt.Errorf("seed workspace: %w", err)
 		}
+		// The seed copies the host workspace's meta/, including RunMeta's
+		// advance_mode / advance_permit_chapter / advance_hold. If the user ever
+		// ran /review on in the TUI, the sandbox would inherit review mode and
+		// the gate would pause every new chapter waiting for /next — which the
+		// Cockpit cannot grant (no advance endpoint, no TUI on a headless child),
+		// stalling the job forever. Neutralize the gate in the sandbox only.
+		// meta/run.json cannot simply be excluded from the seed: plan_start is
+		// the sole recovery fact for a planning-phase crash.
+		if err := forceSandboxAutoAdvance(runOutDir); err != nil {
+			return fmt.Errorf("neutralize seeded advance gate: %w", err)
+		}
 		after, err := fingerprintHostWorkspace(hostDir)
 		if err != nil {
 			return err
@@ -554,6 +565,37 @@ func readCompletedChapters(path string) int {
 func runDirHasExistingOutput(runDir string) bool {
 	_, err := os.Stat(filepath.Join(runDir, "output", "novel", "meta", "progress.json"))
 	return err == nil
+}
+
+// forceSandboxAutoAdvance resets a continue run's seeded chapter-advance gate to
+// auto inside the sandbox. The seed copies the host workspace's meta/ verbatim,
+// so a workspace left in review mode (TUI /review on) would make the sandboxed
+// engine pause before every new chapter waiting for a /next the Cockpit cannot
+// send. Clearing mode/permit/hold is sandbox-only and never touches the user's
+// workspace. No-op when the seed carries no run.json (fresh book) or is already
+// auto with no leftovers.
+func forceSandboxAutoAdvance(novelDir string) error {
+	st := store.NewStore(novelDir)
+	meta, err := st.RunMeta.Load()
+	if err != nil {
+		return err
+	}
+	if meta == nil {
+		return nil
+	}
+	// SetAdvanceMode(auto) also clears the chapter permit under the same write
+	// lock; the engine rejects an auto mode that still carries a permit.
+	if meta.AdvanceMode != domain.ChapterAdvanceAuto || meta.AdvancePermitChapter != 0 {
+		if err := st.RunMeta.SetAdvanceMode(domain.ChapterAdvanceAuto); err != nil {
+			return err
+		}
+	}
+	if meta.AdvanceHold != nil {
+		if err := st.RunMeta.ClearAdvanceHold(*meta.AdvanceHold); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // readWorkspacePhase returns the Phase string from a progress.json, or ""

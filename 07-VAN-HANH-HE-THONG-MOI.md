@@ -241,23 +241,31 @@ Cockpit = tab **Sản xuất** trong Web UI: xếp job headless, giám sát ti�
 | Nguồn pause | Tool `save_pause_point` (v0.6.1, đã xóa) | Engine tự pause: deadlock circuit-breaker, worker-failure abort, gate lỗi (`pauseWithNotify`) | Trạng thái `Tạm dừng` đổi ý nghĩa: không còn "pause point sau rewrite" |
 | Khi engine pause | Process chờ input (headless treo ở pause point) | `runEnded` → gửi `done` → **child process exit code 0** | Cockpit **không còn job paused sống** — engine pause = process thoát |
 | Log pause | `等待用户输入` / `用户暂停` | `已暂停等待人工介入` → `引擎停止 (已完成 N 章)` | **Marker cũ không match nữa** (xem bẫy bên dưới) |
-| Advance gate | (không có) | Chỉ gắn TUI; headless chạy auto | Job Cockpit luôn auto, không duyệt từng chương |
+| Advance gate | (không có) | Chỉ gắn TUI; state persist trong `meta/run.json` | Job Cockpit luôn `auto` — sandbox bị ép auto sau khi seed (xem bẫy 2), không duyệt từng chương |
 
-### Bẫy vận hành đã xác nhận — job pause bị gán nhãn sai "Hoàn thành"
+### Bẫy 1 — job pause bị gán nhãn sai "Hoàn thành" (ĐÃ FIX)
 
-1. Runner poll marker pause trong `run.log`: `等待用户输入 / 等待输入 / paused / 用户暂停` (`prodrun_runner.go`).
-2. Engine mới log `已暂停等待人工介入` rồi `引擎停止 (已完成 N 章)` — **không marker nào khớp**.
-3. Child exit 0 → `waitProc` thấy `err == nil` → gán job **`Hoàn thành`** dù truyện ví dụ mới xong 5/50 chương.
+1. Runner poll marker pause trong `run.log`: `等待用户输入 / 等待输入 / paused / 用户暂停` — engine mới log `已暂停等待人工介入` rồi `引擎停止 (已完成 N 章)`, **không marker nào khớp**.
+2. Child exit 0 → `waitProc` thấy `err == nil` → gán job **`Hoàn thành`** dù truyện mới xong ví dụ 5/50 chương.
 
-→ Khi thấy job "Hoàn thành" sớm bất thường: mở `run.log` tìm `已暂停` / `引擎停止` — đó là engine đã pause giữa chừng (deadlock / worker failure), không phải viết xong. Đọc thêm `meta/decisions.jsonl` trong runDir để biết arbiter đã phán gì.
+**Fix (commit `963b848`):** `waitProc` phân loại theo tiến độ thật qua helper `runFinished()` — `phase=complete` **hoặc** `chapters >= target` → `completed`; ngược lại → `paused` + stopReason `engine_paused`. Marker list thêm `已暂停`.
 
-**Fix code (đề xuất, chưa áp dụng):** trong `waitProc` (`prodrun_runner.go`), khi `err == nil` mà `completed_chapters < targetChapters` (hoặc progress Phase ≠ Complete) → gán `paused`/`failed` kèm stopReason kiểu `engine_paused` thay vì `completed`. File thuộc `internal/entry/web/` (code của ta, sửa không ảnh hưởng merge upstream).
+→ Job dừng giữa chừng giờ hiện **`Tạm dừng` / lý do `engine_paused`**. Mở `run.log` tìm `已暂停`, và `meta/decisions.jsonl` trong runDir để biết arbiter đã phán gì.
+
+### Bẫy 2 — job `continue_workspace` bế tắc vĩnh viễn vì advance gate (ĐÃ FIX)
+
+1. `advance_mode` / `advance_permit_chapter` / `advance_hold` nằm trong **`meta/run.json`** (`domain/runtime.go`).
+2. `shouldExcludeWorkspaceSeed` không loại `meta/run.json` → seed mang nguyên mode từ workspace chính vào sandbox.
+3. Engine init **giữ** mode đã persist (`store/run_meta.go`: `meta.AdvanceMode = existing.AdvanceMode`).
+4. Nếu bạn từng gõ `/review on` ở TUI → job pause ở chương forward đầu tiên, chờ `/next` mà **web không có endpoint nào gửi được** → treo mãi.
+
+**Fix (cùng loạt):** sau khi seed, `forceSandboxAutoAdvance()` ép sandbox về `auto` + clear permit/hold. Chỉ ghi trong sandbox — workspace chính giữ nguyên `/review` của bạn. Không exclude `meta/run.json` khỏi seed được vì `plan_start` là dữ kiện khôi phục duy nhất khi crash ở giai đoạn quy hoạch.
 
 ### Checklist chạy batch sau merge
 
 - [ ] Chạy thử 1 job nhỏ (2-3 chương) — xác nhận spawn/poll/kill/export bình thường.
-- [ ] Nhớ bẫy gán nhãn ở trên: mở `run.log` kiểm tra trước khi tin trạng thái `Hoàn thành`.
-- [ ] Muốn duyệt từng chương thì dùng TUI (`/review on`) — Cockpit/headless không có gate.
+- [ ] Job dừng sớm: đọc lý do dừng — `engine_paused` = engine tự pause, không phải viết xong.
+- [ ] Muốn duyệt từng chương thì dùng TUI (`/review on`) — Cockpit/headless luôn chạy `auto` (cố ý).
 
 ---
 
