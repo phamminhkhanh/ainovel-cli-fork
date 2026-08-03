@@ -201,6 +201,7 @@ func commitArgs(chapter int, f ImportedChapterFacts) map[string]any {
 	}
 	args := map[string]any{
 		"chapter":         chapter,
+		"title":           f.Title,
 		"summary":         f.Summary,
 		"characters":      f.Characters,
 		"key_events":      keyEvents,

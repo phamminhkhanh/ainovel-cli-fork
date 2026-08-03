@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/errs"
 )
 
 // OutlineStore 管理故事前提、大纲（扁平/分层）和指南针。
@@ -33,11 +34,15 @@ func (s *OutlineStore) LoadPremise() (string, error) {
 // SaveOutline 同时保存 outline.json 和 outline.md（原子写入）。
 func (s *OutlineStore) SaveOutline(entries []domain.OutlineEntry) error {
 	return s.io.WithWriteLock(func() error {
-		if err := s.io.WriteJSONUnlocked("outline.json", entries); err != nil {
-			return err
-		}
-		return s.io.WriteMarkdownUnlocked("outline.md", renderOutline(entries))
+		return s.saveOutlineUnlocked(entries)
 	})
+}
+
+func (s *OutlineStore) saveOutlineUnlocked(entries []domain.OutlineEntry) error {
+	if err := s.io.WriteJSONUnlocked("outline.json", entries); err != nil {
+		return err
+	}
+	return s.io.WriteMarkdownUnlocked("outline.md", renderOutline(entries))
 }
 
 // LoadOutline 从 outline.json 读取结构化大纲。
@@ -297,17 +302,7 @@ func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, expansion domain
 	if !found {
 		return nil, fmt.Errorf("arc not found: volume=%d, arc=%d", volumeIdx, arcIdx)
 	}
-	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
-		return nil, err
-	}
-	if err := s.io.WriteMarkdownUnlocked("layered_outline.md", renderLayeredOutline(volumes)); err != nil {
-		return nil, err
-	}
-	flat := domain.FlattenOutline(volumes)
-	if err := s.io.WriteJSONUnlocked("outline.json", flat); err != nil {
-		return nil, err
-	}
-	if err := s.io.WriteMarkdownUnlocked("outline.md", renderOutline(flat)); err != nil {
+	if err := s.saveLayeredViewsUnlocked(volumes); err != nil {
 		return nil, err
 	}
 	return volumes, nil
@@ -330,20 +325,105 @@ func (s *OutlineStore) appendVolumeUnlocked(vol domain.VolumeOutline) ([]domain.
 	}
 	// 即使末卷已存在也重写全部派生视图；上次可能恰好在 layered JSON 落盘后、
 	// flat outline/Markdown 写入前中断。
-	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
-		return nil, err
-	}
-	if err := s.io.WriteMarkdownUnlocked("layered_outline.md", renderLayeredOutline(volumes)); err != nil {
-		return nil, err
-	}
-	flat := domain.FlattenOutline(volumes)
-	if err := s.io.WriteJSONUnlocked("outline.json", flat); err != nil {
-		return nil, err
-	}
-	if err := s.io.WriteMarkdownUnlocked("outline.md", renderOutline(flat)); err != nil {
+	if err := s.saveLayeredViewsUnlocked(volumes); err != nil {
 		return nil, err
 	}
 	return volumes, nil
+}
+
+// saveLayeredViewsUnlocked 以分层大纲为唯一来源，统一重建其 Markdown 与扁平派生视图。
+// 调用方必须持有 OutlineStore 的写锁。
+func (s *OutlineStore) saveLayeredViewsUnlocked(volumes []domain.VolumeOutline) error {
+	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
+		return err
+	}
+	if err := s.io.WriteMarkdownUnlocked("layered_outline.md", renderLayeredOutline(volumes)); err != nil {
+		return err
+	}
+	if err := s.saveOutlineUnlocked(domain.FlattenOutline(volumes)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *OutlineStore) reviseFlatTailUnlocked(fromChapter int, replacement []domain.OutlineEntry) ([]domain.OutlineEntry, error) {
+	var outline []domain.OutlineEntry
+	if err := s.io.ReadJSONUnlocked("outline.json", &outline); err != nil {
+		return nil, fmt.Errorf("load outline: %w: %w", errs.ErrStoreRead, err)
+	}
+	if fromChapter > len(outline)+1 {
+		return nil, fmt.Errorf("from_chapter=%d 超出大纲末尾 %d: %w",
+			fromChapter, len(outline), errs.ErrToolPrecondition)
+	}
+	updated := append([]domain.OutlineEntry(nil), outline[:fromChapter-1]...)
+	updated = append(updated, replacement...)
+	if len(updated) == 0 {
+		return nil, fmt.Errorf("修订后大纲不能为空: %w", errs.ErrToolPrecondition)
+	}
+	for i := range updated {
+		updated[i].Chapter = i + 1
+	}
+	if err := s.saveOutlineUnlocked(updated); err != nil {
+		return nil, fmt.Errorf("save outline: %w: %w", errs.ErrStoreWrite, err)
+	}
+	return updated, nil
+}
+
+func (s *OutlineStore) reviseLayeredTailUnlocked(fromChapter int, replacement []domain.OutlineEntry) ([]domain.VolumeOutline, error) {
+	var volumes []domain.VolumeOutline
+	if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
+		return nil, fmt.Errorf("load layered_outline: %w: %w", errs.ErrStoreRead, err)
+	}
+	if err := reviseLayeredTail(volumes, fromChapter, replacement); err != nil {
+		return nil, fmt.Errorf("%w: %w", errs.ErrToolPrecondition, err)
+	}
+	if err := s.saveLayeredViewsUnlocked(volumes); err != nil {
+		return nil, fmt.Errorf("save layered outline: %w: %w", errs.ErrStoreWrite, err)
+	}
+	return volumes, nil
+}
+
+// reviseLayeredTail 替换 fromChapter 所在弧从该章起的尾段。若 fromChapter 正好
+// 位于当前扁平大纲末尾之后，则追加到最后一个已展开弧。
+func reviseLayeredTail(volumes []domain.VolumeOutline, fromChapter int, replacement []domain.OutlineEntry) error {
+	chapter := 1
+	targetVolume, targetArc, local := -1, -1, -1
+	lastVolume, lastArc := -1, -1
+	for vi := range volumes {
+		for ai := range volumes[vi].Arcs {
+			chapters := volumes[vi].Arcs[ai].Chapters
+			if len(chapters) == 0 {
+				continue
+			}
+			lastVolume, lastArc = vi, ai
+			if fromChapter >= chapter && fromChapter < chapter+len(chapters) {
+				targetVolume, targetArc = vi, ai
+				local = fromChapter - chapter
+				break
+			}
+			chapter += len(chapters)
+		}
+		if targetVolume >= 0 {
+			break
+		}
+	}
+	if targetVolume < 0 && fromChapter == chapter && lastVolume >= 0 {
+		targetVolume, targetArc = lastVolume, lastArc
+		local = len(volumes[lastVolume].Arcs[lastArc].Chapters)
+	}
+	if targetVolume < 0 {
+		return fmt.Errorf("from_chapter=%d 不在已展开大纲范围内", fromChapter)
+	}
+
+	arc := &volumes[targetVolume].Arcs[targetArc]
+	updated := append([]domain.OutlineEntry(nil), arc.Chapters[:local]...)
+	updated = append(updated, replacement...)
+	if len(updated) == 0 {
+		return fmt.Errorf("修订后目标弧不能为空")
+	}
+	arc.Chapters = updated
+	arc.EstimatedChapters = 0
+	return nil
 }
 
 func validateAppendVolume(existing []domain.VolumeOutline, vol domain.VolumeOutline) error {

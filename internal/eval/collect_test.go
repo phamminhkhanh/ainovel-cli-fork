@@ -127,6 +127,23 @@ func TestChapterTitleUsesLayeredEntryChapter(t *testing.T) {
 	}
 }
 
+func TestChapterTitleUsesCommittedTitle(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{{Chapter: 1, Title: "计划标题"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 1, Title: "终稿标题"}); err != nil {
+		t.Fatal(err)
+	}
+	got := chapterTitle(s, 1, "# 正文标题\n\n内容", func(string, error) {})
+	if got != "终稿标题" {
+		t.Fatalf("chapterTitle = %q, want committed title", got)
+	}
+}
+
 func containsString(items []string, sub string) bool {
 	for _, item := range items {
 		if strings.Contains(item, sub) {

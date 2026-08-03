@@ -37,10 +37,11 @@ type Host struct {
 	cfg             bootstrap.Config
 	bundle          assets.Bundle
 	store           *storepkg.Store
+	bookLease       *bookLease
+	styleStats      *tools.StyleStatsIndex
 	models          *bootstrap.ModelSet
 	engine          *engine
 	thinkingApplier agents.ApplyThinking // /model 调推理强度时联动各 Worker
-	askUser         *tools.AskUserTool
 	writerRestore   *ctxpack.WriterRestorePack
 	userRules       *userrules.Service
 	observer        *observer
@@ -90,6 +91,21 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	if err := cfg.ValidateBase(); err != nil {
 		return nil, err
 	}
+
+	bookLease, err := acquireBookLease(cfg.OutputDir)
+	if err != nil {
+		return nil, err
+	}
+	keepBookLease := false
+	defer func() {
+		if keepBookLease {
+			return
+		}
+		if err := bookLease.Close(); err != nil {
+			slog.Error("释放小说目录占用失败", "module", "host", "dir", cfg.OutputDir, "err", err)
+		}
+	}()
+
 	slog.Info("启动", "module", "boot", "provider", cfg.Provider, "model", cfg.ModelName, "output", cfg.OutputDir)
 
 	// 起后台 goroutine 从 OpenRouter 刷新模型元数据（窗口/价格），磁盘缓存 24h。
@@ -136,7 +152,8 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 
 	// onGuardBlock 前置声明:h 构造后才能挂事件浮出闭包。
 	var onGuardBlock func(agent, reason string, consecutive int32)
-	workers, askUser, restore, applyThinking := agents.BuildWorkers(cfg, store, models, bundle, usage.Record,
+	styleStats := tools.NewStyleStatsIndex(store)
+	workers, restore, applyThinking := agents.BuildWorkers(cfg, store, styleStats, models, bundle, usage.Record,
 		func(agent, reason string, consecutive int32) {
 			if onGuardBlock != nil {
 				onGuardBlock(agent, reason, consecutive)
@@ -148,9 +165,10 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		cfg:             cfg,
 		bundle:          bundle,
 		store:           store,
+		bookLease:       bookLease,
+		styleStats:      styleStats,
 		models:          models,
 		thinkingApplier: applyThinking,
-		askUser:         askUser,
 		writerRestore:   restore,
 		userRules:       userrules.NewService(store, models.Default, rules.DefaultOptions()),
 		usage:           usage,
@@ -237,6 +255,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		onDone:  h.runEnded,
 	}
 
+	keepBookLease = true
 	return h, nil
 }
 
@@ -874,6 +893,9 @@ func (h *Host) Close() {
 		close(h.done)
 		close(h.events)
 		close(h.streamCh)
+		if err := h.bookLease.Close(); err != nil {
+			slog.Error("释放小说目录占用失败", "module", "host", "dir", h.cfg.OutputDir, "err", err)
+		}
 	})
 }
 
@@ -956,11 +978,10 @@ func (h *Host) runEndBody(novelName, summary string) string {
 // 不再用独立 clearCh —— 双通道无序导致 ✻ header 时常落到上一个 round 末尾。
 const StreamClearSentinel = "\x00\x00CLEAR\x00\x00"
 
-func (h *Host) Events() <-chan Event        { return h.events }
-func (h *Host) Stream() <-chan string       { return h.streamCh }
-func (h *Host) Done() <-chan struct{}       { return h.done }
-func (h *Host) Dir() string                 { return h.store.Dir() }
-func (h *Host) AskUser() *tools.AskUserTool { return h.askUser }
+func (h *Host) Events() <-chan Event  { return h.events }
+func (h *Host) Stream() <-chan string { return h.streamCh }
+func (h *Host) Done() <-chan struct{} { return h.done }
+func (h *Host) Dir() string           { return h.store.Dir() }
 
 // ── 事件发射 ──
 
@@ -1159,9 +1180,25 @@ func (h *Host) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 		snap.Premise = truncate(premise, 80)
 	}
 	if outline, _ := h.store.Outline.LoadOutline(); len(outline) > 0 {
+		completed := make(map[int]struct{})
+		if progress != nil {
+			completed = make(map[int]struct{}, len(progress.CompletedChapters))
+			for _, chapter := range progress.CompletedChapters {
+				completed[chapter] = struct{}{}
+			}
+		}
 		for _, e := range outline {
+			title := e.Title
+			if _, ok := completed[e.Chapter]; ok {
+				summary, err := h.store.Summaries.LoadSummary(e.Chapter)
+				if err != nil {
+					slog.Warn("章节标题投影失败", "module", "host.snapshot", "chapter", e.Chapter, "err", err)
+				} else if summary != nil && strings.TrimSpace(summary.Title) != "" {
+					title = summary.Title
+				}
+			}
 			snap.Outline = append(snap.Outline, OutlineSnapshot{
-				Chapter: e.Chapter, Title: e.Title, CoreEvent: e.CoreEvent,
+				Chapter: e.Chapter, Title: title, CoreEvent: e.CoreEvent,
 			})
 		}
 	}
@@ -1535,7 +1572,7 @@ func (h *Host) ImportFrom(ctx context.Context, opts imp.Options) (<-chan imp.Eve
 
 	deps := imp.Deps{
 		Store:         h.store,
-		CommitChapter: tools.NewCommitChapterTool(h.store),
+		CommitChapter: tools.NewCommitChapterTool(h.store, h.styleStats),
 		Segment:       h.importCaller("segment"),
 		Analyze:       h.importCaller("analyze"),
 		Synthesize:    h.importCaller("synthesize"),

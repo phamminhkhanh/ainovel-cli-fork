@@ -219,6 +219,24 @@ func TestRoute_NormalContinue(t *testing.T) {
 	}
 }
 
+func TestRoute_NonLayeredOutlineExhaustedDispatchesArchitect(t *testing.T) {
+	p := &domain.Progress{
+		Phase:             domain.PhaseWriting,
+		Flow:              domain.FlowWriting,
+		CompletedChapters: []int{1, 2, 3},
+		TotalChapters:     3,
+	}
+	got := Route(State{Progress: p, LastCompleted: 3, PlanningTier: domain.PlanningTierShort})
+	if got == nil || got.Agent != "architect_short" {
+		t.Fatalf("expected architect_short at outline exhaustion, got %+v", got)
+	}
+	for _, want := range []string{"complete_book", "revise_outline", "第 4 章"} {
+		if !strings.Contains(got.Task, want) {
+			t.Errorf("task missing %q: %s", want, got.Task)
+		}
+	}
+}
+
 func TestRoute_ArcEndNonLayeredSkipsBoundary(t *testing.T) {
 	// 非 Layered 模式即使 ArcBoundary 非 nil 也不走弧末分支
 	p := &domain.Progress{

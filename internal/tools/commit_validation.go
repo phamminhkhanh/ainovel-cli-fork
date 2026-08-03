@@ -11,6 +11,9 @@ import (
 // validateCommitArgs 在创建 PendingCommit 前校验模型提交的完整语义载荷。
 // 错误直接返回模型修正；不生成半成品状态，也不猜测缺失值。
 func (t *CommitChapterTool) validateCommitArgs(a commitArgs) error {
+	if strings.TrimSpace(a.Title) == "" {
+		return fmt.Errorf("title is required: %w", errs.ErrToolArgs)
+	}
 	if strings.TrimSpace(a.Summary) == "" {
 		return fmt.Errorf("summary is required: %w", errs.ErrToolArgs)
 	}

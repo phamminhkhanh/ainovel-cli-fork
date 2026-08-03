@@ -33,7 +33,7 @@ func (t *PlanChapterTool) ConcurrencySafe(_ json.RawMessage) bool { return false
 func (t *PlanChapterTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号")).Required(),
-		schema.Property("title", schema.String("章节标题")).Required(),
+		schema.Property("title", schema.String("暂定章节标题；写作后可按正文调整")).Required(),
 		schema.Property("goal", schema.String("本章目标")).Required(),
 		schema.Property("conflict", schema.String("核心冲突")).Required(),
 		schema.Property("hook", schema.String("章末钩子")).Required(),

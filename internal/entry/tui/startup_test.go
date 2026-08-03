@@ -7,7 +7,7 @@ import (
 )
 
 func TestEnterStartingSwitchesToWorkbenchImmediately(t *testing.T) {
-	m := NewModel(nil, nil, "")
+	m := NewModel(nil, "")
 	m.width = 120
 	m.height = 40
 	m.resizeTextarea()
@@ -36,7 +36,7 @@ func TestEnterStartingSwitchesToWorkbenchImmediately(t *testing.T) {
 }
 
 func TestStartupFailureStaysInWorkbench(t *testing.T) {
-	m := NewModel(nil, nil, "")
+	m := NewModel(nil, "")
 	m.width = 120
 	m.height = 40
 	m.resizeTextarea()
@@ -64,7 +64,7 @@ func TestStartupFailureStaysInWorkbench(t *testing.T) {
 }
 
 func TestApplyStartupPromptEventTruncatesSummaryButKeepsDetail(t *testing.T) {
-	m := NewModel(nil, nil, "")
+	m := NewModel(nil, "")
 	prompt := strings.Repeat("设", maxPromptEventCols+50)
 
 	m.applyStartupPromptEvent(prompt)

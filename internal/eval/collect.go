@@ -143,6 +143,11 @@ func collectStyle(s *store.Store, prog *domain.Progress, check func(string, erro
 }
 
 func chapterTitle(s *store.Store, chapter int, text string, check func(string, error)) string {
+	summary, err := s.Summaries.LoadSummary(chapter)
+	check(fmt.Sprintf("summary:%d", chapter), err)
+	if summary != nil && strings.TrimSpace(summary.Title) != "" {
+		return summary.Title
+	}
 	entries, err := s.Outline.LoadOutline()
 	check("outline", err)
 	for _, entry := range entries {

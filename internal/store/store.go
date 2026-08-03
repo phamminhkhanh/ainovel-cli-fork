@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/errs"
 )
 
 // Store 是状态管理的组合根，持有所有子存储。
@@ -263,6 +264,64 @@ func (s *Store) AppendVolume(vol domain.VolumeOutline) error {
 	}
 	p.TotalChapters = domain.TotalChapters(volumes)
 	return s.Progress.saveUnlocked(p)
+}
+
+// ReviseOutline 从 fromChapter 起替换尚未发生的计划尾段。
+// 扁平大纲替换全书尾段；分层大纲只替换目标章所在弧的尾段。这个定义让同一载荷
+// 重放仍得到同一结果，同时避免 JSON Patch 和 insert/delete 等操作枚举。
+func (s *Store) ReviseOutline(fromChapter int, replacement []domain.OutlineEntry) (int, error) {
+	if fromChapter <= 0 {
+		return 0, fmt.Errorf("from_chapter must be > 0: %w", errs.ErrToolArgs)
+	}
+
+	s.crossMu.Lock()
+	defer s.crossMu.Unlock()
+
+	s.Outline.io.mu.Lock()
+	defer s.Outline.io.mu.Unlock()
+	s.Progress.io.mu.Lock()
+	defer s.Progress.io.mu.Unlock()
+
+	p, err := s.Progress.loadUnlocked()
+	if err != nil {
+		return 0, fmt.Errorf("load progress: %w: %w", errs.ErrStoreRead, err)
+	}
+	if p == nil {
+		return 0, fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
+	}
+	if p.Phase == domain.PhaseComplete {
+		return 0, fmt.Errorf("全书已完结，不允许修改大纲: %w", errs.ErrToolPrecondition)
+	}
+	protected := p.InProgressChapter
+	if latest := p.LatestCompleted(); latest > protected {
+		protected = latest
+	}
+	if fromChapter <= protected {
+		return 0, fmt.Errorf("第 %d 章已完成或正在写作；大纲修订必须从第 %d 章之后开始: %w",
+			fromChapter, protected, errs.ErrToolPrecondition)
+	}
+
+	if p.Layered {
+		volumes, err := s.Outline.reviseLayeredTailUnlocked(fromChapter, replacement)
+		if err != nil {
+			return 0, err
+		}
+		p.TotalChapters = domain.TotalChapters(volumes)
+		if err := s.Progress.saveUnlocked(p); err != nil {
+			return 0, fmt.Errorf("save progress: %w: %w", errs.ErrStoreWrite, err)
+		}
+		return p.TotalChapters, nil
+	}
+
+	outline, err := s.Outline.reviseFlatTailUnlocked(fromChapter, replacement)
+	if err != nil {
+		return 0, err
+	}
+	p.TotalChapters = len(outline)
+	if err := s.Progress.saveUnlocked(p); err != nil {
+		return 0, fmt.Errorf("save progress: %w: %w", errs.ErrStoreWrite, err)
+	}
+	return p.TotalChapters, nil
 }
 
 // ClearHandledSteer 清除 PendingSteer 并重置旧版 FlowSteering 状态。

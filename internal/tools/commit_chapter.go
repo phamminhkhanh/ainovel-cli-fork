@@ -21,11 +21,17 @@ import (
 
 // CommitChapterTool 提交章节：加载正文 → 保存终稿 → 生成摘要 → 更新状态 → 更新进度。
 type CommitChapterTool struct {
-	store *store.Store
+	store      *store.Store
+	styleStats *StyleStatsIndex
 }
 
-func NewCommitChapterTool(store *store.Store) *CommitChapterTool {
-	return &CommitChapterTool{store: store}
+// NewCommitChapterTool 创建提交工具。styleStats 必须与 novel_context 共享，
+// 保证新增、重写与恢复完成后刷新同一份统计索引。
+func NewCommitChapterTool(store *store.Store, styleStats *StyleStatsIndex) *CommitChapterTool {
+	if styleStats == nil {
+		panic("tools: NewCommitChapterTool requires StyleStatsIndex")
+	}
+	return &CommitChapterTool{store: store, styleStats: styleStats}
 }
 
 // commitOutput 在 domain.CommitResult 之上嵌入扩展字段，保持 domain 包不依赖 rules。
@@ -39,6 +45,7 @@ type commitOutput struct {
 // PendingCommit；崩溃恢复一律重放这份冻结意图，忽略新 Worker 生成的参数和草稿。
 type commitArgs struct {
 	Chapter             int                        `json:"chapter"`
+	Title               string                     `json:"title"`
 	Summary             string                     `json:"summary"`
 	Characters          []string                   `json:"characters"`
 	KeyEvents           []string                   `json:"key_events"`
@@ -94,6 +101,7 @@ func (t *CommitChapterTool) Schema() map[string]any {
 	feedbackSchema["description"] = "对后续大纲的建议对象；必须直接传 JSON object，不要传字符串化 JSON"
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号")).Required(),
+		schema.Property("title", schema.String("与终稿正文一致的最终标题")).Required(),
 		schema.Property("summary", schema.String("本章内容摘要（200字以内）")).Required(),
 		schema.Property("characters", schema.Array("本章出场角色名", schema.String(""))).Required(),
 		schema.Property("key_events", schema.Array("本章关键事件", schema.String(""))).Required(),
@@ -176,7 +184,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	}
 	if existingPending == nil && completed {
 		if slices.Contains(progress.PendingRewrites, a.Chapter) {
-			content, err := t.validateRewriteDraft(a.Chapter, progress)
+			content, err := t.validateRewriteDraft(a.Chapter, a.Title, progress)
 			if err != nil {
 				return nil, err
 			}
@@ -279,7 +287,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 
 		// 3. 保存摘要
 		summary := domain.ChapterSummary{
-			Chapter: a.Chapter, Summary: a.Summary, Characters: a.Characters, KeyEvents: a.KeyEvents,
+			Chapter: a.Chapter, Title: a.Title, Summary: a.Summary, Characters: a.Characters, KeyEvents: a.KeyEvents,
 		}
 		if err := t.store.Summaries.SaveSummary(summary); err != nil {
 			return nil, fmt.Errorf("save summary: %w: %w", errs.ErrStoreWrite, err)
@@ -468,6 +476,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	if err := t.store.World.SaveRuleViolations(a.Chapter, violations); err != nil {
 		slog.Warn("机械违规落盘失败", "module", "tools", "chapter", a.Chapter, "err", err)
 	}
+	t.refreshStyleStats(a.Chapter, content)
 	return output, nil
 }
 
@@ -490,6 +499,7 @@ func (t *CommitChapterTool) finishPendingCommit(pending domain.PendingCommit, pr
 	if err := t.store.Signals.ClearPendingCommit(); err != nil {
 		return nil, fmt.Errorf("clear pending commit: %w: %w", errs.ErrStoreWrite, err)
 	}
+	t.refreshStyleStats(pending.Chapter, pending.DraftContent)
 	if len(pending.Output) > 0 {
 		return append(json.RawMessage(nil), pending.Output...), nil
 	}
@@ -499,7 +509,7 @@ func (t *CommitChapterTool) finishPendingCommit(pending domain.PendingCommit, pr
 	return t.buildSkipResult(pending.Chapter, progress)
 }
 
-func (t *CommitChapterTool) validateRewriteDraft(chapter int, progress *domain.Progress) (string, error) {
+func (t *CommitChapterTool) validateRewriteDraft(chapter int, title string, progress *domain.Progress) (string, error) {
 	content, _, err := t.store.Drafts.LoadChapterContent(chapter)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: load chapter content: %w: %w", errs.ErrStoreRead, err)
@@ -507,25 +517,41 @@ func (t *CommitChapterTool) validateRewriteDraft(chapter int, progress *domain.P
 	if content == "" {
 		return "", fmt.Errorf("no content found for chapter %d: %w", chapter, errs.ErrToolPrecondition)
 	}
-	existingFinal, err := t.store.Drafts.LoadChapterText(chapter)
+	changed, err := t.rewriteChanged(chapter, content, title)
 	if err != nil {
-		return "", fmt.Errorf("rewrite: load final chapter: %w: %w", errs.ErrStoreRead, err)
+		return "", err
 	}
-	if existingFinal == "" || existingFinal != content {
+	if changed {
 		return content, nil
 	}
 	mode := "重写"
 	if progress != nil && progress.Flow == domain.FlowPolishing {
 		mode = "打磨"
 	}
-	return "", fmt.Errorf("第 %d 章 drafts 与 chapters 内容完全相同，未检测到%s改动。请先调 draft_chapter(mode=write, chapter=%d) 写入%s后的新正文，再 commit_chapter: %w",
-		chapter, mode, chapter, mode, errs.ErrToolPrecondition)
+	return "", fmt.Errorf("第 %d 章正文和标题均未发生变化，未检测到%s改动: %w",
+		chapter, mode, errs.ErrToolPrecondition)
+}
+
+func (t *CommitChapterTool) rewriteChanged(chapter int, content, title string) (bool, error) {
+	existingFinal, err := t.store.Drafts.LoadChapterText(chapter)
+	if err != nil {
+		return false, fmt.Errorf("rewrite: load final chapter: %w: %w", errs.ErrStoreRead, err)
+	}
+	if existingFinal != content {
+		return true, nil
+	}
+	summary, err := t.store.Summaries.LoadSummary(chapter)
+	if err != nil {
+		return false, fmt.Errorf("rewrite: load chapter summary: %w: %w", errs.ErrStoreRead, err)
+	}
+	return summary == nil || strings.TrimSpace(summary.Title) != strings.TrimSpace(title), nil
 }
 
 func (t *CommitChapterTool) appendCommitCheckpoint(chapter int) error {
-	_, err := t.store.Checkpoints.AppendArtifact(
+	_, err := t.store.Checkpoints.AppendArtifacts(
 		domain.ChapterScope(chapter), "commit",
 		fmt.Sprintf("chapters/%02d.md", chapter),
+		fmt.Sprintf("summaries/%02d.json", chapter),
 	)
 	return err
 }
@@ -553,19 +579,20 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 	}
 	wordCount := utf8.RuneCountInString(content)
 
-	// 2. 硬校验：drafts 与现终稿完全相同 → 判定为未真正打磨/重写（writer 跳过了 draft_chapter）
-	// 拒绝 commit，强制 writer 先调 draft_chapter(mode=write) 写入新版本。
-	existingFinal, err := t.store.Drafts.LoadChapterText(chapter)
-	if err != nil {
-		return nil, fmt.Errorf("rewrite: load final chapter: %w: %w", errs.ErrStoreRead, err)
-	}
-	if !recovering && existingFinal != "" && existingFinal == content {
-		mode := "重写"
-		if progress != nil && progress.Flow == domain.FlowPolishing {
-			mode = "打磨"
+	// 2. 正文或标题至少一项发生变化；标题打磨无需伪造正文改动。
+	if !recovering {
+		changed, err := t.rewriteChanged(chapter, content, a.Title)
+		if err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("第 %d 章 drafts 与 chapters 内容完全相同，未检测到%s改动。请先调 draft_chapter(mode=write, chapter=%d) 写入%s后的新正文，再 commit_chapter: %w",
-			chapter, mode, chapter, mode, errs.ErrToolPrecondition)
+		if !changed {
+			mode := "重写"
+			if progress != nil && progress.Flow == domain.FlowPolishing {
+				mode = "打磨"
+			}
+			return nil, fmt.Errorf("第 %d 章正文和标题均未发生变化，未检测到%s改动: %w",
+				chapter, mode, errs.ErrToolPrecondition)
+		}
 	}
 
 	if pending.Stage == domain.CommitStageStarted {
@@ -574,7 +601,7 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 			return nil, fmt.Errorf("rewrite: save final chapter: %w: %w", errs.ErrStoreWrite, err)
 		}
 		if err := t.store.Summaries.SaveSummary(domain.ChapterSummary{
-			Chapter: chapter, Summary: a.Summary, Characters: a.Characters, KeyEvents: a.KeyEvents,
+			Chapter: chapter, Title: a.Title, Summary: a.Summary, Characters: a.Characters, KeyEvents: a.KeyEvents,
 		}); err != nil {
 			return nil, fmt.Errorf("rewrite: save summary: %w: %w", errs.ErrStoreWrite, err)
 		}
@@ -686,7 +713,24 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 	if err := t.store.World.SaveRuleViolations(chapter, violations); err != nil {
 		slog.Warn("机械违规落盘失败", "module", "tools", "chapter", chapter, "err", err)
 	}
+	t.refreshStyleStats(chapter, content)
 	return output, nil
+}
+
+func (t *CommitChapterTool) refreshStyleStats(chapter int, content string) {
+	if content == "" {
+		var err error
+		content, err = t.store.Drafts.LoadChapterText(chapter)
+		if err != nil {
+			slog.Error("风格统计索引更新失败", "module", "tools", "chapter", chapter, "err", err)
+			return
+		}
+		if content == "" {
+			slog.Error("风格统计索引更新失败", "module", "tools", "chapter", chapter, "err", errors.New("终稿不存在"))
+			return
+		}
+	}
+	t.styleStats.ChapterCommitted(chapter, content)
 }
 
 // buildSkipResult 为"章节已完成的重复提交"构造与正常 commit 对齐的事实返回。

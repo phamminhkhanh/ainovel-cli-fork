@@ -28,6 +28,7 @@ type ChapterContract struct {
 // ChapterSummary 章节摘要，供后续章节的上下文窗口使用。
 type ChapterSummary struct {
 	Chapter    int      `json:"chapter"`
+	Title      string   `json:"title"`
 	Summary    string   `json:"summary"`
 	Characters []string `json:"characters"`
 	KeyEvents  []string `json:"key_events"`

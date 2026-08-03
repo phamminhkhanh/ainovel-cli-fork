@@ -66,8 +66,6 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleOverlayKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch {
-	case m.askState != nil:
-		return m.handleBlockingModalKey(msg, m.handleAskUserKey)
 	case m.cocreate != nil:
 		return m.handleBlockingModalKey(msg, m.handleCoCreateKey)
 	case m.modelConfig != nil:
@@ -389,7 +387,7 @@ func (m Model) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
-	if m.modelSwitch != nil || m.modelConfig != nil || m.askState != nil {
+	if m.modelSwitch != nil || m.modelConfig != nil {
 		return m, nil
 	}
 	if pane, ok := m.paneAtMouse(msg.X, msg.Y); ok {
@@ -457,14 +455,6 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, tea.Batch(fetchSnapshot(m.runtime), enableMouse, m.textarea.Focus()), true
 		}
 		return m, fetchSnapshot(m.runtime), true
-	case askUserMsg:
-		m.askState = newAskUserState(askUserRequest(msg))
-		m.textarea.Blur()
-		m.applyEvent(host.Event{
-			Time: time.Now(), Category: "SYSTEM", Summary: "等待用户补充关键信息", Level: "info",
-		})
-		m.refreshEventViewport()
-		return m, listenAskUser(m.askBridge), true
 	case snapshotMsg:
 		m.snapshot = host.UISnapshot(msg)
 		m.syncRuntimePlaceholder()

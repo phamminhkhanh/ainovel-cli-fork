@@ -27,7 +27,7 @@ import (
 // (docs/engine-rfc.md)。单 goroutine 串行,控制状态只在循环边界变更。
 type engine struct {
 	store   *storepkg.Store
-	workers *subagent.Tool
+	workers *subagent.Runner
 
 	arbiterModel    agentcore.ChatModel
 	failurePrompt   string

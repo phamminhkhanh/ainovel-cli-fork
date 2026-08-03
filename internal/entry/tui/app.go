@@ -22,8 +22,6 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, version string) error {
 	if err != nil {
 		return err
 	}
-	bridge := newAskUserBridge()
-	rt.AskUser().SetHandler(bridge.handler)
 	cleanup, err := logger.SetupFile(rt.Dir(), "tui.log", false)
 	var logWarning error
 	if err != nil {
@@ -34,7 +32,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, version string) error {
 	defer cleanup()
 	defer rt.Close()
 
-	m := NewModel(rt, bridge, version)
+	m := NewModel(rt, version)
 	if logWarning != nil {
 		m.err = logWarning
 		m.applyEvent(host.Event{

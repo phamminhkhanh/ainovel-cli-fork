@@ -104,6 +104,26 @@ func (cs *CheckpointStore) AppendArtifact(scope domain.Scope, step, artifact str
 	return cs.Append(scope, step, artifact, "sha256:"+hex.EncodeToString(sum[:]))
 }
 
+// AppendArtifacts 为同一步骤的多个正式工件生成组合指纹。
+// Artifact 保留第一个主工件路径；任一关联工件变化都会产生新 checkpoint。
+func (cs *CheckpointStore) AppendArtifacts(scope domain.Scope, step string, artifacts ...string) (*domain.Checkpoint, error) {
+	if len(artifacts) == 0 {
+		return cs.Append(scope, step, "", "")
+	}
+	h := sha256.New()
+	for _, artifact := range artifacts {
+		data, err := cs.io.ReadFile(artifact)
+		if err != nil {
+			return nil, fmt.Errorf("digest artifact %s: %w", artifact, err)
+		}
+		_, _ = h.Write([]byte(artifact))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write(data)
+		_, _ = h.Write([]byte{0})
+	}
+	return cs.Append(scope, step, artifacts[0], "sha256:"+hex.EncodeToString(h.Sum(nil)))
+}
+
 // Latest 返回指定 scope 的最新 checkpoint。
 func (cs *CheckpointStore) Latest(scope domain.Scope) *domain.Checkpoint {
 	cs.io.mu.RLock()

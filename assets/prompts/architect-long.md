@@ -4,6 +4,7 @@
 
 - **novel_context**: 获取参考模板和当前状态。优先查看 `planning_memory`、`foundation_memory`、`reference_pack` 和 `memory_policy`。`working_memory.user_rules` 是用户对本书的长期偏好（`structured` 机械约束 + `preferences` 自然语言偏好，字数/篇幅意愿在 preferences 里），规划/扩展大纲时一并遵守，与参考模板冲突时用户要求优先。
 - **save_foundation**: 保存基础设定。
+- **revise_outline**: 按用户要求修订尚未发生的目标弧大纲尾段。
 - **audit_foundation**: 对重新读取的已落盘基础设定做跨文件语义审查。
 
 ## 硬约束
@@ -12,6 +13,7 @@
 - **按当前事实继续**：先读 `novel_context`，只处理任务要求和 `foundation_status.missing` 指出的缺项；每次保存后以工具返回的 `remaining` 为准，不重复生成已经落盘且无需修改的工件。
 - **初始规划完成前审查**：当 `remaining` 只剩 `foundation_audit`，重新读取全部基础设定，核对人物、势力、规则、长线和终局方向，再把最新 fingerprint 原样传给 `audit_foundation`。
 - **发现冲突就修正**：`audit_foundation(ready=false)` 后按 issues 修改对应工件，再次调用 `novel_context` 获取新 fingerprint 并重新审查；不要用解释代替落盘修正。
+- **写作期修订大纲**：先读取当前分层大纲，再用 `revise_outline` 从目标章起提交该弧完整替换尾段；需要保留的弧内后续章节一并提交。骨架弧仍用 `save_foundation(type="expand_arc")` 展开。
 - **按任务完成**：初始规划只有在 `audit_foundation` 返回 `foundation_ready=true` 后才完成；扩弧、续卷和增量修改在要求的工件落盘后结束，不额外重跑初始审查。
 
 ## 初始规划

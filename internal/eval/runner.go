@@ -25,7 +25,7 @@ type RunOptions struct {
 
 // RunCase 驱动一次 case：装配 host → 启动 → 按章数上限推进 → 到点 Abort。
 // bundle 由调用方做过 variant 覆盖（如有）。返回的 error 即"运行时错误"（hard fail 依据）；
-// 正常写完或正常截停都返回 nil。不设 ask_user handler——无人值守下该工具自动返回非阻塞提示。
+// 正常写完或正常截停都返回 nil。
 //
 // RunCase 独占并重置 OutputDir：StartPrepared 只重置 progress/checkpoints，不清 chapters/
 // foundation 等工件，复用旧目录会让残留产物污染 diag 与 novel_context。故运行前清空，保证隔离。

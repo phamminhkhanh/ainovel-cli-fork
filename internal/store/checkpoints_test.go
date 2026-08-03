@@ -68,6 +68,39 @@ func TestCheckpointStore_Idempotent(t *testing.T) {
 	}
 }
 
+func TestCheckpointStore_AppendArtifactsTracksEveryArtifact(t *testing.T) {
+	cs, dir := newTestCheckpointStore(t)
+	if err := os.WriteFile(filepath.Join(dir, "chapter.md"), []byte("正文"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "summary.json"), []byte(`{"title":"旧标题"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := cs.AppendArtifacts(domain.ChapterScope(1), "commit", "chapter.md", "summary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := cs.AppendArtifacts(domain.ChapterScope(1), "commit", "chapter.md", "summary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Seq != first.Seq {
+		t.Fatalf("same artifact set should be idempotent: first=%d replay=%d", first.Seq, replayed.Seq)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "summary.json"), []byte(`{"title":"新标题"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := cs.AppendArtifacts(domain.ChapterScope(1), "commit", "chapter.md", "summary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Seq <= first.Seq {
+		t.Fatalf("changing one artifact must append a checkpoint: first=%d changed=%d", first.Seq, changed.Seq)
+	}
+}
+
 func TestCheckpointStore_EmptyDigestNotIdempotent(t *testing.T) {
 	cs, _ := newTestCheckpointStore(t)
 

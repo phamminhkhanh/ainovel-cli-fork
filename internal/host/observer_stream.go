@@ -138,12 +138,7 @@ func (o *observer) emitFallbackStreamHeader(tool string) {
 // 前缀会走 renderAgentBlock 路径渲染（图标 + 高亮 label + 分隔线），
 // 否则会落到正文块路径用终端默认色，header 看起来就是普通正文不醒目。
 func streamHeaderFallback(tool string) string {
-	label := tool
-	switch tool {
-	case "ask_user":
-		label = "向用户提问"
-	}
-	return "✻ " + label
+	return "✻ " + tool
 }
 
 // streamClear 通知 TUI 开启新一轮 streamRound，同时重置与段落分隔相关的状态。

@@ -79,6 +79,31 @@ func TestRun_HappyPath_DefaultsToNovelDir(t *testing.T) {
 	}
 }
 
+func TestRun_UsesCommittedTitleForCompletedChapter(t *testing.T) {
+	s, _ := newTestStore(t, "光斑", []int{1})
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{{Chapter: 1, Title: "计划标题"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{
+		Chapter: 1, Title: "终稿标题", Summary: "摘要",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Run(context.Background(), Deps{Store: s}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(res.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "第 1 章  终稿标题") || strings.Contains(text, "计划标题") {
+		t.Fatalf("export title projection is wrong:\n%s", text)
+	}
+}
+
 // TestRun_PremiseNotExported 端到端钉死：premise.md 存在也不进导出，书名保留（issue #27）。
 func TestRun_PremiseNotExported(t *testing.T) {
 	s, _ := newTestStore(t, "光斑", []int{1})

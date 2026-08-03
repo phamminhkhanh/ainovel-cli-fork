@@ -14,8 +14,12 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
+func newTestCommitChapterTool(st *store.Store) *CommitChapterTool {
+	return NewCommitChapterTool(st, NewStyleStatsIndex(st))
+}
+
 func TestCommitChapterSchemaDescribesFeedbackAsObject(t *testing.T) {
-	tool := NewCommitChapterTool(store.NewStore(t.TempDir()))
+	tool := newTestCommitChapterTool(store.NewStore(t.TempDir()))
 	if !tool.StrictSchema() {
 		t.Fatal("commit_chapter must use strict schema")
 	}
@@ -50,10 +54,10 @@ func TestCommitChapterRejectsUnknownForeshadowReferenceBeforePending(t *testing.
 		t.Fatal(err)
 	}
 	args, _ := json.Marshal(map[string]any{
-		"chapter": 1, "summary": "推进", "characters": []string{"主角"}, "key_events": []string{"发现线索"},
+		"chapter": 1, "title": "第一章", "summary": "推进", "characters": []string{"主角"}, "key_events": []string{"发现线索"},
 		"foreshadow_updates": []map[string]any{{"id": "missing", "action": "resolve"}},
 	})
-	if _, err := NewCommitChapterTool(s).Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "unknown id") {
+	if _, err := newTestCommitChapterTool(s).Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "unknown id") {
 		t.Fatalf("expected unknown foreshadow rejection, got %v", err)
 	}
 	if pending, err := s.Signals.LoadPendingCommit(); err != nil || pending != nil {
@@ -70,10 +74,10 @@ func TestCommitChapterRejectsInvalidNestedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	args, _ := json.Marshal(map[string]any{
-		"chapter": 1, "summary": "推进", "characters": []string{"主角"}, "key_events": []string{"发现线索"},
+		"chapter": 1, "title": "第一章", "summary": "推进", "characters": []string{"主角"}, "key_events": []string{"发现线索"},
 		"relationship_changes": []map[string]any{{"character_a": "主角", "character_b": "", "relation": "敌对"}},
 	})
-	if _, err := NewCommitChapterTool(s).Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "relationship_changes[0]") {
+	if _, err := newTestCommitChapterTool(s).Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "relationship_changes[0]") {
 		t.Fatalf("expected nested field rejection, got %v", err)
 	}
 }
@@ -100,9 +104,10 @@ func TestCommitChapterRejectsNonPendingRewrite(t *testing.T) {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
-	tool := NewCommitChapterTool(store)
+	tool := newTestCommitChapterTool(store)
 	args, err := json.Marshal(map[string]any{
 		"chapter":         3,
+		"title":           "第三章",
 		"summary":         "错误提交",
 		"characters":      []string{"主角"},
 		"key_events":      []string{"误提交"},
@@ -154,9 +159,10 @@ func TestCommitChapterAllowsPendingRewrite(t *testing.T) {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
-	tool := NewCommitChapterTool(store)
+	tool := newTestCommitChapterTool(store)
 	args, err := json.Marshal(map[string]any{
 		"chapter":         2,
+		"title":           "第二章",
 		"summary":         "正确提交",
 		"characters":      []string{"主角"},
 		"key_events":      []string{"完成重写"},
@@ -190,6 +196,72 @@ func TestCommitChapterAllowsPendingRewrite(t *testing.T) {
 	}
 }
 
+func TestCommitChapterRefreshesSharedStyleStatsAfterRewrite(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.Init("test", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatal(err)
+	}
+	completed := []int{1, 2, 3, 4, 5}
+	for _, chapter := range completed {
+		if err := s.Drafts.SaveFinalChapter(chapter, fmt.Sprintf("# 第%d章\n普通正文。\n故事继续。", chapter)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Progress.MarkChapterComplete(chapter, 100, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	styleStats := NewStyleStatsIndex(s)
+	before, err := styleStats.Snapshot(completed, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == nil {
+		t.Fatal("expected initialized style stats")
+	}
+
+	if err := s.Progress.SetPendingRewrites([]int{2}, "测试增量风格统计"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.SetFlow(domain.FlowRewriting); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Drafts.SaveDraft(2, "# 第二章\n他不是退缩，而是在等待。\n改写后的故事继续。"); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{
+		"chapter":    2,
+		"title":      "第二章",
+		"summary":    "完成增量统计测试重写",
+		"characters": []string{"主角"},
+		"key_events": []string{"完成重写"},
+	})
+	if _, err := NewCommitChapterTool(s, styleStats).Execute(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := styleStats.Snapshot(completed, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, pattern := range after.Patterns {
+		if strings.HasPrefix(pattern.Name, "矫正句") && pattern.Total == 1 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("rewrite did not refresh shared style stats: %+v", after.Patterns)
+	}
+}
+
 func TestCommitChapterRewriteRecoveryUsesFrozenDraft(t *testing.T) {
 	s := store.NewStore(t.TempDir())
 	if err := s.Init(); err != nil {
@@ -215,7 +287,7 @@ func TestCommitChapterRewriteRecoveryUsesFrozenDraft(t *testing.T) {
 	}
 
 	persistedArgs, err := json.Marshal(map[string]any{
-		"chapter": 2, "summary": "冻结摘要", "characters": []string{"主角"}, "key_events": []string{"冻结事件"},
+		"chapter": 2, "title": "冻结标题", "summary": "冻结摘要", "characters": []string{"主角"}, "key_events": []string{"冻结事件"},
 	})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -230,7 +302,7 @@ func TestCommitChapterRewriteRecoveryUsesFrozenDraft(t *testing.T) {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"chapter":2,"summary":"新参数不得采用"}`)); err != nil {
 		t.Fatalf("Execute recovery: %v", err)
 	}
@@ -275,9 +347,10 @@ func TestCommitChapterUpdatesCastLedger(t *testing.T) {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	args, _ := json.Marshal(map[string]any{
 		"chapter":    1,
+		"title":      "第一章",
 		"summary":    "林墨入住客栈",
 		"characters": []string{"林墨", "李清砚", "老周", "阿云"},
 		"key_events": []string{"入住"},
@@ -288,6 +361,13 @@ func TestCommitChapterUpdatesCastLedger(t *testing.T) {
 	})
 	if _, err := tool.Execute(context.Background(), args); err != nil {
 		t.Fatalf("Execute: %v", err)
+	}
+	summary, err := s.Summaries.LoadSummary(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary == nil || summary.Title != "第一章" {
+		t.Fatalf("committed title = %+v", summary)
 	}
 
 	entries, err := s.Cast.Load()
@@ -359,6 +439,7 @@ func TestCommitChapterReplayAfterPartialCommitDoesNotDuplicateWorldState(t *test
 	}
 	persistedArgs, _ := json.Marshal(map[string]any{
 		"chapter":            1,
+		"title":              "第一章",
 		"summary":            "林墨遇到黑影并突破",
 		"characters":         []string{"林墨"},
 		"key_events":         []string{"遇到黑影", "突破"},
@@ -379,10 +460,11 @@ func TestCommitChapterReplayAfterPartialCommitDoesNotDuplicateWorldState(t *test
 		t.Fatalf("overwrite draft: %v", err)
 	}
 
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	// 模拟重启后的 Writer 重新生成了不同参数；恢复必须忽略它，使用 persistedArgs。
 	args, _ := json.Marshal(map[string]any{
 		"chapter":         1,
+		"title":           "错误标题",
 		"summary":         "错误的新摘要",
 		"characters":      []string{"林墨"},
 		"key_events":      []string{"错误事件"},
@@ -437,6 +519,9 @@ func TestCommitChapterRecoversProgressMarkedWindowWithExactOutput(t *testing.T) 
 	if err := s.Drafts.SaveFinalChapter(1, "第一章终稿"); err != nil {
 		t.Fatalf("SaveFinalChapter: %v", err)
 	}
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 1, Title: "第一章", Summary: "摘要"}); err != nil {
+		t.Fatalf("SaveSummary: %v", err)
+	}
 	if err := s.Progress.MarkChapterComplete(1, 100, "mystery", "quest"); err != nil {
 		t.Fatalf("MarkChapterComplete: %v", err)
 	}
@@ -450,7 +535,7 @@ func TestCommitChapterRecoversProgressMarkedWindowWithExactOutput(t *testing.T) 
 		t.Fatalf("SavePendingCommit: %v", err)
 	}
 
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	got, err := tool.Execute(context.Background(), json.RawMessage(`{"chapter":1}`))
 	if err != nil {
 		t.Fatalf("Execute recovery: %v", err)
@@ -478,8 +563,7 @@ func TestCommitChapterRecoversProgressMarkedWindowWithExactOutput(t *testing.T) 
 }
 
 // TestCommitChapterRejectsPolishWithoutDraftChange 验证：已完成章节进入打磨/重写队列后，
-// 若 writer 跳过 draft_chapter 直接 commit（drafts 与 chapters 内容完全相同），
-// commit_chapter 必须拒绝，强制 writer 先调 draft_chapter 写入新版本。
+// 若正文和标题都没有变化，commit_chapter 必须拒绝空返工。
 // TestCommitChapterNonLayeredRecompletesAfterRework 验证非分层书完本后经 reopen 返工，
 // 改完章节 commit、队列排空时能自动重新回到 complete（补 drain 后判完结的非分层分支）。
 func TestCommitChapterNonLayeredRecompletesAfterRework(t *testing.T) {
@@ -519,9 +603,10 @@ func TestCommitChapterNonLayeredRecompletesAfterRework(t *testing.T) {
 	if err := s.Drafts.SaveDraft(2, ch2+"\n\n返工新增段落。"); err != nil {
 		t.Fatalf("SaveDraft (reworked): %v", err)
 	}
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	args, _ := json.Marshal(map[string]any{
 		"chapter":    2,
+		"title":      "第二章",
 		"summary":    "返工后摘要",
 		"characters": []string{"主角"},
 		"key_events": []string{"清理"},
@@ -611,9 +696,9 @@ func TestCommitChapterLayeredReopenRecompletesDespiteOpenThread(t *testing.T) {
 	if err := s.Drafts.SaveDraft(2, ch2+"\n\n返工新增段落。"); err != nil {
 		t.Fatalf("SaveDraft reworked: %v", err)
 	}
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	args, _ := json.Marshal(map[string]any{
-		"chapter": 2, "summary": "返工摘要", "characters": []string{"主角"}, "key_events": []string{"清理"},
+		"chapter": 2, "title": "第二章", "summary": "返工摘要", "characters": []string{"主角"}, "key_events": []string{"清理"},
 	})
 	raw, err := tool.Execute(context.Background(), args)
 	if err != nil {
@@ -656,6 +741,9 @@ func TestCommitChapterRejectsPolishWithoutDraftChange(t *testing.T) {
 	if err := s.Progress.MarkChapterComplete(2, len([]rune(original)), "mystery", "quest"); err != nil {
 		t.Fatalf("MarkChapterComplete: %v", err)
 	}
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 2, Title: "第二章", Summary: "原摘要"}); err != nil {
+		t.Fatalf("SaveSummary: %v", err)
+	}
 
 	// 进入打磨队列：Flow=Polishing, PendingRewrites=[2]
 	if err := s.Progress.SetPendingRewrites([]int{2}, "测试打磨"); err != nil {
@@ -665,9 +753,10 @@ func TestCommitChapterRejectsPolishWithoutDraftChange(t *testing.T) {
 		t.Fatalf("SetFlow: %v", err)
 	}
 
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	args, _ := json.Marshal(map[string]any{
 		"chapter":    2,
+		"title":      "第二章",
 		"summary":    "假装打磨了",
 		"characters": []string{"主角"},
 		"key_events": []string{"无改动"},
@@ -684,6 +773,67 @@ func TestCommitChapterRejectsPolishWithoutDraftChange(t *testing.T) {
 	}
 	if _, err := tool.Execute(context.Background(), args); err != nil {
 		t.Fatalf("Execute after real polish: %v", err)
+	}
+}
+
+func TestCommitChapterAllowsTitleOnlyRewrite(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.Init("test", 10); err != nil {
+		t.Fatal(err)
+	}
+	body := "正文无需修改，只有标题需要打磨。"
+	if err := s.Drafts.SaveDraft(2, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Drafts.SaveFinalChapter(2, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 2, Title: "旧标题", Summary: "原摘要"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Checkpoints.AppendArtifacts(
+		domain.ChapterScope(2), "commit", "chapters/02.md", "summaries/02.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.MarkChapterComplete(2, len([]rune(body)), "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.SetPendingRewrites([]int{2}, "优化标题"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.SetFlow(domain.FlowPolishing); err != nil {
+		t.Fatal(err)
+	}
+
+	args, _ := json.Marshal(map[string]any{
+		"chapter": 2, "title": "更准确的新标题", "summary": "原摘要",
+		"characters": []string{"主角"}, "key_events": []string{"既有事件"},
+	})
+	if _, err := newTestCommitChapterTool(s).Execute(context.Background(), args); err != nil {
+		t.Fatalf("title-only rewrite failed: %v", err)
+	}
+	summary, err := s.Summaries.LoadSummary(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary == nil || summary.Title != "更准确的新标题" {
+		t.Fatalf("committed title = %+v", summary)
+	}
+	after := s.Checkpoints.LatestByStep(domain.ChapterScope(2), "commit")
+	if after == nil || after.Seq <= before.Seq {
+		t.Fatalf("title-only rewrite did not produce a new checkpoint: before=%+v after=%+v", before, after)
+	}
+	final, err := s.Drafts.LoadChapterText(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final != body {
+		t.Fatalf("title-only rewrite changed body: %q", final)
 	}
 }
 
@@ -724,9 +874,10 @@ func TestCommitChapterLayeredRejectsOutOfRangeChapter(t *testing.T) {
 	if err := s.Drafts.SaveDraft(2, "越界章节正文，必须被拦下。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	args, _ := json.Marshal(map[string]any{
 		"chapter":    2,
+		"title":      "第二章",
 		"summary":    "越界章节",
 		"characters": []string{"主角"},
 		"key_events": []string{"不该被允许"},
@@ -786,13 +937,13 @@ func TestCommitChapterLayeredAutoCompletesWhenDone(t *testing.T) {
 	}
 	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
 
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	commit := func(ch int) map[string]any {
 		if err := s.Drafts.SaveDraft(ch, fmt.Sprintf("第 %d 章正文内容，用于测试确定性完结。", ch)); err != nil {
 			t.Fatalf("SaveDraft %d: %v", ch, err)
 		}
 		args, _ := json.Marshal(map[string]any{
-			"chapter": ch, "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
+			"chapter": ch, "title": fmt.Sprintf("第%d章", ch), "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
 		})
 		raw, err := tool.Execute(context.Background(), args)
 		if err != nil {
@@ -886,13 +1037,13 @@ func TestCommitChapterFinaleVolumeCompletesDespiteOpenThreads(t *testing.T) {
 	}
 	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
 
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	commit := func(ch int) map[string]any {
 		if err := s.Drafts.SaveDraft(ch, fmt.Sprintf("第 %d 章正文内容，用于收官卷完结测试。", ch)); err != nil {
 			t.Fatalf("SaveDraft %d: %v", ch, err)
 		}
 		args, _ := json.Marshal(map[string]any{
-			"chapter": ch, "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
+			"chapter": ch, "title": fmt.Sprintf("第%d章", ch), "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
 		})
 		raw, err := tool.Execute(context.Background(), args)
 		if err != nil {
@@ -979,12 +1130,12 @@ func TestCommitChapterFinaleSkeletonArcBlocksCompletion(t *testing.T) {
 	}
 	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
 
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	if err := s.Drafts.SaveDraft(1, "第一章正文。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 	args, _ := json.Marshal(map[string]any{
-		"chapter": 1, "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
+		"chapter": 1, "title": "第一章", "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
 	})
 	if _, err := tool.Execute(context.Background(), args); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -1053,9 +1204,9 @@ func TestCommitChapterLayeredNoAutoCompleteWithOpenThreads(t *testing.T) {
 	if err := s.Drafts.SaveDraft(1, "唯一一章的正文，但长线未收束。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
-	tool := NewCommitChapterTool(s)
+	tool := newTestCommitChapterTool(s)
 	args, _ := json.Marshal(map[string]any{
-		"chapter": 1, "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
+		"chapter": 1, "title": "第一章", "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
 	})
 	if _, err := tool.Execute(context.Background(), args); err != nil {
 		t.Fatalf("Execute: %v", err)

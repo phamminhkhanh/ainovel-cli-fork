@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,62 +14,107 @@ import (
 )
 
 // WorldStore 管理时间线、伏笔、人物关系、状态变化、世界规则、风格规则、审阅和交接。
-type WorldStore struct{ io *IO }
+type WorldStore struct {
+	io *IO
 
-func NewWorldStore(io *IO) *WorldStore { return &WorldStore{io: io} }
+	timeline                *appendLog[domain.TimelineEvent]
+	stateChanges            *appendLog[domain.StateChange]
+	timelineProjectionReady bool
+}
+
+func NewWorldStore(io *IO) *WorldStore {
+	return &WorldStore{
+		io: io,
+		timeline: newAppendLog(
+			"timeline.jsonl",
+			"timeline.json",
+			timelineEventKey,
+			cloneTimelineEvent,
+		),
+		stateChanges: newAppendLog(
+			"meta/state_changes.jsonl",
+			"meta/state_changes.json",
+			stateChangeKey,
+			func(change domain.StateChange) domain.StateChange { return change },
+		),
+	}
+}
 
 // ── 时间线 ──
 
-// SaveTimeline 全量写入 timeline.json + timeline.md（原子写入）。
+// SaveTimeline 全量替换时间线事实与人类可读投影。
 func (s *WorldStore) SaveTimeline(events []domain.TimelineEvent) error {
 	return s.io.WithWriteLock(func() error {
-		if err := s.io.WriteJSONUnlocked("timeline.json", events); err != nil {
+		if err := s.timeline.replaceUnlocked(s.io, events); err != nil {
+			s.timelineProjectionReady = false
 			return err
 		}
-		return s.io.WriteMarkdownUnlocked("timeline.md", renderTimeline(events))
+		if err := s.io.WriteMarkdownUnlocked("timeline.md", renderTimeline(events)); err != nil {
+			s.timelineProjectionReady = false
+			return err
+		}
+		s.timelineProjectionReady = true
+		return nil
 	})
 }
 
 // LoadTimeline 读取时间线。
 func (s *WorldStore) LoadTimeline() ([]domain.TimelineEvent, error) {
-	var events []domain.TimelineEvent
-	if err := s.io.ReadJSON("timeline.json", &events); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return events, nil
+	s.io.mu.Lock()
+	defer s.io.mu.Unlock()
+	return s.timeline.allUnlocked(s.io)
 }
 
 // AppendTimelineEvents 追加时间线事件。同一事件重复提交时按稳定 key 去重，保证
 // commit_chapter 崩溃后重跑不会污染时间线。
 func (s *WorldStore) AppendTimelineEvents(newEvents []domain.TimelineEvent) error {
 	return s.io.WithWriteLock(func() error {
-		var existing []domain.TimelineEvent
-		if err := s.io.ReadJSONUnlocked("timeline.json", &existing); err != nil {
-			if !os.IsNotExist(err) {
+		if !s.timelineProjectionReady {
+			existing, err := s.timeline.allUnlocked(s.io)
+			if err != nil {
+				return err
+			}
+			if err := s.ensureTimelineProjectionUnlocked(existing); err != nil {
 				return err
 			}
 		}
-		seen := make(map[string]struct{}, len(existing)+len(newEvents))
-		for _, e := range existing {
-			seen[timelineEventKey(e)] = struct{}{}
-		}
-		all := existing
-		for _, e := range newEvents {
-			key := timelineEventKey(e)
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			all = append(all, e)
-		}
-		if err := s.io.WriteJSONUnlocked("timeline.json", all); err != nil {
+
+		added, err := s.timeline.appendUnlocked(s.io, newEvents)
+		if err != nil {
+			// 追加错误时磁盘上可能已有部分完整记录，重放前必须
+			// 从事实日志重建投影，不能仅依赖 added 的返回值。
+			s.timelineProjectionReady = false
 			return err
 		}
-		return s.io.WriteMarkdownUnlocked("timeline.md", renderTimeline(all))
+		if len(added) == 0 {
+			return nil
+		}
+		if err := s.io.AppendLineUnlocked("timeline.md", []byte(renderTimelineEntries(added))); err != nil {
+			s.timelineProjectionReady = false
+			return err
+		}
+		return nil
 	})
+}
+
+// ensureTimelineProjectionUnlocked 在进程首次追加或上次投影失败后核对 timeline.md。
+// 正常路径只执行一次全量核对，之后每章与 JSONL 同步追加；投影不参与事实读取。
+func (s *WorldStore) ensureTimelineProjectionUnlocked(events []domain.TimelineEvent) error {
+	if s.timelineProjectionReady {
+		return nil
+	}
+	expected := renderTimeline(events)
+	actual, err := s.io.ReadFileUnlocked("timeline.md")
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if string(actual) != expected {
+		if err := s.io.WriteMarkdownUnlocked("timeline.md", expected); err != nil {
+			return err
+		}
+	}
+	s.timelineProjectionReady = true
+	return nil
 }
 
 // LoadRecentTimeline 返回最近 window 章内的时间线事件。
@@ -250,39 +296,16 @@ func (s *WorldStore) UpdateRelationships(changes []domain.RelationshipEntry) err
 // AppendStateChanges 追加角色状态变化。同一状态变化重复提交时按稳定 key 去重。
 func (s *WorldStore) AppendStateChanges(changes []domain.StateChange) error {
 	return s.io.WithWriteLock(func() error {
-		var existing []domain.StateChange
-		if err := s.io.ReadJSONUnlocked("meta/state_changes.json", &existing); err != nil {
-			if !os.IsNotExist(err) {
-				return err
-			}
-		}
-		seen := make(map[string]struct{}, len(existing)+len(changes))
-		for _, c := range existing {
-			seen[stateChangeKey(c)] = struct{}{}
-		}
-		all := existing
-		for _, c := range changes {
-			key := stateChangeKey(c)
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			all = append(all, c)
-		}
-		return s.io.WriteJSONUnlocked("meta/state_changes.json", all)
+		_, err := s.stateChanges.appendUnlocked(s.io, changes)
+		return err
 	})
 }
 
 // LoadStateChanges 读取全部状态变化记录。
 func (s *WorldStore) LoadStateChanges() ([]domain.StateChange, error) {
-	var changes []domain.StateChange
-	if err := s.io.ReadJSON("meta/state_changes.json", &changes); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return changes, nil
+	s.io.mu.Lock()
+	defer s.io.mu.Unlock()
+	return s.stateChanges.allUnlocked(s.io)
 }
 
 // ── 世界规则 ──
@@ -435,16 +458,43 @@ func pairKey(a, b string) string {
 func timelineEventKey(e domain.TimelineEvent) string {
 	chars := append([]string(nil), e.Characters...)
 	slices.Sort(chars)
-	return fmt.Sprintf("%d|%s|%s|%s", e.Chapter, e.Time, e.Event, strings.Join(chars, ","))
+	parts := make([]string, 0, len(chars)+2)
+	parts = append(parts, e.Time, e.Event)
+	parts = append(parts, chars...)
+	return stableRecordKey(e.Chapter, parts...)
+}
+
+func cloneTimelineEvent(event domain.TimelineEvent) domain.TimelineEvent {
+	event.Characters = append([]string(nil), event.Characters...)
+	return event
 }
 
 func stateChangeKey(c domain.StateChange) string {
-	return fmt.Sprintf("%d|%s|%s|%s|%s", c.Chapter, c.Entity, c.Field, c.OldValue, c.NewValue)
+	return stableRecordKey(c.Chapter, c.Entity, c.Field, c.OldValue, c.NewValue)
+}
+
+// stableRecordKey 使用长度前缀编码可变文本，避免内容中的分隔符导致去重碰撞。
+func stableRecordKey(chapter int, parts ...string) string {
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(chapter))
+	for _, part := range parts {
+		b.WriteByte('|')
+		b.WriteString(strconv.Itoa(len(part)))
+		b.WriteByte(':')
+		b.WriteString(part)
+	}
+	return b.String()
 }
 
 func renderTimeline(events []domain.TimelineEvent) string {
 	var b strings.Builder
 	b.WriteString("# 时间线\n\n")
+	b.WriteString(renderTimelineEntries(events))
+	return b.String()
+}
+
+func renderTimelineEntries(events []domain.TimelineEvent) string {
+	var b strings.Builder
 	for _, e := range events {
 		chars := ""
 		if len(e.Characters) > 0 {

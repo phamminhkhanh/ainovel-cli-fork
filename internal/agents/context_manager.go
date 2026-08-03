@@ -12,9 +12,8 @@ type contextManagerConfig struct {
 	Model            agentcore.ChatModel
 	ContextWindow    int
 	ReserveTokens    int
-	KeepRecentTokens int
 	Agent            string
-	CommitOnProject  bool
+	CommitProjected  bool
 	Summary          *corecontext.FullSummaryConfig
 	ToolMicrocompact *corecontext.ToolResultMicrocompactConfig
 	ExtraStrategies  []corecontext.Strategy
@@ -26,9 +25,6 @@ func newContextManager(cfg contextManagerConfig) *corecontext.ContextEngine {
 		sc = *cfg.Summary
 	}
 	sc.Model = cfg.Model
-	if sc.KeepRecentTokens <= 0 {
-		sc.KeepRecentTokens = cfg.KeepRecentTokens
-	}
 
 	var tc corecontext.ToolResultMicrocompactConfig
 	if cfg.ToolMicrocompact != nil {
@@ -37,16 +33,23 @@ func newContextManager(cfg contextManagerConfig) *corecontext.ContextEngine {
 
 	strategies := []corecontext.Strategy{
 		corecontext.NewToolResultMicrocompact(tc),
-		corecontext.NewLightTrim(corecontext.LightTrimConfig{}),
 	}
 	strategies = append(strategies, cfg.ExtraStrategies...)
 	strategies = append(strategies, corecontext.NewFullSummary(sc))
 
+	var commitStrategies []string
+	if cfg.CommitProjected {
+		commitStrategies = make([]string, len(strategies))
+		for i, strategy := range strategies {
+			commitStrategies[i] = strategy.Name()
+		}
+	}
+
 	engine := corecontext.NewEngine(corecontext.EngineConfig{
-		ContextWindow:   cfg.ContextWindow,
-		ReserveTokens:   cfg.ReserveTokens,
-		CommitOnProject: cfg.CommitOnProject,
-		Strategies:      strategies,
+		ContextWindow:    cfg.ContextWindow,
+		ReserveTokens:    cfg.ReserveTokens,
+		CommitStrategies: commitStrategies,
+		Strategies:       strategies,
 	})
 
 	callback := contextRewriteCallback(cfg.Agent)

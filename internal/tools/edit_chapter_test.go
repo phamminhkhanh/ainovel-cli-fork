@@ -304,9 +304,10 @@ func TestEditChapterWorksWithCommitValidation(t *testing.T) {
 		t.Fatalf("edit_chapter: %v", err)
 	}
 
-	commitTool := NewCommitChapterTool(s)
+	commitTool := newTestCommitChapterTool(s)
 	commitArgs, _ := json.Marshal(map[string]any{
 		"chapter":    2,
+		"title":      "第二章",
 		"summary":    "打磨后摘要",
 		"characters": []string{"主角"},
 		"key_events": []string{"完成打磨"},

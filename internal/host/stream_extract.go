@@ -28,6 +28,7 @@ var toolDisplays = map[string]toolDisplay{
 	"save_arc_summary":    {header: "✻ 弧摘要"},
 	"save_volume_summary": {header: "✻ 卷摘要"},
 	"save_foundation":     {header: "✻ 设定"},
+	"revise_outline":      {header: "✻ 修订大纲"},
 	"read_chapter":        {header: "✻ 读章节"},
 	"check_consistency":   {header: "✻ 一致性检查"},
 	"novel_context":       {header: "✻ 查询上下文"},

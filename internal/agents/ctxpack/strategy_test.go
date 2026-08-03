@@ -135,7 +135,10 @@ func TestWriterRestorePackRefreshReusesStoreBuilder(t *testing.T) {
 	pack := &WriterRestorePack{}
 	pack.Refresh(s)
 
-	msg, ok := pack.buildMessage(restoreBudgetTokens)
+	msg, ok, err := pack.buildMessage(restoreBudgetTokens)
+	if err != nil {
+		t.Fatalf("buildMessage: %v", err)
+	}
 	if !ok {
 		t.Fatal("expected restore pack message")
 	}
@@ -148,6 +151,10 @@ func TestWriterRestorePackRefreshReusesStoreBuilder(t *testing.T) {
 	}
 	if !strings.Contains(text, "当前章节计划") {
 		t.Fatalf("expected chapter plan section, got %q", text)
+	}
+
+	if _, _, err := pack.buildMessage(0); err == nil {
+		t.Fatal("expected an explicit error when the restore pack does not fit")
 	}
 }
 

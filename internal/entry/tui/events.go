@@ -31,7 +31,6 @@ type (
 		exportErr  error
 		finishedAt time.Time
 	}
-	askUserMsg       askUserRequest
 	startResultMsg   struct{ err error }
 	cocreateDeltaMsg struct {
 		reqID int
@@ -295,15 +294,5 @@ func listenStream(rt *host.Host) tea.Cmd {
 			return streamClearMsg{}
 		}
 		return streamDeltaMsg(delta)
-	}
-}
-
-func listenAskUser(bridge *askUserBridge) tea.Cmd {
-	return func() tea.Msg {
-		req, ok := <-bridge.requests
-		if !ok {
-			return nil
-		}
-		return askUserMsg(req)
 	}
 }

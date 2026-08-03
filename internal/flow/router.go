@@ -77,7 +77,9 @@ type State struct {
 //  9. 下一弧是骨架           → architect_long(expand_arc)
 //
 // 10. 卷末需决策下一卷       → architect_long(append_volume / complete_book)
-// 11. 其它                  → writer(写 next_chapter)
+// 11. 非分层全局审阅到期      → editor(global review)
+// 12. 非分层大纲已耗尽       → architect(决定完结或续接大纲)
+// 13. 其它                  → writer(写 next_chapter)
 func Route(s State) *Instruction {
 	p := s.Progress
 	if p == nil {
@@ -188,11 +190,24 @@ func Route(s State) *Instruction {
 		}
 	}
 
-	// 12. 正常续写
+	// 12. 非分层大纲耗尽时不能继续派发越界章节。让 Architect 基于当前故事事实
+	// 决定完结，或用 revise_outline 从 next 章续接计划。
 	next := p.NextChapter()
 	if next <= 0 {
 		return nil
 	}
+	if !p.Layered && p.TotalChapters > 0 && next > p.TotalChapters {
+		return &Instruction{
+			Agent: plannerForTier(s.PlanningTier),
+			Task: fmt.Sprintf(
+				"非分层大纲已写完（已完成 %d 章，共 %d 章）：若故事已收束，调用 save_foundation(type=complete_book)；若仍需继续，用 revise_outline 从第 %d 章续接后续计划",
+				len(p.CompletedChapters), p.TotalChapters, next,
+			),
+			Reason: "非分层大纲已耗尽，需决定完结或续接",
+		}
+	}
+
+	// 13. 正常续写
 	return &Instruction{
 		Agent:   "writer",
 		Task:    fmt.Sprintf("写第 %d 章", next),

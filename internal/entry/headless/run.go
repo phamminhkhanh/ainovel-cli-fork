@@ -18,7 +18,6 @@ import (
 
 type Options struct {
 	Prompt string
-	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
@@ -35,16 +34,10 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
-	stdin := opts.Stdin
-	if stdin == nil {
-		stdin = os.Stdin
-	}
-
 	eng, err := host.New(cfg, bundle)
 	if err != nil {
 		return err
 	}
-	eng.AskUser().SetHandler(newTerminalAskUser(stdin, stderr).handle)
 	cleanup, err := logger.SetupFile(eng.Dir(), "headless.log", false)
 	if err != nil {
 		fmt.Fprintf(stderr, "警告：文件日志不可用，继续使用终端日志：%v\n", err)
