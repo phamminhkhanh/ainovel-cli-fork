@@ -12,7 +12,6 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
 // ── 静态资源 ──
@@ -220,35 +219,6 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": label != "", "label": label})
-}
-
-// ── 交互（ask_user）──
-
-// handleAsk 接收浏览器表单回答，解阻塞对应的引擎工具调用。
-// answers/notes 均以「问题原文」为键，与 tools.AskUserResponse 语义一致（见 formatAnswers）。
-func (s *server) handleAsk(w http.ResponseWriter, r *http.Request) {
-	if !requirePOST(w, r) {
-		return
-	}
-	var body struct {
-		ID      string            `json:"id"`
-		Answers map[string]string `json:"answers"`
-		Notes   map[string]string `json:"notes"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	if body.ID == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("id is required"))
-		return
-	}
-	resp := &tools.AskUserResponse{Answers: body.Answers, Notes: body.Notes}
-	if !s.ask.resolve(body.ID, resp) {
-		writeErr(w, http.StatusNotFound, fmt.Errorf("no pending ask %q", body.ID))
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ── 模型 / 推理强度 ──

@@ -23,8 +23,6 @@ function handle(m) {
     case 'clear': streamIsThinking = false; if (roundHasContent) { appendDivider(); roundHasContent = false; } break;
     case 'event': handleEvent(m.data); break;
     case 'snapshot': renderSnapshot(m.data); break;
-    case 'ask': showAsk(m.data); break;            // engine hỏi (payload key thường — tools.Question có json tag)
-    case 'ask-cancel': closeAskIf(m.data); break;  // run kết thúc/abort khi đang hỏi
     case 'cocreate': if (typeof onCoCreateProgress === 'function') onCoCreateProgress(m.data); break; // Phase 3 (app-studio.js)
     case 'job': if (typeof onJobEvent === 'function') onJobEvent(m.data); break;                       // Phase 3 (app-studio.js)
     case 'done': break; // snapshot terminal đã được đẩy ngay trước done
@@ -334,101 +332,6 @@ function toast(msg, kind) {
   toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
 }
 
-// ── Modal: ask_user ──
-// LƯU Ý: payload ask dùng key THƯỜNG (id/questions; question/header/options/multiSelect;
-// label/description) vì tools.Question có json tag — khác với event/snapshot (PascalCase).
-let currentAsk = null; // {id, questions}
-
-function showAsk(data) {
-  if (!data || !data.id || !Array.isArray(data.questions)) return;
-  currentAsk = data;
-  const body = $('#askBody');
-  body.innerHTML = '';
-  data.questions.forEach((q, qi) => {
-    const block = document.createElement('div');
-    block.className = 'ask-q';
-
-    const head = document.createElement('div');
-    head.className = 'ask-q-head';
-    const chip = document.createElement('span'); chip.className = 'badge'; chip.textContent = q.header || '';
-    const title = document.createElement('span'); title.className = 'ask-q-title'; title.textContent = q.question || '';
-    head.append(chip, title);
-
-    const opts = document.createElement('div');
-    opts.className = 'ask-options';
-    const type = q.multiSelect ? 'checkbox' : 'radio';
-    (q.options || []).forEach((opt) => {
-      const row = document.createElement('label');
-      row.className = 'ask-opt';
-      const input = document.createElement('input');
-      input.type = type; input.name = 'ask-' + qi; input.value = opt.label || '';
-      const txt = document.createElement('span');
-      const lab = document.createElement('span'); lab.className = 'ask-opt-label'; lab.textContent = opt.label || '';
-      const desc = document.createElement('span'); desc.className = 'ask-opt-desc';
-      desc.textContent = opt.description ? (' — ' + opt.description) : '';
-      txt.append(lab, desc);
-      row.append(input, txt);
-      opts.appendChild(row);
-    });
-
-    const custom = document.createElement('div');
-    custom.className = 'ask-custom';
-    const clab = document.createElement('label'); clab.textContent = 'Hoặc tự nhập:';
-    const cinput = document.createElement('input');
-    cinput.type = 'text'; cinput.className = 'ask-note'; cinput.placeholder = 'Nhập câu trả lời của bạn…';
-    custom.append(clab, cinput);
-
-    block.append(head, opts, custom);
-    body.appendChild(block);
-  });
-  $('#askOverlay').hidden = false;
-}
-
-// collectAsk gom đáp án theo ngữ nghĩa tools.AskUserResponse (key = nguyên văn câu hỏi):
-// có chọn option → answer=label(join 、); chỉ tự nhập → answer="自定义"+note. Thiếu → null.
-function collectAsk() {
-  const answers = {}, notes = {};
-  const blocks = $('#askBody').querySelectorAll('.ask-q');
-  for (let qi = 0; qi < currentAsk.questions.length; qi++) {
-    const q = currentAsk.questions[qi];
-    const block = blocks[qi];
-    const checked = [...block.querySelectorAll('input:checked')].map((i) => i.value);
-    const note = block.querySelector('.ask-note').value.trim();
-    if (checked.length) {
-      answers[q.question] = checked.join('、');
-      if (note) notes[q.question] = note;
-    } else if (note) {
-      answers[q.question] = '自定义';
-      notes[q.question] = note;
-    } else {
-      return null;
-    }
-  }
-  return { answers, notes };
-}
-
-async function submitAsk() {
-  if (!currentAsk) return;
-  const collected = collectAsk();
-  if (!collected) { toast('Vui lòng trả lời tất cả câu hỏi', 'error'); return; }
-  const res = await post('/api/ask', { id: currentAsk.id, answers: collected.answers, notes: collected.notes });
-  if (res) closeAsk();
-}
-
-async function skipAsk() {
-  if (!currentAsk) return;
-  await post('/api/ask', { id: currentAsk.id, answers: {}, notes: {} }); // rỗng → engine tự quyết (formatAnswers)
-  closeAsk();
-}
-
-function closeAsk() { $('#askOverlay').hidden = true; currentAsk = null; }
-function closeAskIf(data) {
-  if (currentAsk && data && data.id === currentAsk.id) {
-    closeAsk();
-    toast('Phiên hỏi đã hủy (run kết thúc/abort)', 'error');
-  }
-}
-
 // ── Modal: settings (đổi model + mức suy luận theo vai trò) ──
 let modelData = null;
 
@@ -510,9 +413,6 @@ async function boot() {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); send(); }
   });
 
-  // ask_user modal
-  $('#askSubmit').addEventListener('click', submitAsk);
-  $('#askSkip').addEventListener('click', skipAsk);
   // settings modal
   $('#settingsBtn').addEventListener('click', openSettings);
   $('#setClose').addEventListener('click', closeSettings);

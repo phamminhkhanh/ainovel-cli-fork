@@ -73,10 +73,6 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	h := newHub()
 	go h.run(eng) // Host 三通道的唯一消费者
 
-	// ask_user 桥：引擎工具线程阻塞等待，浏览器 POST /api/ask 解阻塞。须在任何运行开始前注入。
-	ask := newAskBridge(h)
-	eng.AskUser().SetHandler(ask.handle)
-
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
@@ -92,7 +88,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	}
 
 	srv := &server{
-		eng: eng, store: store.NewStore(eng.Dir()), hub: h, ask: ask, ctx: ctx, addr: addr,
+		eng: eng, store: store.NewStore(eng.Dir()), hub: h, ctx: ctx, addr: addr,
 		cfg: cfg, repoRoot: repoRoot, prodRunManager: prodRunMgr,
 	}
 	httpSrv := &http.Server{Addr: addr, Handler: srv.mux()}

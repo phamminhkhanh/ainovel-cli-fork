@@ -10,7 +10,7 @@ import (
 // sseMessage 是下行 SSE 帧的统一信封。前端按 Type 分派。
 // 同一信封同时服务 /api/events（实时）与 /api/replay（回放），两端处理逻辑一致。
 type sseMessage struct {
-	Type string          `json:"type"`           // hello|stream|clear|event|snapshot|done|ask|ask-cancel
+	Type string          `json:"type"`           // hello|stream|clear|event|snapshot|done
 	Text string          `json:"text,omitempty"` // stream 的增量文本
 	Data json.RawMessage `json:"data,omitempty"` // event / snapshot 的结构体
 	Seq  int64           `json:"seq,omitempty"`  // 回放游标（仅 replay 用）

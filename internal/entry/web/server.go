@@ -18,7 +18,6 @@ type server struct {
 	eng   *host.Host
 	store *store.Store
 	hub   *hub
-	ask   *askBridge
 	ctx   context.Context
 	addr  string           // 监听地址，用于 Host 头校验（仅回环绑定时加锁）
 	cfg   bootstrap.Config // web 入口接收的配置，用于构造子运行覆盖配置
@@ -82,7 +81,6 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/api/resume", s.handleResume)
 
 	// 交互 / 模型 / 推理强度（Phase 2）
-	mux.HandleFunc("/api/ask", s.handleAsk)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/model", s.handleModel)
 	mux.HandleFunc("/api/thinking", s.handleThinking)
