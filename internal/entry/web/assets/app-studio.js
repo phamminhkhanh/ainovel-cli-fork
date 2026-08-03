@@ -15,7 +15,7 @@ function isTyping(el) {
   return t === 'TEXTAREA' || t === 'INPUT' || (el && el.isContentEditable);
 }
 function allOverlaysHidden() {
-  return ['#cmdOverlay', '#ccOverlay', '#expOverlay', '#impOverlay', '#simimpOverlay', '#diagOverlay', '#askOverlay', '#setOverlay', '#helpOverlay', '#jobLogOverlay']
+  return ['#cmdOverlay', '#ccOverlay', '#expOverlay', '#impOverlay', '#simimpOverlay', '#diagOverlay', '#setOverlay', '#helpOverlay', '#jobLogOverlay']
     .every((id) => { const el = $(id); return !el || el.hidden; });
 }
 function openCmd() { $('#cmdFilter').value = ''; renderCmdList(); $('#cmdOverlay').hidden = false; $('#cmdFilter').focus(); }
@@ -53,6 +53,7 @@ let ccDraft = '';
 let ccReady = false;
 let ccBusy = false;      // đang chờ một lượt stream
 let ccLiveBubble = null; // bong bóng "đang gõ" trong lúc reply stream
+let ccSelectedSugs = []; // combo suggestion: các gợi ý đã chọn, nối bằng ； (mirror TUI appendSuggestion)
 
 function ccBubble(role, text) {
   const div = document.createElement('div');
@@ -88,21 +89,37 @@ function renderSugs(sugs) {
     ul.appendChild(li);
   });
 }
+// applyCcSuggestion cộng dồn gợi ý (mirror TUI appendSuggestion):
+// lần đầu chỉ khi input rỗng; lần sau nối bằng ； nếu input vẫn đúng = combo hiện tại;
+// chọn lại cùng gợi ý → bỏ qua; user tự sửa input → resetCcSugs() thoát chế độ combo.
 function applyCcSuggestion(idx) {
   const ul = $('#ccSugs');
   const li = ul.children[idx];
   if (!li) return;
-  const text = li.querySelector('.sug-text')?.textContent || '';
-  $('#ccInput').value = text;
-  $('#ccInput').focus();
+  const text = (li.querySelector('.sug-text')?.textContent || '').trim();
+  if (!text) return;
+  const input = $('#ccInput');
+  const current = input.value;
+  if (ccSelectedSugs.length === 0) {
+    if (current.trim() !== '') return; // đang gõ dở → không cướp input
+  } else if (current !== ccSelectedSugs.join('；')) {
+    resetCcSugs();
+    return; // user đã sửa tay → thoát combo, coi như input thường
+  }
+  if (ccSelectedSugs.includes(text)) return; // đã chọn rồi → bỏ qua
+  ccSelectedSugs.push(text);
+  input.value = ccSelectedSugs.join('；');
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
 }
+function resetCcSugs() { ccSelectedSugs = []; }
 
 async function openCoCreate() {
   closeCmd();
   // Chế độ: đã có tiến độ hoặc engine không rảnh → giai đoạn; idle & chưa viết gì → khởi tạo.
   const started = !!(lastSnapshot && ((lastSnapshot.CompletedCount || 0) > 0 || (lastSnapshot.CurrentChapter || 0) > 0)) || (currentState !== 'idle');
   ccStage = started;
-  ccHistory = []; ccDraft = ''; ccReady = false; ccLiveBubble = null;
+  ccHistory = []; ccDraft = ''; ccReady = false; ccLiveBubble = null; ccSelectedSugs = [];
   $('#ccConv').innerHTML = '';
   $('#ccThinking').textContent = ''; $('#ccThinkingWrap').hidden = true;
   $('#ccDraftWrap').hidden = true; $('#ccDraft').textContent = '';
@@ -141,6 +158,7 @@ async function ccSend(text) {
     ccBubble('user', text);
     $('#ccInput').value = '';
   }
+  resetCcSugs();
   $('#ccSugs').innerHTML = '';
   $('#ccThinking').textContent = ''; $('#ccThinkingWrap').hidden = true;
   ccLiveBubble = ccBubble('assistant live', '…');
@@ -196,7 +214,7 @@ async function ccFinish() {
 async function closeCc(finished) {
   $('#ccOverlay').hidden = true;
   const wasStage = ccStage;
-  ccStage = false; ccHistory = []; ccDraft = ''; ccReady = false; ccLiveBubble = null;
+  ccStage = false; ccHistory = []; ccDraft = ''; ccReady = false; ccLiveBubble = null; ccSelectedSugs = [];
   if (wasStage && !finished) await post('/api/cocreate/cancel', {});
   // Rời cocreate: xoá mọi priming 'steer' cũ (nút "↗ Can thiệp") để input theo đúng trạng thái thật.
   // Hủy cocreate khi coordinator đã dừng → engine idle-có-truyện → sendModeFor cho 'continue',
@@ -473,6 +491,8 @@ function bootStudio() {
   // cocreate
   $('#ccSend').addEventListener('click', () => ccSend());
   $('#ccInput').addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); ccSend(); } });
+  // User tự gõ/sửa (kể cả xóa) → thoát chế độ combo suggestion (mirror TUI resetSuggestionInput).
+  $('#ccInput').addEventListener('input', () => { if ($('#ccInput').value !== ccSelectedSugs.join('；')) resetCcSugs(); });
   $('#ccFinish').addEventListener('click', ccFinish);
   $('#ccCancel').addEventListener('click', () => closeCc(false));
   $('#ccClose').addEventListener('click', () => closeCc(false));
