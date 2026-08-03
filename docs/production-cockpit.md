@@ -10,11 +10,12 @@ Production Cockpit là tab **Sản xuất** trong Web UI của `ainovel-cli-fork
 2. [Mở tab Sản xuất](#mở-tab-sản-xuất)
 3. [Tạo job mới](#tạo-job-mới)
 4. [Chạy và dừng job](#chạy-và-dừng-job)
-5. [Theo dõi tiến độ](#theo-dõi-tiến-độ)
-6. [Xuất TXT](#xuất-txt)
-7. [Lưu ý quan trọng](#lưu-ý-quan-trọng)
-8. [Giới hạn MVP](#giới-hạn-mvp)
-9. [Gỡ lỗi nhanh](#gỡ-lỗi-nhanh)
+5. [Tiếp tục job](#tiếp-tục-job)
+6. [Theo dõi tiến độ](#theo-dõi-tiến-độ)
+7. [Xuất TXT / EPUB](#xuất-txt--epub)
+8. [Lưu ý quan trọng](#lưu-ý-quan-trọng)
+9. [Giới hạn MVP](#giới-hạn-mvp)
+10. [Gỡ lỗi nhanh](#gỡ-lỗi-nhanh)
 
 ---
 
@@ -22,7 +23,7 @@ Production Cockpit là tab **Sản xuất** trong Web UI của `ainovel-cli-fork
 
 - Bạn muốn chạy một bộ tiểu thuyết dài (ví dụ 30–100 chương) mà không cần giữ TUI mở.
 - Bạn muốn chạy nhiều profile khác nhau và so sánh kết quả.
-- Bạn cần giám sát chi phí API theo thờii gian thực.
+- Bạn cần giám sát chi phí API theo thời gian thực.
 - Bạn muốn xuất file TXT từ các chương đã hoàn thành.
 
 ## Mở tab Sản xuất
@@ -31,7 +32,7 @@ Production Cockpit là tab **Sản xuất** trong Web UI của `ainovel-cli-fork
    ```bash
    go run ./cmd/ainovel-cli --web
    ```
-2. Mở trình duyệt tại địa chỉ hiển thị (thường là `http://localhost:8080`).
+2. Mở trình duyệt tại địa chỉ hiển thị (mặc định `http://127.0.0.1:8787`).
 3. Trong thanh tab, chọn **Sản xuất**. Tab này nằm sau **Đánh giá**, trước **Hỗ trợ**.
 
 Giao diện chia làm hai vùng:
@@ -56,7 +57,17 @@ Giao diện chia làm hai vùng:
 - Nhấn **▶ Bắt đầu**. Hệ thống spawn một tiến trình con `ainovel-cli --headless`.
 - Để dừng, nhấn **■ Dừng**. Tiến trình con bị kill ngay lập tức; trạng thái chuyển thành **Đã hủy**.
 
-> Chỉ có job đang ở trạng thái **Chờ** mới hiển thị nút **Bắt đầu**. Các job **Hoàn thành**, **Lỗi**, **Đã hủy** không thể chạy lại từ UI; bạn cần tạo job mới.
+> Chỉ có job đang ở trạng thái **Chờ** mới hiển thị nút **Bắt đầu**. Job **Lỗi** và **Đã hủy** có thể **Tiếp tục** (resume) — xem mục [Tiếp tục job](#tiếp-tục-job) bên dưới. Job **Hoàn thành** không chạy lại được; cần tạo job mới.
+
+## Tiếp tục job
+
+Job ở trạng thái **Lỗi** hoặc **Đã hủy** có thể tiếp tục (resume) mà không mất tiến độ đã viết:
+
+1. Chọn job **Lỗi** hoặc **Đã hủy** trong danh sách.
+2. Nhấn **▶ Tiếp tục**. Backend copy home rules mới nhất vào sandbox rồi spawn `ainovel-cli --headless` không `--prompt-file` → engine native `Resume()` từ checkpoint đã có.
+3. (Tùy chọn) Kèm **steer** — ghi干预文本 vào `meta/run.json` trước khi start → engine inject ngay chương kế. Steer là干预 mềm (Coordinator đánh giá & áp), không phải structural rule cứng.
+
+> Resume chỉ chạy khi run dir đã có output (đã qua Foundation Gate). Run fail trước foundation (0 chương, chưa seed) sẽ chạy `--prompt-file` lại từ đầu — không phải resume.
 
 ## Theo dõi tiến độ
 
@@ -68,7 +79,7 @@ Khi job đang chạy, bảng chi tiết tự động làm mới mỗi 5 giây v�
 | **Đánh giá** | Số lần Editor review được ghi nhận từ `reviews/*.json`. |
 | **Viết lại** | Số lần review kết luận `verdict == "rewrite"`. |
 | **Chi phí** | Chi phí hiện tại / ngân sách đặt ra. |
-| **Thờii gian** | Thờii gian đã chạy. |
+| **Thời gian** | Thời gian đã chạy. |
 | **Lý do dừng** | Lý do khi job kết thúc (đạt target, bị dừng tay, lỗi, v.v.). |
 
 Dưới cùng là **Nhật ký** (`run.log`) của tiến trình con.
@@ -83,8 +94,9 @@ Mỗi job có một dải health dạng traffic-light, được backend tính t�
 | `rewrite_rate` | `Rewrites / Reviews` | `idle` khi chưa đủ 3 review; `warn` khi >25%, `bad` khi >50%. |
 | `cost_pace` | `CostUSD / Chapters` so với `BudgetUSD / TargetChapters` | `idle` trước 2 chương; `warn` khi >1.2x pace dự kiến, `bad` khi >2x. |
 | `budget` | `CostUSD / BudgetUSD` | `warn` từ 80%, `bad` khi chạm/vượt ngân sách. |
+| `persist` | `PersistError` trên `jobs.json` | `idle` khi persist OK; `bad` (đỏ) khi lỗi file lock mới (<5 phút, thường do IDE mở `jobs.json`), `warn` (vàng) khi lỗi cũ không tái diễn. |
 
-`overall` là mức xấu nhất trong các chip hành động (`rewrite_rate`, `cost_pace`, `budget`). `progress` là thông tin, không phải cảnh báo chất lượng. API `create/list/get/start/stop/approve/revise` đều trả `ProdRun` kèm `health` ở top-level response.
+`overall` là mức xấu nhất trong các chip hành động (`rewrite_rate`, `cost_pace`, `budget`, `persist`). `progress` là thông tin, không phải cảnh báo chất lượng. Mọi API prodrun (`create/list/get/start/stop/approve/reject/revise/resume/sync`) đều trả `ProdRun` kèm `health` ở top-level response.
 
 ### Các trạng thái
 
@@ -92,12 +104,12 @@ Mỗi job có một dải health dạng traffic-light, được backend tính t�
 |------------|---------|
 | `Chờ` | Job đã tạo, chưa chạy. |
 | `Đang chạy` | Tiến trình con đang viết. |
-| `Tạm dừng` | Engine tự pause giữa chừng (deadlock / worker failure / gate lỗi) rồi child exit 0. Runner gán `stopReason=engine_paused`. Child đã chết — chưa có nút **Tiếp tục**, xem `run.log` rồi tạo job mới nếu cần. |
+| `Tạm dừng` | Engine tự pause giữa chừng (deadlock / worker failure / gate lỗi) rồi child exit 0. Runner gán `stopReason=engine_paused`. Child đã chết — chưa có nút **Tiếp tục** cho paused, xem `run.log` rồi tạo job mới. |
 | `Hoàn thành` | Truyện thật sự xong (`phase=complete`) hoặc đạt số chương mục tiêu. |
-| `Lỗi` | Tiến trình con thoát với lỗi. |
-| `Đã hủy` | Ngườii dùng nhấn Dừng. |
+| `Lỗi` | Tiến trình con thoát với lỗi. Có thể **Tiếp tục** (resume) sau khi sửa nguyên nhân transient. |
+| `Đã hủy` | Người dùng nhấn Dừng. Có thể **Tiếp tục** (resume) nếu muốn nấu tiếp. |
 
-## Xuất TXT
+## Xuất TXT / EPUB
 
 Khi job đã có ít nhất một chương hoàn thành:
 
@@ -113,7 +125,7 @@ Khi job đã có ít nhất một chương hoàn thành:
 - **Một job chạy một lúc**: MVP không hỗ trợ chạy song song nhiều job. Nếu cần chạy nhiều, tạo job và chạy từng cái.
 - **Tiến trình con bị kill khi đạt target**: Cockpit poll `meta/progress.json` và kill child khi `len(completed_chapters) >= targetChapters`, vì engine chưa có config `max_chapters`.
 - **Khôi phục sau crash**: khi Web UI khởi động lại, các job trước đó đang `running` sẽ bị đánh dấu `failed` với cờ `PossiblyOrphaned`. Bạn nên kiểm tra PID cũ trên hệ thống và kill tay nếu cần.
-- **Pause là read-only**: khi engine tự pause (deadlock / worker failure), child exit 0 và runner gán trạng thái `Tạm dừng` + lý do `engine_paused` (dựa trên `meta/progress.json` thực tế — không còn gán nhầm `Hoàn thành`). MVP chưa có nút **Tiếp tục** cho paused child; mở `run.log` tìm `已暂停` / `引擎停止` để biết lý do pause rồi tạo job mới.
+- **Pause là read-only**: khi engine tự pause (deadlock / worker failure), child exit 0 và runner gán trạng thái `Tạm dừng` + lý do `engine_paused` (dựa trên `meta/progress.json` thực tế — không còn gán nhầm `Hoàn thành`). Paused child chưa có nút **Tiếp tục**; mở `run.log` tìm `已暂停` / `引擎停止` để biết lý do pause rồi tạo job mới. (Job **Lỗi**/**Đã hủy** thì có resume — xem [Tiếp tục job](#tiếp-tục-job).)
 - **Spike test Unix-only**: `scripts/model-spike-test.sh` dùng bash / `kill` / `find` / python3; trên Windows cần chạy trong Git Bash hoặc WSL.
 
 ## Giới hạn MVP
@@ -121,7 +133,7 @@ Khi job đã có ít nhất một chương hoàn thành:
 - Hỗ trợ xuất **TXT + EPUB 3** (EPUB build web-side, nhãn chương theo header gốc của writer — đúng ngôn ngữ VN/EN/ES).
 - Không có scheduling / queue tự động.
 - Không chạy song song nhiều job.
-- Không có nút **Tiếp tục** cho paused child.
+- Không có nút **Tiếp tục** cho paused child (engine self-pause). Job **Lỗi**/**Đã hủy** thì có resume.
 - Không hiển thị real-time streaming; chỉ poll mỗi 5 giây.
 
 ## Gỡ lỗi nhanh
@@ -139,10 +151,69 @@ Khi job đã có ít nhất một chương hoàn thành:
 
 ## Liên Kết
 
-- Kiến trúc Web UI: [`02-WEB-UI.md`](02-WEB-UI.md)
-- Lưu ý merge upstream: [`04-LUU-Y-MERGE-UPSTREAM.md`](04-LUU-Y-MERGE-UPSTREAM.md)
+- Kiến trúc Web UI: [`02-WEB-UI.md`](../02-WEB-UI.md)
+- Lưu ý merge upstream: [`04-LUU-Y-MERGE-UPSTREAM.md`](../04-LUU-Y-MERGE-UPSTREAM.md)
+- State machine kỹ thuật: [`docs/prodrun-state-machine.md`](prodrun-state-machine.md)
 - Code backend: `internal/entry/web/prodrun*.go`
 - Code frontend: `internal/entry/web/assets/app-production.js`
+
+---
+
+## Foundation Gate (duyệt nền móng)
+
+Khi tạo job `fresh_profile`, Cockpit **tự động dừng** sau khi Architect xong nền móng (premise/outline/world/characters), trước khi Writer bắt đầu viết hàng trăm chương. Bạn xem nền móng rồi quyết định:
+
+| Hành động | Nút | Cơ chế | Chi phí |
+|---|---|---|---|
+| **Duyệt** | **✓ Duyệt** | restart cùng run dir → native `Resume()` vào writing | tốn token viết (như bình thường) |
+| **Từ chối** | **✕ Từ chối** | xoá run + run dir | 0 token Writer |
+| **Sửa tay + Duyệt** | **📂 Mở thư mục** | sửa 5 file nền móng (`premise.md`, `compass.json`, `layered_outline.json`, `world_rules.json`, `characters.json`) rồi Duyệt | 0 token — phẫu thuật chính xác |
+| **Sửa lại (AI)** | **↻ Sửa lại** | ghép góp ý vào `profile.md` → tạo run MỚI regenerate; run cũ giữ lại làm dự phòng | ~$0.01 sinh nền móng |
+| **Copy cho IDE** | **📋 Copy cho IDE** | bundle "Review & Edit" cho agent IDE (Kilo/Cursor) soi theo trục chết người rồi sửa trực tiếp 5 file | 0 token regenerate |
+
+> **Best-effort (poll 5s):** engine flip `phase=writing` đồng bộ trong `save_foundation` rồi dispatch "viết chương 1", nên tệ nhất Writer kịp draft dở chương 1 trước khi poll tick lands. Không mất hàng trăm chương.
+
+Xem chi tiết: [`docs/journals/260705-foundation-gate.md`](journals/260705-foundation-gate.md).
+
+---
+
+## Profile Library & Studio
+
+### Thư viện Profile
+
+Modal **📚 Thư viện Profile** list profile từ 3 nguồn (project/global/legacy). Chỉ profile **project** (`./.ainovel/profiles/`) sửa/xoá được; global/legacy read-only.
+
+| Hành động | API | Ghi chú |
+|---|---|---|
+| Xem nội dung | `GET /api/profiles/content?path=project/foo.md` | |
+| Lưu (project-only) | `POST /api/profiles/save` | trùng tên chưa `overwrite` → 409 |
+| Xoá (project-only) | `POST /api/profiles/delete` | global/legacy → 403 |
+
+### Profile Studio (sinh profile từ ý tưởng)
+
+Studio 4 bước trong modal Thư viện:
+
+1. **Brief** — chọn template hoặc gõ tay.
+2. **Ý tưởng** — nhập ý tưởng thô + field (thể loại, platform, ngôn ngữ, số chương, phong cách).
+3. **Sinh profile** — stream realtime qua SSE (`profileDelta`/`profileThinking`/`profileDone`/`profileError`; fallback 1-shot JSON khi không flush được) qua model **default trong config lúc khởi động** (nhãn hiện rõ `provider/model`). Hoặc **📋 Copy cho LLM ngoài** để LLM ngoài sinh.
+4. **Kết quả** — sửa → **Lưu**.
+
+Prompt sinh genre-agnostic, principle-based: **frame-first** (tự xác định thể loại / đã đại trà chưa / đặc trưng / thị trường *trước khi viết*), **long-novel survival rules**, **market-fit**, anti-AI-tell. Studio **không tự lưu/chạy** — bạn lưu thủ công rồi tạo job.
+
+---
+
+## Continue workspace (cook tiếp truyện đang dở)
+
+Ngoài `fresh_profile` (truyện mới từ profile), Cockpit hỗ trợ **cook tiếp** workspace chính:
+
+1. Nhấn **Cook tiếp** trong tab Sản xuất.
+2. Backend tạo job `continue_workspace` và lưu `SeededFrom` (chương đã hoàn thành + fingerprint SHA-256 của workspace).
+3. Seed thật xảy ra ở **Start** (không phải Create): re-fingerprint workspace, nếu khác seed ban đầu → lỗi `workspace changed since the continue run was created`; copy workspace sang sandbox `output/jobs/{id}/output/novel/`; re-fingerprint lần nữa sau copy để bắt race.
+4. Runner spawn `ainovel-cli --headless` **không `--prompt-file`** → engine native `Resume()` từ checkpoint đã seed.
+
+> `targetChapters` là **tổng số chương tuyệt đối cuối cùng**, không phải số chương viết thêm. Ví dụ workspace đang có 12 chương, muốn viết đến 100 chương thì nhập `100`.
+
+> Cockpit không hiểu/điều phối logic viết tiếp; nó chỉ là file-plumber + process spawner. Continue sync về workspace chính theo kiểu `git fast-forward` (fingerprint khớp → copy file-by-file; diverge → 409, hỏi `force`).
 
 ---
 
@@ -175,7 +246,7 @@ Profile là file `.md` thuần, **không có YAML frontmatter**. Nội dung là 
 
 - **Override model/provider** (tùy chọn) — `ProdRun.Model`/`ProdRun.Provider` đè lên `config.json` của job.
 - **Override budget** — `BudgetUSD` (default $5, `HardStop: true`).
-- **Copy rules** — `~/.ainovel/rules/*.md` (lang-vi.md...) được copy vào runDir → engine tự nạp rule tiếng Việt.
+- **Copy rules (lọc theo ngôn ngữ)** — rule từ `~/.ainovel/rules/*.md` được copy vào sandbox sau khi lọc theo ngôn ngữ của run (`vi`/`es`/`en`): chỉ rule trung tính (không hậu tố mã) + rule khớp mã ngôn ngữ được copy, rule ngôn ngữ khác bị bỏ. Kết hợp re-root HOME của child về sandbox (`withSandboxHome`) để engine đọc "global rules" từ bản đã lọc, không đọc `~/.ainovel/rules` thật. Danh sách file thực copy hiện trong panel run (`RuleFiles`).
 - **Không có override** cho `style` (fantasy/romance/suspense) — nó phải nằm trong prompt.
 
 ### Ví dụ
@@ -219,7 +290,11 @@ Sản xuất = cùng engine, không có gì bị skip. Sản xuất chỉ thiế
 | Quy hoạch cuốn chiếu | ✅ | ✅ | ✅ |
 | Khôi phục checkpoint | ✅ | ✅ | ✅ |
 | Can thiệp realtime (Steer) | ❌ | ✅ | ✅ |
+| Steer-on-resume (干预 mềm) | ✅ | — | — |
 | Cocreate (đồng sáng tác) | ❌ | ✅ | ✅ |
+| Foundation Gate (duyệt nền móng) | ✅ (auto) | ⚠️ (`/review on`) | ❌ |
+| Profile Studio (sinh profile) | ✅ | ❌ | ❌ |
+| Resume failed/cancelled | ✅ | — | — |
 | Xuất TXT | ✅ (server-side) | ✅ (eng.Export) | ✅ |
 | Xuất EPUB | ✅ (web-side, nhãn theo header writer) | ✅ | ✅ |
 | Đọc chương | ✅ (log) | ✅ (stream) | ✅ (stream + tabs) |
@@ -246,7 +321,7 @@ output/
 
 ### Lưu ý quan trọng
 
-- **Mỗi job = 1 cuốn sách mới** — vì `--prompt-file` luôn truyền prompt → engine luôn `StartPrepared` (sách mới), không bao giờ `Resume` (tiếp tục dở).
+- **Mỗi job `fresh_profile` = 1 cuốn sách mới** — vì `--prompt-file` luôn truyền prompt → engine luôn `StartPrepared` (sách mới). Job `continue_workspace` thì ngược lại: **không** `--prompt-file` → engine native `Resume()` (tiếp tục dở).
 - **Sách thủ công không bị đụng** — vì job chạy ở `output/jobs/run-XXX/`, tách biệt với workspace chính `output/novel/`.
 - **Sync ngược về workspace** — nếu workspace đã có chương, sync bị chặn (409). Cần `force: true` → **xóa sạch** chương thủ công + toàn bộ meta, rồi copy sách của job vào. **Không có merge** — đây là overwrite.
 - **Job continue luôn chạy chế độ tự động** — job `continue_workspace` copy cả `meta/` của workspace chính sang sandbox, trong đó có chế độ duyệt chương (`advance_mode`). Nếu bạn từng bật `/review on` trên TUI, sandbox sẽ thừa hưởng chế độ duyệt và job đứng chờ `/next` mãi (Cockpit không có nút này). Vì vậy sau khi seed, Cockpit **tự ép sandbox về `auto`** và xoá lệnh tạm dừng một lần. Workspace chính của bạn **không bị đổi** — muốn duyệt từng chương thì làm trên TUI.
