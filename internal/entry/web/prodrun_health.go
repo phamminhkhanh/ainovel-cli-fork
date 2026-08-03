@@ -84,6 +84,7 @@ func computeRunHealth(r *ProdRun) runHealth {
 		costPaceMetric(r),
 		budgetMetric(r),
 		persistMetric(r),
+		readMetric(r),
 	}
 
 	overall := healthIdle
@@ -202,6 +203,22 @@ func persistMetric(r *ProdRun) healthMetric {
 		Key:   "persist",
 		Value: "file lock",
 		Level: level,
+	}
+}
+
+// readMetric báo lỗi đọc fact file (progress/reviews/usage) trong poll. Khi
+// ReadErrors == 0 → idle (ẩn chip). Khi >0 → bad (đỏ): thường do schema drift
+// (upstream đổi struct domain.Progress/ReviewEntry/UsageState mà build chưa
+// cập nhật) hoặc file corrupt. Không phân biệt warn vì lỗi đọc fact là vấn
+// đề nghiêm trọng — số liệu hiển thị có thể sai hoàn toàn.
+func readMetric(r *ProdRun) healthMetric {
+	if r.ReadErrors == 0 {
+		return healthMetric{Key: "read", Value: "ok", Level: healthIdle}
+	}
+	return healthMetric{
+		Key:   "read",
+		Value: fmt.Sprintf("%d unreadable", r.ReadErrors),
+		Level: healthBad,
 	}
 }
 

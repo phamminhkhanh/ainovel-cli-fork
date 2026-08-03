@@ -2133,6 +2133,7 @@ async function renderProductionDetail(run) {
         <div class="stat"><span class="stat-label">Chi ph\u00ed</span><span class="stat-value">$${(run.costUsd || 0).toFixed(2)} / $${(run.budgetUsd || 0).toFixed(2)}</span></div>
         <div class="stat"><span class="stat-label">Th\u1eddi gian</span><span class="stat-value">${runtime}</span></div>
         <div class="stat"><span class="stat-label">L\u00fd do d\u1eebng</span><span class="stat-value">${escapeHtml(run.stopReason || '\u2014')}</span></div>
+        ${run.lastError ? `<div class="stat stat-error"><span class="stat-label">L\u1ed7i cu\u1ed1i</span><span class="stat-value" title="${escapeHtml(run.lastError)}">${escapeHtml(run.lastError)}</span></div>` : ''}
       </div>
       ${(run.ruleFiles && run.ruleFiles.length)
         ? `<div class="run-rules muted"><span class="stat-label">Rule \u0111\u00e3 n\u1ea1p:</span> ${run.ruleFiles.map(escapeHtml).join(', ')}</div>`
@@ -2175,6 +2176,7 @@ const HEALTH_METRIC_LABELS = {
   cost_pace: 'Chi ph\u00ed/ch\u01b0\u01a1ng',
   budget: 'Ng\u00e2n s\u00e1ch',
   persist: 'L\u01b0u tr\u1eef',
+  read: '\u0110\u1ecdc fact',
 };
 
 const HEALTH_OVERALL = {

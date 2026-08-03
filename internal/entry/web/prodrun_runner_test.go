@@ -976,21 +976,28 @@ func TestWaitProcFreesSlotBeforeClosingDone(t *testing.T) {
 // a clean exit to completed. It classifies by actual workspace progress —
 // phase=complete or target met means completed; anything else means the engine
 // paused mid-run and the run must surface as paused/engine_paused.
+//
+// Since the exit_unknown classification (Fix 3), waitProc scans run.log for a
+// pause marker. Tests that simulate a deliberate engine self-pause must write
+// the marker to runDir/run.log so hasPauseMarker confirms it; a clean exit
+// with no marker is labeled exit_unknown (cause unclear — crash, wording drift).
 func TestWaitProcClassifiesCleanExit(t *testing.T) {
 	cases := []struct {
-		name         string
-		completed    []int  // nil + writeProgress=false → no progress.json at all
-		phase        domain.Phase
+		name          string
+		completed     []int // nil + writeProgress=false → no progress.json at all
+		phase         domain.Phase
 		writeProgress bool
-		target       int
-		wantStatus   string
-		wantReason   string
-		wantChapters int
+		writePauseLog bool // write 已暂停 marker to runDir/run.log
+		target        int
+		wantStatus    string
+		wantReason    string
+		wantChapters  int
 	}{
-		{"engine pause mid-run", []int{1, 2}, domain.PhaseWriting, true, 5, prodRunPaused, stopReasonEnginePaused, 2},
-		{"phase complete", []int{1, 2, 3, 4, 5}, domain.PhaseComplete, true, 5, prodRunCompleted, stopReasonCompleted, 5},
-		{"target met without complete phase", []int{1, 2, 3, 4, 5}, domain.PhaseWriting, true, 5, prodRunCompleted, stopReasonCompleted, 5},
-		{"no progress file", nil, "", false, 5, prodRunPaused, stopReasonEnginePaused, 0},
+		{"engine pause mid-run", []int{1, 2}, domain.PhaseWriting, true, true, 5, prodRunPaused, stopReasonEnginePaused, 2},
+		{"phase complete", []int{1, 2, 3, 4, 5}, domain.PhaseComplete, true, false, 5, prodRunCompleted, stopReasonCompleted, 5},
+		{"target met without complete phase", []int{1, 2, 3, 4, 5}, domain.PhaseWriting, true, false, 5, prodRunCompleted, stopReasonCompleted, 5},
+		{"no progress file", nil, "", false, false, 5, prodRunPaused, stopReasonExitUnknown, 0},
+		{"exit 0 no marker (crash/wording drift)", []int{1, 2}, domain.PhaseWriting, true, false, 5, prodRunPaused, stopReasonExitUnknown, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1017,6 +1024,11 @@ func TestWaitProcClassifiesCleanExit(t *testing.T) {
 			}
 			if tc.writeProgress {
 				writeWorkspaceProgress(t, filepath.Join(ps.runDir(r.ID), "output", "novel"), tc.completed, tc.phase)
+			}
+			if tc.writePauseLog {
+				_ = os.MkdirAll(ps.runDir(r.ID), 0o755)
+				_ = os.WriteFile(filepath.Join(ps.runDir(r.ID), "run.log"),
+					[]byte("...\n已暂停等待人工介入\n引擎停止 (已完成 2 章)\n"), 0o644)
 			}
 
 			cmd := helperCommand(10)

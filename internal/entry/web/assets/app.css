@@ -1041,6 +1041,7 @@ select:focus { outline: none; border-color: var(--color-accent); }
 }
 .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-faint); }
 .stat-value { font-size: 14px; font-variant-numeric: tabular-nums; }
+.stat-error .stat-value { color: var(--color-danger, var(--color-accent)); word-break: break-word; }
 .run-detail-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .run-log {
   max-height: 320px; overflow-y: auto;

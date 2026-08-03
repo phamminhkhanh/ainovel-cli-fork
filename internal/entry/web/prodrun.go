@@ -75,6 +75,11 @@ const (
 	// paused instead of completed so an unfinished book is never mislabeled
 	// "Hoàn thành".
 	stopReasonEnginePaused = "engine_paused"
+	// exit_unknown: child exited 0 with the book unfinished AND the pause
+	// marker is absent from run.log at exit. The cause is unclear (crash
+	// exit 0, upstream wording drift, OOM kill). Distinct from engine_paused
+	// so the UI does not mislead the user into "engine paused on purpose".
+	stopReasonExitUnknown = "exit_unknown"
 )
 
 // defaultProdRunBudgetUSD is the fallback cost cap when the user/global config
@@ -131,6 +136,16 @@ type ProdRun struct {
 	// is created via "revise" (Foundation Gate). It steers the Architect to
 	// regenerate the foundation differently. Empty for normal runs.
 	RevisionNote string `json:"revisionNote,omitempty"`
+	// LastError ghi lỗi gây ra chuyển trạng thái failed (cmd.Start/Wait error,
+	// prepareRunDir fail...). Rỗng khi không phải failed hoặc lỗi chưa rõ.
+	// Khác PersistError (lỗi ghi jobs.json): LastError là lỗi vận hành run,
+	// PersistError là lỗi persist. UI hiện trong panel chi tiết.
+	LastError string `json:"lastError,omitempty"`
+	// ReadErrors đếm số lần poll đọc fact file (progress/reviews/usage) bị lỗi
+	// unmarshal (schema drift) hoặc IO lỗi (không phải file-chưa-có). Khi >0,
+	// health strip báo "stats unreadable" để user biết số liệu có thể sai, thay
+	// vì im lặng return 0. Reset mỗi lần persist OK (cùng cơ chế PersistError).
+	ReadErrors int `json:"readErrors,omitempty"`
 }
 
 // SeedMeta captures the source workspace state for a continue_workspace run.

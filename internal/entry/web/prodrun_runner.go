@@ -86,7 +86,7 @@ func (rr *prodRunRunner) start(id string) error {
 
 	runDir := rr.store.runDir(id)
 	if err := prepareRunDir(runDir, rr.repoRoot, rr.hostDir, r, rr.baseCfg); err != nil {
-		rr.markFailed(id)
+		rr.markFailed(id, err.Error())
 		return fmt.Errorf("prepare run dir: %w", err)
 	}
 	if r.kind() == prodRunKindContinueWorkspace && r.SeededFrom != nil && !r.SeededFrom.SeededAt.IsZero() {
@@ -96,7 +96,7 @@ func (rr *prodRunRunner) start(id string) error {
 				stored.SeededFrom.SeededAt = seededAt
 			}
 		}); err != nil {
-			rr.markFailed(id)
+			rr.markFailed(id, err.Error())
 			return fmt.Errorf("persist seed metadata: %w", err)
 		}
 	}
@@ -104,7 +104,7 @@ func (rr *prodRunRunner) start(id string) error {
 	logPath := filepath.Join(runDir, "run.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		rr.markFailed(id)
+		rr.markFailed(id, err.Error())
 		return fmt.Errorf("open run log: %w", err)
 	}
 
@@ -131,7 +131,7 @@ func (rr *prodRunRunner) start(id string) error {
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
-		rr.markFailed(id)
+		rr.markFailed(id, err.Error())
 		return fmt.Errorf("start headless process: %w", err)
 	}
 
@@ -159,10 +159,11 @@ func (rr *prodRunRunner) start(id string) error {
 	return nil
 }
 
-func (rr *prodRunRunner) markFailed(id string) {
+func (rr *prodRunRunner) markFailed(id string, reason string) {
 	if _, err := rr.store.update(id, func(r *ProdRun) {
 		r.Status = prodRunFailed
 		r.StopReason = stopReasonError
+		r.LastError = truncate(reason, 500)
 		r.StoppedAt = time.Now()
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "prodrun: failed to mark run %s failed: %v\n", id, err)
@@ -184,6 +185,16 @@ func (rr *prodRunRunner) waitProc(id string, proc *runningProc) {
 	}
 	finished, chapters := runFinished(runDir, target)
 
+	// Scan the tail of run.log once before the status flip: the default branch
+	// (child exit 0, book unfinished) previously labeled every such exit
+	// "engine_paused" unconditionally. But engine self-pause prints a Chinese
+	// marker (等待用户输入 / 已暂停…) that poll() also watches while the child
+	// is alive. If that marker is absent at exit, the cause is likely a crash
+	// exit 0 or upstream wording drift — label it distinctly so the user is
+	// not told "engine deliberately paused" when it may have died unexpectedly.
+	logTail := readLogTail(filepath.Join(runDir, "run.log"), 4<<10)
+	pauseConfirmed := hasPauseMarker(logTail)
+
 	// Resolve the stored status before releasing the process slot so that a
 	// concurrent start() cannot observe a running status with no process.
 	if _, saveErr := rr.store.update(id, func(r *ProdRun) {
@@ -196,15 +207,24 @@ func (rr *prodRunRunner) waitProc(id string, proc *runningProc) {
 			case err != nil:
 				r.Status = prodRunFailed
 				r.StopReason = stopReasonError
+				r.LastError = truncate(err.Error(), 500)
 			case finished:
 				r.Status = prodRunCompleted
 				r.StopReason = stopReasonCompleted
 			default:
 				// Engine+Arbiter exits 0 on self-pause (deadlock, worker
 				// failure, gate error): child gone, book unfinished. Label
-				// paused, never "Hoàn thành".
+				// paused, never "Hoàn thành". If the pause marker is absent
+				// at exit, the cause is unclear (crash exit 0, wording drift)
+				// — record it so the user is not misled into "engine paused
+				// on purpose".
 				r.Status = prodRunPaused
-				r.StopReason = stopReasonEnginePaused
+				if pauseConfirmed {
+					r.StopReason = stopReasonEnginePaused
+				} else {
+					r.StopReason = stopReasonExitUnknown
+					r.LastError = "child exit 0, book unfinished, no pause marker in log (possible crash or upstream wording drift)"
+				}
 			}
 			r.StoppedAt = time.Now()
 		}
@@ -273,15 +293,36 @@ func (rr *prodRunRunner) poll(id string) {
 	runDir := rr.store.runDir(id)
 	progressPath := filepath.Join(runDir, "output", "novel", "meta", "progress.json")
 
-	chapters := readCompletedChapters(progressPath)
-	reviews, rewrites := countReviewsAndRewrites(filepath.Join(runDir, "output", "novel", "reviews"))
-	cost := readCostUSD(filepath.Join(runDir, "output", "novel", "meta", "usage.json"))
+	chapters, chaptersErr := readCompletedChapters(progressPath)
+	reviews, rewrites, reviewsErr := countReviewsAndRewrites(filepath.Join(runDir, "output", "novel", "reviews"))
+	cost, costErr := readCostUSD(filepath.Join(runDir, "output", "novel", "meta", "usage.json"))
+
+	// Tally read errors: non-nil errors here mean unmarshal failure or IO
+	// error (schema drift, permission, corrupt) — NOT "file not found", which
+	// the read functions normalize to nil. When any is present, increment
+	// ReadErrors so the health strip surfaces "stats unreadable" instead of
+	// silently showing zeros. Reset to 0 when all reads succeed (same pattern
+	// as PersistError reset on save OK).
+	readErrs := 0
+	if chaptersErr != nil {
+		readErrs++
+		fmt.Fprintf(os.Stderr, "prodrun: read progress for %s: %v\n", id, chaptersErr)
+	}
+	if reviewsErr != nil {
+		readErrs++
+		fmt.Fprintf(os.Stderr, "prodrun: read reviews for %s: %v\n", id, reviewsErr)
+	}
+	if costErr != nil {
+		readErrs++
+		fmt.Fprintf(os.Stderr, "prodrun: read usage for %s: %v\n", id, costErr)
+	}
 
 	if _, err := rr.store.update(id, func(r *ProdRun) {
 		r.Chapters = chapters
 		r.Reviews = reviews
 		r.Rewrites = rewrites
 		r.CostUSD = cost
+		r.ReadErrors = readErrs
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "prodrun: failed to persist stats for %s: %v\n", id, err)
 	}
@@ -297,7 +338,14 @@ func (rr *prodRunRunner) poll(id string) {
 	// immediately after start.
 	r := rr.store.get(id)
 	if r != nil && r.kind() == prodRunKindFreshProfile && r.Status == prodRunRunning && chapters == 0 && !r.FoundationApproved {
-		if readWorkspacePhase(progressPath) == string(domain.PhaseWriting) {
+		phase, phaseErr := readWorkspacePhase(progressPath)
+		if phaseErr != nil {
+			// Schema drift on progress.json: the gate cannot detect the
+			// foundation→writing transition. Log it; the run continues but
+			// ReadErrors already flags the problem on the health strip.
+			fmt.Fprintf(os.Stderr, "prodrun: foundation gate phase read failed for %s: %v\n", id, phaseErr)
+		}
+		if phase == string(domain.PhaseWriting) {
 			if _, err := rr.store.update(id, func(r *ProdRun) {
 				if r.Status == prodRunRunning {
 					r.Status = prodRunAwaitingReview
@@ -547,16 +595,19 @@ func buildRunConfig(baseCfg bootstrap.Config, r *ProdRun) bootstrap.Config {
 	return cfg
 }
 
-func readCompletedChapters(path string) int {
+func readCompletedChapters(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return 0
+		if os.IsNotExist(err) {
+			return 0, nil // normal early state, not a read error
+		}
+		return 0, err
 	}
 	var p domain.Progress
 	if err := json.Unmarshal(data, &p); err != nil {
-		return 0
+		return 0, err
 	}
-	return len(p.CompletedChapters)
+	return len(p.CompletedChapters), nil
 }
 
 // runDirHasExistingOutput reports whether a run's output/novel/meta/progress.json
@@ -600,16 +651,22 @@ func forceSandboxAutoAdvance(novelDir string) error {
 
 // readWorkspacePhase returns the Phase string from a progress.json, or ""
 // if the file is missing/unreadable. Used by the Foundation Gate poll check.
-func readWorkspacePhase(path string) string {
+// Returns a non-nil error only for non-IsNotExist failures (unmarshal, IO)
+// so the caller can surface schema drift instead of silently treating it as
+// "phase not yet writing".
+func readWorkspacePhase(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
 	}
 	var p domain.Progress
 	if err := json.Unmarshal(data, &p); err != nil {
-		return ""
+		return "", err
 	}
-	return string(p.Phase)
+	return string(p.Phase), nil
 }
 
 // runFinished reports whether a cleanly exited child actually finished the
@@ -620,19 +677,24 @@ func readWorkspacePhase(path string) string {
 // the final chapter count (poll stats can lag up to one interval).
 func runFinished(runDir string, targetChapters int) (finished bool, chapters int) {
 	progressPath := filepath.Join(runDir, "output", "novel", "meta", "progress.json")
-	chapters = readCompletedChapters(progressPath)
-	finished = readWorkspacePhase(progressPath) == string(domain.PhaseComplete) ||
+	chapters, _ = readCompletedChapters(progressPath)
+	phase, _ := readWorkspacePhase(progressPath)
+	finished = phase == string(domain.PhaseComplete) ||
 		(targetChapters > 0 && chapters >= targetChapters)
 	return finished, chapters
 }
 
-func countReviewsAndRewrites(dir string) (int, int) {
+func countReviewsAndRewrites(dir string) (int, int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return 0, 0
+		if os.IsNotExist(err) {
+			return 0, 0, nil // no reviews dir yet — normal, not a read error
+		}
+		return 0, 0, err
 	}
 	reviews := 0
 	rewrites := 0
+	var firstUnmarshalErr error
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -642,10 +704,16 @@ func countReviewsAndRewrites(dir string) (int, int) {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			continue
+			continue // per-file read error (lock/partial) — skip, not fatal
 		}
 		var r domain.ReviewEntry
 		if err := json.Unmarshal(data, &r); err != nil {
+			// Schema drift on a review file: record once so the caller can
+			// surface it. Keep counting the parseable files so stats stay
+			// useful even when one review is corrupt.
+			if firstUnmarshalErr == nil {
+				firstUnmarshalErr = fmt.Errorf("unmarshal review %s: %w", e.Name(), err)
+			}
 			continue
 		}
 		reviews++
@@ -653,19 +721,22 @@ func countReviewsAndRewrites(dir string) (int, int) {
 			rewrites++
 		}
 	}
-	return reviews, rewrites
+	return reviews, rewrites, firstUnmarshalErr
 }
 
-func readCostUSD(path string) float64 {
+func readCostUSD(path string) (float64, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return 0
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
 	}
 	var state domain.UsageState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return 0
+		return 0, err
 	}
-	return state.Overall.Cost
+	return state.Overall.Cost, nil
 }
 
 func readLogTail(path string, maxBytes int64) string {
@@ -700,6 +771,19 @@ func hasPauseMarker(tail string) bool {
 		}
 	}
 	return false
+}
+
+// truncate caps s to maxRunes, appending "…" if truncated. Rune-safe so CJK
+// error messages are not cut mid-character.
+func truncate(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
 }
 
 func copyFile(dst, src string) error {
