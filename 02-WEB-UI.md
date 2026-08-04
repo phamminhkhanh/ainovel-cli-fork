@@ -51,11 +51,10 @@ Frontend = **JS thuần, 0 dependency**, nhúng vào binary bằng `go:embed` �
 
 | File | Vai trò |
 |---|---|
-| `run.go` | `web.Run`: dựng Host, set ask handler, goroutine tiêu thụ event → SSE, `http.Server` |
-| `server.go` | đăng ký route + middleware (Host-header allowlist chống CSRF/DNS-rebinding); giữ `*store.Store` cache |
-| `sse.go` | SSE hub: 1 consumer fan-out, đa hợp khung stream/event/snapshot/ask/done |
+| `run.go` | `web.Run`: dựng Host, goroutine tiêu thụ event → SSE, `http.Server` |
+| `server.go` | đăng ký route + middleware (Host-header allowlist chống DNS-rebinding); giữ `*store.Store` cache. Endpoint trả phí Radar có thêm JSON + Origin/Sec-Fetch-Site guard riêng |
+| `sse.go` | SSE hub: 1 consumer fan-out, đa hợp khung stream/event/snapshot/done |
 | `handlers.go` | các POST handler → gọi method Host |
-| `ask.go` | cầu nối block→channel cho `ask_user` (engine block tới khi client trả lời) |
 | `phase3.go` | cocreate / export / import / diag (Phase 3) |
 | `content.go` | read-only content endpoints: chapters, outline, world, characters |
 | `content_reviews.go` | read-only: đánh giá 7 chiều của Editor (`/api/reviews`) + sổ 伏笔 (`/api/foreshadow`) |
@@ -70,15 +69,16 @@ Frontend = **JS thuần, 0 dependency**, nhúng vào binary bằng `go:embed` �
 | `prodrun_export.go` | server-side TXT concatenation |
 | `profiles_library.go` | Profile Library: CRUD `.md` (`content`/`save`/`delete`), ghi/xóa **project-only**, guard 409 + traversal |
 | `profile_studio.go` | Profile Studio: `POST /api/profiles/generate` — **stream qua SSE** (`profileDelta`/`profileThinking`/`profileDone`/`profileError`; fallback 1-shot JSON khi không flush được) qua `bootstrap.NewModelSet(s.cfg)`; system prompt principle-based (frame-first · long-novel survival rules · market-fit) |
+| `market_radar*.go` | Market Radar độc lập: source adapters Fanqie/Qidian → normalized snapshot → model analyst CN→VI/ES/EN → raw/report JSON; partial-live/fallback minh bạch, không gọi Host/Engine |
 | `prompts.go` | prompt override loader: đọc `~/.ainovel/prompts/*.md` → `Bundle.OverridePrompt` trước `host.New` |
 | `reveal.go` | mở thư mục bằng file manager của OS (loopback-only) |
 | `embed.go` | `go:embed` assets |
-| `assets/{index.html,app.css,app-i18n.js,app.js,app-dashboard.js,app-workspace.js,app-chapters.js,app-studio.js,app-production.js,app-input.js}` | SPA 1 trang: dashboard, workspace tabs, chapters, studio/profile modals, Production Cockpit, input UX |
-| `*_test.go` | guard hồi quy (ask, sse, server, assets, content, prodrun*, profile*, health) |
+| `assets/{index.html,app.css,app-i18n.js,app.js,app-dashboard.js,app-workspace.js,app-chapters.js,app-studio.js,app-production.js,app-radar.js,app-input.js}` | SPA 1 trang: dashboard, workspace tabs, chapters, studio/profile modals, Production Cockpit, Radar, input UX |
+| `*_test.go` | guard hồi quy (sse, server, assets, content, prodrun*, profile*, radar*, health) |
 
 ### Content workspace (khung chính)
 
-Khung giữa không còn trống khi engine không stream. Nó là workspace có 7 tab:
+Khung giữa không còn trống khi engine không stream. Nó là workspace có 8 tab:
 
 | Tab | Nguồn | Hành vi |
 |---|---|---|
@@ -87,6 +87,7 @@ Khung giữa không còn trống khi engine không stream. Nó là workspace có
 | **Outline** | `GET /api/outline` | premise + danh sách chương (chapter / title / core event). |
 | **World** | `GET /api/world` + `GET /api/characters` + `GET /api/foreshadow` | world rules, timeline, compass, nhân vật, sổ 伏笔 (cài/thu hồi). |
 | **Đánh giá** | `GET /api/reviews` | review 7 chiều của Editor theo chương + review vòng cung: verdict, điểm từng chiều, issue có trích dẫn, contract status. |
+| **Radar** | `GET /api/radar/latest` + `POST /api/radar/scan` | quét Fanqie/Qidian thủ công, phân tích tín hiệu CN→VI/ES/EN, hiển thị live/partial/fallback + evidence; không sửa truyện. |
 | **Sản xuất** | `GET /api/prodruns` + `/api/profiles` | queue, start, monitor, stop, and export headless novel-generation runs. |
 | **Hỗ trợ** | embedded guide | hướng dẫn nhanh, giải thích các tab và thể loại phù hợp. |
 

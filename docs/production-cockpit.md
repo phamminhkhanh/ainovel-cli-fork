@@ -16,6 +16,7 @@ Production Cockpit là tab **Sản xuất** trong Web UI của `ainovel-cli-fork
 8. [Lưu ý quan trọng](#lưu-ý-quan-trọng)
 9. [Giới hạn MVP](#giới-hạn-mvp)
 10. [Gỡ lỗi nhanh](#gỡ-lỗi-nhanh)
+11. [Radar thị trường](#radar-thị-trường)
 
 ---
 
@@ -146,6 +147,40 @@ Khi job đã có ít nhất một chương hoàn thành:
 | Chi phí không cập nhật | Kiểm tra `meta/progress.json` và `run.log` có ghi cost không. |
 | Xuất TXT lỗi | Đảm bảo thư mục `{runDir}/output/novel/chapters/` tồn tại và có file `.md`. |
 | `PossiblyOrphaned` | Kiểm tra PID cũ trong Task Manager / `ps` và kill nếu còn. |
+
+## Radar thị trường
+
+Tab **Radar** là module fork độc lập, không gọi Host/Engine và không thay đổi truyện. Nó quét thủ công bảng xếp hạng Trung Quốc (Fanqie + Qidian), dùng model Studio phân tích tín hiệu CN như một lead indicator 6–12 tháng cho thị trường đích, rồi lưu dữ liệu cục bộ.
+
+### Cách dùng
+
+1. Mở tab **Radar**.
+2. Chọn thị trường đích: Việt Nam, Tây Ban Nha/LATAM hoặc English.
+3. Nhấn **📡 Quét Radar**. Một scan gọi hai nguồn song song rồi gọi model analyst một lần.
+4. Đọc `momentum`, `saturation`, `transferability`, độ trễ dự kiến, rủi ro bản địa hóa và evidence. **Copy concept** chỉ copy ý tưởng; không tự tạo profile hay chạy truyện.
+
+### Chất lượng nguồn
+
+| `analysisMode` | Ý nghĩa |
+|---|---|
+| `live` | Cả hai nguồn có dữ liệu live. |
+| `partial_live` | Ít nhất một nguồn live; nguồn lỗi hiển thị rõ. |
+| `model_knowledge_fallback` | Tất cả nguồn lỗi; model dùng kiến thức nền và score momentum/transferability bị cap `0.35`. |
+
+Radar không giả vờ dữ liệu realtime khi fetch lỗi. Response luôn có `liveSources`, `totalSources`, `failedSources`, `snapshotAge` và mode phân tích.
+
+### Lưu trữ
+
+```text
+output/radar/
+├── latest.json                         # report mới nhất
+├── raw/snapshot-YYYYMMDDTHHMMSS.NNNNNNNNNZ.json # raw normalized rankings
+└── reports/report-YYYYMMDDTHHMMSS.NNNNNNNNNZ.json
+```
+
+### Mở rộng nguồn
+
+Backend dùng interface `radarSource` (`ID`, `Market`, `Fetch`). Thêm nguồn VN/ES chỉ cần thêm adapter trả `[]radarEntry`; orchestration, analyzer, persistence và UI không đổi. Radar hiện cố ý không có scheduler, biểu đồ lịch sử hay auto-create profile (KISS/YAGNI).
 
 ---
 
