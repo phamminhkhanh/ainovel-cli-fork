@@ -35,7 +35,10 @@ type server struct {
 	studioOnce   sync.Once
 	studioModels *bootstrap.ModelSet
 	studioErr    error
-	workspaceMu sync.Mutex // serializes mutations to the main host workspace
+	workspaceMu  sync.Mutex // serializes mutations to the main host workspace
+	radarMu      sync.Mutex // one manual market scan at a time
+	radarSources []radarSource
+	radarAnalyze radarAnalyzer
 }
 
 // Store returns the cached on-disk store for read-only content handlers.
@@ -57,6 +60,7 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/app-studio.js", s.handleAsset("assets/app-studio.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-input.js", s.handleAsset("assets/app-input.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app-production.js", s.handleAsset("assets/app-production.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("/app-radar.js", s.handleAsset("assets/app-radar.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/app.css", s.handleAsset("assets/app.css", "text/css; charset=utf-8"))
 
 	// 只读
@@ -109,6 +113,10 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("POST /api/prodruns/{id}/resume", s.handleProdRunResume)
 	mux.HandleFunc("POST /api/prodruns/{id}/reveal", s.handleProdRunReveal)
 	mux.HandleFunc("GET /api/prodruns/{id}/ide-bundle", s.handleProdRunIDEBundle)
+
+	// Market Radar (fork-only): CN ranking signals -> target-market opportunities.
+	mux.HandleFunc("POST /api/radar/scan", s.handleRadarScan)
+	mux.HandleFunc("GET /api/radar/latest", s.handleRadarLatest)
 
 	// 共创 / 导出 / 导入 / 仿写 / 诊断（Phase 3）
 	mux.HandleFunc("/api/cocreate/send", s.handleCoCreateSend)

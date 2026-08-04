@@ -121,13 +121,28 @@ func TestEmbeddedHTMLHasWorkspaceTabs(t *testing.T) {
 		`id="tab-chapter"`,
 		`id="tab-outline"`,
 		`id="tab-world"`,
+		`id="tab-radar"`,
 		`id="chapterText"`,
 		`id="outlineDetail"`,
 		`id="worldChars"`,
 		`/app-workspace.js`,
+		`/app-radar.js`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("index.html missing workspace tab element %q", want)
+		}
+	}
+}
+
+func TestEmbeddedRadarHooksExist(t *testing.T) {
+	js, err := assetFS.ReadFile("assets/app-radar.js")
+	if err != nil {
+		t.Fatalf("read embedded radar js: %v", err)
+	}
+	text := string(js)
+	for _, want := range []string{"function loadRadarTab(", "function scanRadar(", "function renderRadarSource(", "function renderRadarLoadError(", "radarRetryLatest", "番茄小说 · Fanqie", "起点中文网 · Qidian", "/api/radar/scan", "/api/radar/latest"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("app-radar.js missing hook or endpoint %q", want)
 		}
 	}
 }
@@ -229,7 +244,8 @@ func TestEmbeddedHTMLScriptOrderChaptersBeforeDashboard(t *testing.T) {
 	dashIdx := strings.Index(text, "/app-dashboard.js")
 	workIdx := strings.Index(text, "/app-workspace.js")
 	prodIdx := strings.Index(text, "/app-production.js")
-	if chapIdx < 0 || dashIdx < 0 || workIdx < 0 || prodIdx < 0 {
+	radarIdx := strings.Index(text, "/app-radar.js")
+	if chapIdx < 0 || dashIdx < 0 || workIdx < 0 || prodIdx < 0 || radarIdx < 0 {
 		t.Fatal("missing script references")
 	}
 	if workIdx >= chapIdx {
@@ -240,6 +256,12 @@ func TestEmbeddedHTMLScriptOrderChaptersBeforeDashboard(t *testing.T) {
 	}
 	if prodIdx >= workIdx {
 		t.Fatal("app-production.js must load before app-workspace.js (loadProductionTab dependency)")
+	}
+	if prodIdx >= radarIdx {
+		t.Fatal("app-production.js must load before app-radar.js (escapeHtml dependency)")
+	}
+	if radarIdx >= workIdx {
+		t.Fatal("app-radar.js must load before app-workspace.js (loadRadarTab dependency)")
 	}
 }
 
