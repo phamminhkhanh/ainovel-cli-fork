@@ -120,7 +120,14 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
-	s.workspaceMu.Lock()
+	// StartPrepared performs destructive setup writes before its synchronous
+	// Arbiter model call returns. Do not queue duplicate clicks behind this
+	// potentially long request: reject them immediately, while preserving the
+	// existing workspace-wide serialization for the first request.
+	if !s.workspaceMu.TryLock() {
+		writeErr(w, http.StatusConflict, fmt.Errorf("workspace mutation already in progress"))
+		return
+	}
 	defer s.workspaceMu.Unlock()
 	var body struct {
 		Prompt string `json:"prompt"`
@@ -359,17 +366,34 @@ func (s *server) handleThinking(w http.ResponseWriter, r *http.Request) {
 // 任何「开新书」入口（start / cocreate 冷启动）落盘前都要先过它，避免 StartPrepared 静默清空进度。
 // 响应带 code=recoverable，让前端无需匹配文案即可识别此冲突并弹二次确认。
 func (s *server) blockIfRecoverable(w http.ResponseWriter, force bool) bool {
-	if force {
-		return false
-	}
-	if snap := s.eng.Snapshot(); snap.RecoveryLabel != "" {
+	code, message, blocked := classifyStartConflict(s.eng.Snapshot(), force)
+	if blocked {
 		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": fmt.Sprintf("存在可恢复的创作进度（%s）：开始新书将清除它。", snap.RecoveryLabel),
-			"code":  "recoverable",
+			"error": message,
+			"code":  code,
 		})
 		return true
 	}
 	return false
+}
+
+// classifyStartConflict distinguishes disposable startup residue from an
+// existing book. Force may clear a failed planning session with zero completed
+// chapters, but it must never promise to erase a book that Host intentionally
+// protects via refuseNewBookOverExisting.
+func classifyStartConflict(snap host.UISnapshot, force bool) (code, message string, blocked bool) {
+	if snap.CompletedCount > 0 {
+		return "existing_book",
+			fmt.Sprintf("Workspace hiện có %d chương hoàn thành. Muốn tạo truyện mới, hãy chọn hoặc tạo workspace khác; dùng Khôi phục để viết tiếp.", snap.CompletedCount), true
+	}
+	if snap.RecoveryLabel == "" {
+		return "", "", false
+	}
+	if force {
+		return "", "", false
+	}
+	return "recoverable",
+		fmt.Sprintf("Có tiến độ khởi tạo có thể khôi phục (%s). Bắt đầu mới sẽ xóa phần khởi tạo chưa có chương này.", snap.RecoveryLabel), true
 }
 
 func requirePOST(w http.ResponseWriter, r *http.Request) bool {

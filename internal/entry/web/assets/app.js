@@ -248,8 +248,14 @@ function updateControls(s) {
   const st = s ? (s.RuntimeState || 'idle') : currentState;
   const hasNovel = s ? ((s.CompletedCount || 0) > 0 || (s.CurrentChapter || 0) > 0 || (s.TotalChapters || 0) > 0) : hasNovelState;
   const mode = sendModeFor(st, hasNovel);
-  $('#sendBtn').textContent = mode === 'start' ? 'Bắt đầu' : mode === 'steer' ? 'Can thiệp' : 'Tiếp tục';
-  $('#modeHint').textContent = 'Chế độ: ' + (mode === 'start' ? 'Bắt đầu' : mode === 'steer' ? 'Can thiệp (đang chạy)' : 'Tiếp tục');
+  const sendBtn = $('#sendBtn');
+  sendBtn.textContent = startInFlight ? 'Đang khởi tạo…' : mode === 'start' ? 'Bắt đầu' : mode === 'steer' ? 'Can thiệp' : 'Tiếp tục';
+  sendBtn.disabled = startInFlight;
+  $('#modeHint').textContent = s && s.RecoveryLabel
+    ? ((s.CompletedCount || 0) > 0
+      ? 'Workspace đã có chương — dùng Khôi phục để viết tiếp; truyện mới cần workspace khác'
+      : 'Có phiên khởi tạo dở dang — ưu tiên Khôi phục; Bắt đầu mới sẽ hỏi xác nhận xóa phần chưa có chương')
+    : 'Chế độ: ' + (mode === 'start' ? 'Bắt đầu' : mode === 'steer' ? 'Can thiệp (đang chạy)' : 'Tiếp tục');
   $('#abortBtn').hidden = !(st === 'running' || st === 'pausing' || st === 'paused');
   const resumeBtn = $('#resumeBtn');
   resumeBtn.hidden = !(st === 'idle' && s.RecoveryLabel);
@@ -257,6 +263,8 @@ function updateControls(s) {
 }
 
 // ── Gọi API ──
+let startInFlight = false;
+
 async function post(url, body) {
   try {
     const r = await fetch(url, {
@@ -276,24 +284,46 @@ async function post(url, body) {
 // startNovel gọi /api/start. Nếu BE chặn vì còn phiên khôi phục được (409 code=recoverable),
 // hỏi xác nhận rồi thử lại với force=true — tránh xoá nhầm tiến độ cũ (StartPrepared reset sạch).
 async function startNovel(prompt, force) {
+  if (startInFlight) {
+    toast('Đang khởi tạo truyện, vui lòng chờ model lập kế hoạch…', 'warn');
+    return null;
+  }
+  startInFlight = true;
+  const sendBtn = $('#sendBtn');
+  if (sendBtn) {
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Đang khởi tạo…';
+  }
   try {
-    const r = await fetch('/api/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, force: !!force }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (r.status === 409 && data.code === 'recoverable' && !force) {
-      if (confirm((data.error || 'Có tiến độ khôi phục được.') + '\n\nVẫn tạo truyện MỚI và xoá tiến độ này?')) {
-        return startNovel(prompt, true);
+    let shouldForce = !!force;
+    for (;;) {
+      const r = await fetch('/api/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, force: shouldForce }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 409 && data.code === 'recoverable' && !shouldForce) {
+        if (confirm((data.error || 'Có tiến độ khôi phục được.') + '\n\nVẫn tạo truyện MỚI và xoá tiến độ này?')) {
+          shouldForce = true;
+          continue;
+        }
+        return null;
       }
-      return null;
+      if (r.status === 409 && data.code === 'existing_book') {
+        toast(data.error || 'Workspace đã có truyện. Hãy dùng Khôi phục hoặc tạo workspace mới.', 'error');
+        return null;
+      }
+      if (!r.ok) { toast(data.error || ('HTTP ' + r.status), 'error'); return null; }
+      return data;
     }
-    if (!r.ok) { toast(data.error || ('HTTP ' + r.status), 'error'); return null; }
-    return data;
   } catch (e) {
     toast(String(e), 'error');
     return null;
+  } finally {
+    startInFlight = false;
+    if (sendBtn) sendBtn.disabled = false;
+    if (lastSnapshot) updateControls(lastSnapshot);
   }
 }
 
