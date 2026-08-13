@@ -16,6 +16,19 @@
         <span class="badge" id="stateBadge" data-state="idle">idle</span>
       </header>
 
+      <!-- Status bar (compact overview — visible when sidebar collapsed) -->
+      <div class="status-bar" id="statusBar">
+        <span class="status-engine" id="statusEngine">—</span>
+        <span class="status-sep">·</span>
+        <span class="status-ch" id="statusCh">—</span>
+        <span class="status-sep">·</span>
+        <span class="status-health" id="statusHealth">—</span>
+        <span class="status-sep">·</span>
+        <span class="status-cost" id="statusCost">—</span>
+        <span class="status-sep">·</span>
+        <span class="status-ctx" id="statusCtx">—</span>
+      </div>
+
       <!-- Compact progress (novel-master) -->
       <section class="card">
         <h3>Tiến độ</h3>
@@ -140,8 +153,9 @@
               <button class="tab" data-tab="chapter" role="tab" aria-selected="false">Chương</button>
               <button class="tab" data-tab="outline" role="tab" aria-selected="false">Outline</button>
               <button class="tab" data-tab="world" role="tab" aria-selected="false">World</button>
-              <button class="tab" data-tab="review" role="tab" aria-selected="false">Đánh giá</button>
-              <button class="tab" data-tab="radar" role="tab" aria-selected="false">Radar</button>
+              <button class="tab" data-tab="review" role="tab" aria-selected="false">Review</button>
+              <button class="tab" data-tab="system" role="tab" aria-selected="false">⚡System</button>
+              <button class="tab" data-tab="market" role="tab" aria-selected="false">📡Market</button>
               <button class="tab" data-tab="production" role="tab" aria-selected="false">Sản xuất</button>
               <button class="tab" data-tab="guide" role="tab" aria-selected="false">Hỗ trợ</button>
             </div>
@@ -171,8 +185,36 @@
             <div class="tab-panel" id="tab-review" role="tabpanel">
               <div class="review-list" id="reviewList"></div>
             </div>
-            <div class="tab-panel" id="tab-radar" role="tabpanel">
-              <div id="radarRoot"><div class="placeholder">Chọn tab Radar để tải.</div></div>
+            <div class="tab-panel" id="tab-system" role="tabpanel">
+              <div class="system-radar">
+                <div class="radar-health" id="radarHealth">
+                  <div class="radar-gauge">
+                    <span class="gauge-value" id="healthValue">—</span>
+                    <span class="gauge-label">Health</span>
+                  </div>
+                  <div class="radar-status" id="healthStatus"></div>
+                </div>
+                <div class="radar-agents" id="radarAgents">
+                  <h3>Agents</h3>
+                  <ul class="agents-list" id="systemAgentsList"></ul>
+                </div>
+                <div class="radar-costs" id="radarCosts">
+                  <h3>Chi phí · Context</h3>
+                  <dl class="kv">
+                    <dt>Context</dt><dd id="sysCtx">—</dd>
+                    <dt>Model</dt><dd id="sysModel">—</dd>
+                    <dt>Chi phí</dt><dd id="sysCost">—</dd>
+                  </dl>
+                  <div class="progress-bar slim"><div class="progress-fill ctx" id="sysCtxFill"></div></div>
+                </div>
+                <div class="radar-events" id="radarEvents">
+                  <h3>Nhật ký sự kiện</h3>
+                  <ul class="log" id="systemLog"></ul>
+                </div>
+              </div>
+            </div>
+            <div class="tab-panel" id="tab-market" role="tabpanel">
+              <div id="marketRoot"><div class="placeholder">Chọn tab 📡Market để tải dữ liệu.</div></div>
             </div>
             <div class="tab-panel" id="tab-guide" role="tabpanel">
               <div class="guide-content">
@@ -241,8 +283,10 @@
                     <tr><td><strong>Chương</strong></td><td>Đọc từng chương đã viết xong</td></tr>
                     <tr><td><strong>Outline</strong></td><td>Xem đại cương, compass, cấu trúc arc/volume</td></tr>
                     <tr><td><strong>World</strong></td><td>Tra cứu nhân vật, manh mối (伏笔), quy tắc thế giới</td></tr>
-                    <tr><td><strong>Đánh giá</strong></td><td>Xem review 7 chiều của Editor cho từng arc</td></tr>
-                    <tr><td><strong>Sản xuất</strong></td><td>Chạy headless tự động từ profile <code>.md</code> trong <code>./.ainovel/profiles/</code> hoặc <code>~/.ainovel/profiles/</code>. Mỗi job = 1 cuốn sách mới từ đầu, không phải tiếp tục dở</td></tr>
+                    <tr><td><strong>Review</strong></td><td>Xem review 7 chiều của Editor cho từng arc</td></tr>
+                    <tr><td><strong>⚡System</strong></td><td>Health, Agents, Chi phí, Nhật ký sự kiện</td></tr>
+                    <tr><td><strong>📡Market</strong></td><td>Phân tích thị trường Fanqie/Qidian</td></tr>
+                    <tr><td><strong>Sản xuất</strong></td><td>Chạy headless tự động từ profile <code>.md</code></td></tr>
                     <tr><td><strong>Hỗ trợ</strong></td><td>Trang này — hướng dẫn nhanh</td></tr>
                   </tbody>
                 </table>
@@ -251,8 +295,11 @@
             <div class="tab-panel" id="tab-production" role="tabpanel"></div>
           </div>
         </section>
-        <section class="pane log-pane" tabindex="0">
-          <div class="pane-head"><h3>Nhật ký sự kiện</h3></div>
+        <section class="pane log-pane" tabindex="0" id="logPane">
+          <div class="pane-head">
+            <h3>Nhật ký sự kiện</h3>
+            <button class="btn ghost log-toggle" id="logToggle" title="Ẩn/Hiện nhật ký">−</button>
+          </div>
           <ul class="log" id="log"></ul>
         </section>
       </div>

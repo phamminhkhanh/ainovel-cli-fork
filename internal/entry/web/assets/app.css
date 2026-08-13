@@ -89,6 +89,33 @@ html, body {
   font-size: 13px;
 }
 
+/* Log pane collapsible */
+.log-pane {
+  transition: height 0.2s ease-out;
+}
+.log-pane.collapsed {
+  height: 40px !important;
+  overflow: hidden;
+}
+.log-pane.collapsed .log {
+  display: none;
+}
+.log-toggle {
+  font-size: 14px;
+  padding: 2px 6px;
+  opacity: 0.6;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text);
+}
+.log-toggle:hover { opacity: 1; }
+.log-pane .pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -105,6 +132,34 @@ html, body {
   color: var(--color-text);
   letter-spacing: 0.2px;
 }
+/* Status bar (compact overview) */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.status-bar:hover {
+  background: var(--color-bg);
+}
+.status-sep {
+  color: var(--color-text-faint);
+}
+.status-engine { color: var(--color-text); font-weight: 600; }
+.status-ch { color: var(--color-accent); }
+.status-health.good { color: var(--color-success); }
+.status-health.warn { color: var(--color-warn); }
+.status-health.bad { color: var(--color-danger); }
+.status-cost { color: var(--color-text-dim); }
+.status-ctx { color: var(--color-text-faint); }
 
 .badge {
   font-size: 11px;
@@ -1148,7 +1203,135 @@ select:focus { outline: none; border-color: var(--color-accent); }
   font-size: 13px;
 }
 
+/* ============================================================
+   System Radar tab.
+   ============================================================ */
+.system-radar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto 1fr;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  height: 100%;
+  overflow-y: auto;
+}
+.radar-health {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+.radar-gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 80px;
+}
+.gauge-value {
+  font-size: 32px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+}
+.gauge-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-faint);
+}
+.radar-status {
+  flex: 1;
+}
+.radar-status .status-good { color: var(--color-success); }
+.radar-status .status-warn { color: var(--color-warn); }
+.radar-status .status-bad { color: var(--color-danger); }
+
+.radar-agents {
+  grid-column: 2;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+.radar-agents h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+}
+.agents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.agents-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+.agent-status {
+  font-size: 12px;
+}
+.agent-status.ready { color: var(--color-success); }
+.agent-status.running { color: var(--color-running); }
+.agent-status.idle { color: var(--color-text-faint); }
+.agent-status.error { color: var(--color-danger); }
+
+.radar-costs {
+  grid-column: 1 / -1;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+.radar-costs h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+}
+
+.radar-events {
+  grid-column: 1 / -1;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+.radar-events h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+}
+.radar-events .log {
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+/* Market Radar tab */
+#marketRoot {
+  padding: var(--space-3);
+  height: 100%;
+  overflow-y: auto;
+}
+
 @media (max-width: 900px) {
   .production-layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .run-list { max-height: 240px; border-right: none; padding-right: 0; }
+  .system-radar { grid-template-columns: 1fr; }
+  .radar-health, .radar-agents { grid-column: 1; }
 }

@@ -228,6 +228,29 @@ function renderSnapshot(s) {
     pc.hidden = true;
   }
 
+  // Update status bar
+  const engine = s.StatusLabel || s.RuntimeState || '—';
+  const chNum = s.CurrentChapter ? `Ch.${s.CurrentChapter}` : '—';
+  const totCh = s.TotalChapters ? `/${s.TotalChapters}` : '';
+  const isRunning = Boolean(s.IsRunning);
+  const healthClass = isRunning ? 'good' : 'warn';
+  const healthText = isRunning ? 'running' : 'idle';
+  const cost = s.TotalCostUSD != null ? `$${Number(s.TotalCostUSD).toFixed(2)}` : '—';
+  const ctx = s.ContextPercent ? `${Math.round(s.ContextPercent)}%` : '—';
+
+  $('#statusEngine').textContent = engine;
+  $('#statusCh').textContent = chNum + totCh;
+  const statusHealthEl = $('#statusHealth');
+  statusHealthEl.textContent = healthText;
+  statusHealthEl.className = 'status-health ' + healthClass;
+  $('#statusCost').textContent = cost;
+  $('#statusCtx').textContent = ctx + ' ctx';
+
+  // Update System Radar tab if visible
+  if (typeof loadSystemTab === 'function' && activeTab === 'system') {
+    loadSystemTab();
+  }
+
   if (typeof renderDashboard === 'function') renderDashboard(s);
   if (typeof renderStartupSelector === 'function') renderStartupSelector(s);
 
@@ -459,6 +482,79 @@ async function refreshSettings() {
 }
 function closeSettings() { $('#setOverlay').hidden = true; }
 
+// ── Keyboard shortcuts ──
+function initKeyboardShortcuts() {
+  const TAB_SHORTCUTS = {
+    s: 'stream',
+    c: 'chapter',
+    o: 'outline',
+    w: 'world',
+    r: 'review',
+    d: 'system',
+    m: 'market',
+    p: 'production',
+    h: 'guide',
+  };
+
+  document.addEventListener('keydown', (e) => {
+    // Skip if typing in input/textarea (unless it's Escape or command keys)
+    const tag = document.activeElement?.tagName;
+    const isTyping = (tag === 'INPUT' || tag === 'TEXTAREA') && e.key !== 'Escape';
+
+    // Tab navigation shortcuts (only when not typing)
+    if (!isTyping && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const tab = TAB_SHORTCUTS[e.key.toLowerCase()];
+      if (tab && typeof switchTab === 'function') {
+        e.preventDefault();
+        switchTab(tab);
+        return;
+      }
+    }
+
+    // Command palette (always available)
+    if (e.key === '/') {
+      const inputFocused = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA';
+      if (!inputFocused) {
+        e.preventDefault();
+        const cmdOverlay = $('#cmdOverlay');
+        if (cmdOverlay) cmdOverlay.hidden = false;
+        return;
+      }
+    }
+
+    // Escape to close modal
+    if (e.key === 'Escape') {
+      closeAllModals();
+      return;
+    }
+  });
+}
+
+function closeAllModals() {
+  document.querySelectorAll('.modal-overlay').forEach(m => { m.hidden = true; });
+}
+
+// ── Event log collapsible ──
+const LOG_KEY = 'ainovel-log-collapsed';
+function initLogToggle() {
+  const logPane = $('#logPane');
+  const toggleBtn = $('#logToggle');
+  if (!logPane || !toggleBtn) return;
+
+  // Restore state
+  if (sessionStorage.getItem(LOG_KEY) === 'true') {
+    logPane.classList.add('collapsed');
+    toggleBtn.textContent = '+';
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    logPane.classList.toggle('collapsed');
+    const collapsed = logPane.classList.contains('collapsed');
+    sessionStorage.setItem(LOG_KEY, collapsed);
+    toggleBtn.textContent = collapsed ? '+' : '−';
+  });
+}
+
 // ── Boot ──
 async function boot() {
   $('#sendBtn').addEventListener('click', send);
@@ -496,6 +592,8 @@ async function boot() {
   $('#setClose').addEventListener('click', closeSettings);
   $('#setOverlay').addEventListener('click', (e) => { if (e.target === $('#setOverlay')) closeSettings(); });
 
+  initKeyboardShortcuts();
+  initLogToggle();
   // Open SSE first so the server registers this browser before snapshot/replay fetches.
   // Live frames arriving during replay are buffered in pendingLive; no replay-to-connect gap.
   // Event IDs are updated in place by handleEvent, so duplicate finish events do not duplicate log rows.

@@ -6,9 +6,9 @@ let radarLoaded = false;
 let radarScanning = false;
 let radarReportCache = null;
 
-async function loadRadarTab() {
+async function loadMarketTab() {
   if (radarLoaded) return;
-  const root = $('#radarRoot');
+  const root = $('#marketRoot');
   if (!root) return;
   root.innerHTML = '<div class="placeholder">Đang tải báo cáo Radar gần nhất…</div>';
   try {
@@ -29,7 +29,7 @@ async function loadRadarTab() {
 }
 
 function renderRadarLoadError(error) {
-  const root = $('#radarRoot');
+  const root = $('#marketRoot');
   if (!root) return;
   root.innerHTML = `
     <div class="radar-hero">
@@ -38,11 +38,11 @@ function renderRadarLoadError(error) {
     </div>
     <div class="radar-empty" role="alert">${escapeHtml(String(error || 'Lỗi không xác định'))}</div>`;
   const retry = $('#radarRetryLatest');
-  if (retry) retry.addEventListener('click', () => loadRadarTab());
+  if (retry) retry.addEventListener('click', () => loadMarketTab());
 }
 
 function renderRadarEmpty() {
-  const root = $('#radarRoot');
+  const root = $('#marketRoot');
   if (!root) return;
   root.innerHTML = `
     <div class="radar-hero">
@@ -99,13 +99,13 @@ async function scanRadar() {
 }
 
 function renderRadarBusy(target) {
-  const root = $('#radarRoot');
+  const root = $('#marketRoot');
   root.innerHTML = `<div class="radar-hero"><div><h2>Radar thị trường</h2><p>Đang lấy Fanqie + Qidian rồi phân tích CN → ${escapeHtml(radarMarketLabel(target))}…</p></div>${radarControls(target)}</div>
     <div class="radar-scanning" role="status" aria-live="polite"><span class="spinner"></span> Quét nguồn và gọi model analyst. Có thể mất 1–3 phút.</div>`;
 }
 
 function renderRadarReport(report) {
-  const root = $('#radarRoot');
+  const root = $('#marketRoot');
   if (!root) return;
   radarReportCache = report;
   const mode = report.analysisMode || 'unknown';

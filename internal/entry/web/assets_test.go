@@ -121,7 +121,7 @@ func TestEmbeddedHTMLHasWorkspaceTabs(t *testing.T) {
 		`id="tab-chapter"`,
 		`id="tab-outline"`,
 		`id="tab-world"`,
-		`id="tab-radar"`,
+		`id="tab-system"`,
 		`id="chapterText"`,
 		`id="outlineDetail"`,
 		`id="worldChars"`,
@@ -140,7 +140,7 @@ func TestEmbeddedRadarHooksExist(t *testing.T) {
 		t.Fatalf("read embedded radar js: %v", err)
 	}
 	text := string(js)
-	for _, want := range []string{"function loadRadarTab(", "function scanRadar(", "function renderRadarSource(", "function renderRadarLoadError(", "radarRetryLatest", "番茄小说 · Fanqie", "起点中文网 · Qidian", "/api/radar/scan", "/api/radar/latest"} {
+	for _, want := range []string{"function loadMarketTab(", "function scanRadar(", "function renderRadarSource(", "function renderRadarLoadError(", "radarRetryLatest", "番茄小说 · Fanqie", "起点中文网 · Qidian", "/api/radar/scan", "/api/radar/latest"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("app-radar.js missing hook or endpoint %q", want)
 		}
@@ -261,7 +261,7 @@ func TestEmbeddedHTMLScriptOrderChaptersBeforeDashboard(t *testing.T) {
 		t.Fatal("app-production.js must load before app-radar.js (escapeHtml dependency)")
 	}
 	if radarIdx >= workIdx {
-		t.Fatal("app-radar.js must load before app-workspace.js (loadRadarTab dependency)")
+		t.Fatal("app-radar.js must load before app-workspace.js (loadMarketTab dependency)")
 	}
 }
 

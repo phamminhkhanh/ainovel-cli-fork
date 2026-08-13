@@ -54,7 +54,8 @@ function switchTab(name) {
   if (name === 'outline') loadOutlineTab();
   if (name === 'world') loadWorldTab();
   if (name === 'review') loadReviewTab();
-  if (name === 'radar' && typeof loadRadarTab === 'function') loadRadarTab();
+  if (name === 'system' && typeof loadSystemTab === 'function') loadSystemTab();
+  if (name === 'market' && typeof loadMarketTab === 'function') loadMarketTab();
   if (name === 'production' && typeof loadProductionTab === 'function') loadProductionTab();
 }
 
@@ -540,6 +541,81 @@ function renderReviewCard(rv, isGlobal) {
   }
 
   return card;
+}
+
+// ── System Radar Tab ──
+function loadSystemTab() {
+  const healthVal = $('#healthValue');
+  const healthStatus = $('#healthStatus');
+  const agentsList = $('#systemAgentsList');
+  const sysCtx = $('#sysCtx');
+  const sysModel = $('#sysModel');
+  const sysCost = $('#sysCost');
+  const sysCtxFill = $('#sysCtxFill');
+  const systemLog = $('#systemLog');
+
+  if (!lastSnapshot) {
+    healthVal.textContent = '—';
+    healthStatus.innerHTML = '';
+    agentsList.innerHTML = '<li class="muted">—</li>';
+    if (systemLog) systemLog.innerHTML = '<li class="muted">—</li>';
+    return;
+  }
+
+  // Health (derived from runtime state — snapshot has no Health field)
+  const snap = lastSnapshot;
+  const isRunning = Boolean(snap.IsRunning);
+  healthVal.textContent = isRunning ? '100%' : '—';
+  healthVal.style.color = isRunning ? 'var(--color-success)' : 'var(--color-text-faint)';
+  healthStatus.innerHTML = `<span class="${isRunning ? 'status-good' : 'status-warn'}">${isRunning ? 'Đang chạy' : 'Sẵn sàng'}</span>`;
+
+  // Agents
+  if (agentsList) {
+    agentsList.innerHTML = '';
+    const agents = snap.Agents || [];
+    if (agents.length === 0) {
+      agentsList.innerHTML = '<li class="muted">—</li>';
+    } else {
+      agents.forEach(agent => {
+        const li = document.createElement('li');
+        const statusClass = agent.State === 'running' ? 'running' : agent.State === 'ready' || agent.State === 'idle' ? 'idle' : 'error';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'agent-name';
+        nameSpan.textContent = agent.Name || '—';
+        const statusSpan = document.createElement('span');
+        statusSpan.className = 'agent-status ' + statusClass;
+        statusSpan.textContent = agent.State || '—';
+        li.appendChild(nameSpan);
+        li.appendChild(statusSpan);
+        agentsList.appendChild(li);
+      });
+    }
+  }
+
+  // Costs & Context
+  if (sysCtx) sysCtx.textContent = snap.ContextPercent ? Math.round(snap.ContextPercent) + '%' : '—';
+  if (sysModel) sysModel.textContent = snap.ModelName || '—';
+  if (sysCost) sysCost.textContent = snap.TotalCostUSD ? '$' + Number(snap.TotalCostUSD).toFixed(2) : '—';
+  if (sysCtxFill && snap.ContextPercent) {
+    sysCtxFill.style.width = Math.round(snap.ContextPercent) + '%';
+  }
+
+  // Mirror event log into System Radar panel (last 50 entries)
+  if (systemLog) {
+    const sourceLog = document.getElementById('log');
+    systemLog.innerHTML = '';
+    if (sourceLog && sourceLog.children.length > 0) {
+      const max = Math.min(sourceLog.children.length, 50);
+      for (let i = Math.max(0, sourceLog.children.length - max); i < sourceLog.children.length; i++) {
+        systemLog.appendChild(sourceLog.children[i].cloneNode(true));
+      }
+    } else {
+      const muted = document.createElement('li');
+      muted.className = 'muted';
+      muted.textContent = '—';
+      systemLog.appendChild(muted);
+    }
+  }
 }
 
 initWorkspace();
