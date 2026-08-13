@@ -43,7 +43,8 @@ Chạy: `ainovel-cli --web` → mở `http://127.0.0.1:8787` (chỉ bind localho
 
 - **Xuống** (SSE `GET /api/events`): stream chữ / event / snapshot / ask / done — 1 kênh đa hợp.
 - **Lên** (fetch POST): start / steer / continue / abort / resume / model / thinking /
-  cocreate / export / import / diag / job/cancel / reveal.
+  cocreate / export / import / diag / job/cancel / reveal /
+  **advance/mode / advance/next / reopen** (port `/review` `/next` `/reopen` từ TUI).
 
 Frontend = **JS thuần, 0 dependency**, nhúng vào binary bằng `go:embed` → 1 file chạy, không build step.
 
@@ -117,6 +118,30 @@ Quy tắc:
 - File corrupt / lỗi đọc đĩa → `500` với JSON error (không nuốt lỗi).
 - Frontend cache outline/world trong `sessionStorage`-scope; cache được xóa sau mỗi hành động
   thay đổi truyện (Start/Continue/Steer/Cocreate finish) để tránh hiển thị data cũ.
+
+### Advance gate + Reopen (port từ TUI `/review` `/next` `/reopen`)
+
+Port 2026-08-13. Host API sẵn sàng (`SetAdvanceMode`/`AdvanceOneChapter`/`Reopen`), Web chỉ thêm
+endpoint + nút — không đụng upstream.
+
+| Method | Path | Body | Host call | Lỗi |
+|---|---|---|---|---|
+| POST | `/api/advance/mode` | `{mode:"auto"\|"review"}` | `SetAdvanceMode(mode)` | 400 sai mode, 500 store |
+| POST | `/api/advance/next` | — | `AdvanceOneChapter()` | 409 running/cocreating/chưa review |
+| POST | `/api/reopen` | `{direction?:string}` | `Reopen(direction)` → `Resume()` | 409 running, 500 store |
+
+**UI (toolbar inputbar):**
+- **Nút toggle advance mode** (`#advanceToggleBtn`): hiện khi đã có Phase (≠ init/empty). Label đổi
+  theo `snap.AdvanceMode` — "Duyệt từng chương" (auto) / "Tự động" (review).
+- **Nút `▸ Chương kế`** (`#advanceNextBtn`): chỉ hiện khi `review mode && RuntimeState === idle`.
+  Cấp phép 1 chương + start Engine.
+- **Nút `↻ Viết tiếp`** (`#reopenBtn`): chỉ hiện khi `Phase === complete`. Click → prompt hướng
+  viết tiếp (optional) → POST reopen. **Auto-resume** backend-side (như TUI `commands.go:199`).
+- **Chip `Chờ duyệt`** (`#advanceHoldCard`): hiện khi `snap.HasAdvanceHold`, hiển thị
+  `AdvanceHoldReason`. Logic consume hold nằm hết ở Host (`advance_gate.go`), UI chỉ hiển thị.
+
+Cả 3 endpoint đều đi qua `workspaceMu` (như `handleContinue`/`handleResume`) — serialize với
+steer/continue/start, tránh concurrent mutate workspace.
 
 ### Việt hoá (nằm gọn trong file của TA — không đụng engine)
 

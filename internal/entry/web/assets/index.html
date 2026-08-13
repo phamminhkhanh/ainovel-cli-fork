@@ -90,6 +90,10 @@
         <h3>干预 · Pending steer</h3>
         <p class="steer-text" id="steerText"></p>
       </section>
+      <section class="card" id="advanceHoldCard" hidden>
+        <h3>Chờ duyệt · Advance hold</h3>
+        <p class="steer-text" id="advanceHoldText"></p>
+      </section>
 
       <!-- Agents: Snapshot live; auto-mở khi có agent đang chạy -->
       <section class="card" id="agentsCard">
@@ -260,6 +264,9 @@
           <span class="spacer"></span>
           <button class="btn" id="cmdBtn" title="Bảng lệnh (phím /)">⌘ Lệnh</button>
           <button class="btn" id="settingsBtn">⚙ Model</button>
+          <button class="btn" id="advanceToggleBtn" hidden title="Bật/tắt duyệt từng chương">Duyệt từng chương</button>
+          <button class="btn" id="advanceNextBtn" hidden title="Cấp phép 1 chương mới (review mode)">▸ Chương kế</button>
+          <button class="btn" id="reopenBtn" hidden title="Mở lại truyện đã hoàn để viết tiếp">↻ Viết tiếp</button>
           <button class="btn" id="resumeBtn" hidden>Khôi phục</button>
           <button class="btn danger" id="abortBtn" hidden>Dừng</button>
         </div>

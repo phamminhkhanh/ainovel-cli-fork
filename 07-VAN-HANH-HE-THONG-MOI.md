@@ -92,10 +92,10 @@ Nguồn: `internal/entry/tui/commands.go`. Lệnh có **(idle)** chỉ chạy kh
 | Start / Pause / Continue / Export / đổi model | ✅ | ✅ (như cũ) |
 | Cocreate | ✅ | ✅ (`/api/cocreate/*`) |
 | Import | ✅ | ✅ (endpoint fork riêng, `internal/entry/web/import.go`) |
-| **Advance gate (`/review`, `/next`)** | ✅ | ❌ **chưa có** |
-| **`/reopen`** | ✅ | ❌ **chưa có** |
+| **Advance gate (`/review`, `/next`)** | ✅ | ✅ (`/api/advance/mode`, `/api/advance/next` — nút trong toolbar) |
+| **`/reopen`** | ✅ | ✅ (`/api/reopen` — nút "Viết tiếp" chỉ hiện khi `phase=complete`, auto-resume) |
 
-> Host API đã sẵn sàng (`SetAdvanceMode`, `AdvanceOneChapter`, `Reopen` trong `internal/host/host.go`). Khi cần trên Web UI, thêm endpoint vào `internal/entry/web/` theo đúng chiến lược additive-only của fork.
+> Đã port 2026-08-13. Chi tiết endpoint + UI: [02-WEB-UI.md](02-WEB-UI.md). Host API dùng thẳng: `SetAdvanceMode` / `AdvanceOneChapter` / `Reopen` (trong `internal/host/host.go`). Reopen auto-resume như TUI (`commands.go:199` → `resumeBook`).
 
 ---
 

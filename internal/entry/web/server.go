@@ -84,6 +84,11 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/api/abort", s.handleAbort)
 	mux.HandleFunc("/api/resume", s.handleResume)
 
+	// 章节推进门控 + 重开（fork 新增；mirror TUI /review、/next、/reopen）
+	mux.HandleFunc("/api/advance/mode", s.handleAdvanceMode)
+	mux.HandleFunc("/api/advance/next", s.handleAdvanceNext)
+	mux.HandleFunc("/api/reopen", s.handleReopen)
+
 	// 交互 / 模型 / 推理强度（Phase 2）
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/model", s.handleModel)

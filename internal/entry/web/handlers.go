@@ -228,6 +228,85 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": label != "", "label": label})
 }
 
+// ── 章节推进门控 + 重开（fork 新增；mirror TUI /review、/next、/reopen）──
+//
+// Host API 已就绪（SetAdvanceMode/AdvanceOneChapter/Reopen），这里只做薄封装：
+// 校验 + 调用 + 错误映射。业务逻辑全在 Host，符合 entry→host 单向依赖。
+// 三个接口都走 workspaceMu，与 steer/continue/start 串行，避免并发改 workspace。
+
+// handleAdvanceMode 切换逐章验收模式（auto / review）。只写运行意图，
+// 不调用 Arbiter，也不隐式启动已暂停的 Engine——与 TUI /review on|off 等价。
+func (s *server) handleAdvanceMode(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	mode := domain.ChapterAdvanceMode(strings.TrimSpace(body.Mode))
+	if !mode.Valid() {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("mode must be \"auto\" or \"review\", got %q", body.Mode))
+		return
+	}
+	if err := s.eng.SetAdvanceMode(mode); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": string(mode)})
+}
+
+// handleAdvanceNext 在逐章验收模式下授权一个精确章节并启动 Engine——与 TUI /next 等价。
+// Engine 自身守卫：running/cocreating/exclusive 或非 review 模式时返回错误，映射 409。
+func (s *server) handleAdvanceNext(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	if err := s.eng.AdvanceOneChapter(); err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleReopen 重开已完结的书为创作态——与 TUI /reopen [续写方向] 等价。
+// direction 非空时登记为待处理干预，恢复时先经 Arbiter 裁定注入。
+// 与 TUI 一致：Reopen 成功后立即 Resume() 自动续跑，无需用户再点「继续」。
+func (s *server) handleReopen(w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	var body struct {
+		Direction string `json:"direction"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.eng.Reopen(body.Direction); err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	// Reopen 只把书重置为创作态，不启动 Engine。与 TUI（commands.go:199 → resumeBook）
+	// 一致：立即 Resume() 自动续跑。Resume 自身守卫 running/cocreating/exclusive，
+	// 若 Reopen 后因竞态已 running 则返回 409。
+	label, err := s.eng.Resume()
+	if err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "label": label})
+}
+
 // ── 模型 / 推理强度 ──
 
 // webModelRoles 与 TUI 模型面板一致（command_model.go:modelRoleOptions）。

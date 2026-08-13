@@ -260,6 +260,35 @@ function updateControls(s) {
   const resumeBtn = $('#resumeBtn');
   resumeBtn.hidden = !(st === 'idle' && s.RecoveryLabel);
   if (s.RecoveryLabel) resumeBtn.textContent = 'Khôi phục: ' + s.RecoveryLabel;
+
+  // Advance gate (fork): toggle mode + next chapter.
+  // Nút toggle luôn hiện khi đã có sách (Phase !== init/空); label đổi theo mode.
+  // Nút /next chỉ hiện khi review mode + engine idle (chưa chạy / đã dừng chờ duyệt).
+  const reviewMode = s.AdvanceMode === 'review';
+  const hasPhase = !!s.Phase && s.Phase !== 'init' && s.Phase !== '';
+  const toggleBtn = $('#advanceToggleBtn');
+  if (hasPhase) {
+    toggleBtn.hidden = false;
+    toggleBtn.textContent = reviewMode ? 'Tự động' : 'Duyệt từng chương';
+    toggleBtn.title = reviewMode ? 'Tắt duyệt từng chương (auto)' : 'Bật duyệt từng chương (review)';
+  } else {
+    toggleBtn.hidden = true;
+  }
+  $('#advanceNextBtn').hidden = !(reviewMode && st === 'idle');
+
+  // Reopen (fork): chỉ hiện khi truyện đã hoàn (Phase === complete).
+  $('#reopenBtn').hidden = !(s.Phase === 'complete');
+
+  // Advance hold chip: hiển thị khi có hold pending (snapshot expose HasAdvanceHold + Reason).
+  const holdCard = $('#advanceHoldCard');
+  if (holdCard) {
+    if (s.HasAdvanceHold && s.AdvanceHoldReason) {
+      holdCard.hidden = false;
+      $('#advanceHoldText').textContent = s.AdvanceHoldReason;
+    } else {
+      holdCard.hidden = true;
+    }
+  }
 }
 
 // ── Gọi API ──
@@ -437,6 +466,25 @@ async function boot() {
   $('#resumeBtn').addEventListener('click', async () => {
     const d = await post('/api/resume', {});
     if (d && d.ok === false) toast('Không có phiên để khôi phục', 'error');
+  });
+
+  // Advance gate (fork): mirror TUI /review on|off và /next.
+  // post() đã toast lỗi + trả null khi !r.ok → ở đây chỉ toast thành công.
+  $('#advanceToggleBtn').addEventListener('click', async () => {
+    const cur = lastSnapshot && lastSnapshot.AdvanceMode === 'review' ? 'review' : 'auto';
+    const next = cur === 'review' ? 'auto' : 'review';
+    const d = await post('/api/advance/mode', { mode: next });
+    if (d) toast(next === 'review' ? 'Đã bật duyệt từng chương' : 'Đã về tự động', 'info');
+  });
+  $('#advanceNextBtn').addEventListener('click', async () => {
+    await post('/api/advance/next', {});
+  });
+  // Reopen (fork): mirror TUI /reopen [direction]. Auto-resume backend-side.
+  $('#reopenBtn').addEventListener('click', async () => {
+    const dir = prompt('Hướng viết tiếp (để trống nếu không):');
+    if (dir === null) return; // user cancel
+    const d = await post('/api/reopen', { direction: dir || '' });
+    if (d) toast('Đã mở lại truyện — engine tự động tiếp tục', 'info');
   });
   $('#clearStream').addEventListener('click', () => { $('#stream').innerHTML = '<div class="placeholder">Đã xóa bản thảo hiển thị.</div>'; $('#thinkingStream').innerHTML = '<div class="placeholder">Đã xóa thinking hiển thị.</div>'; roundHasContent = false; streamIsThinking = false; });
   $('#input').addEventListener('keydown', (e) => {
