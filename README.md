@@ -20,7 +20,7 @@
 - **七维质量评审** — Editor 从设定一致性、角色行为、节奏、叙事连贯、伏笔、钩子、审美品质七个维度评审，审美维度细分描写质感/叙事手法/对话区分度/用词质量/情感打动力五项，每项必须引用原文举证
 - **用户实时干预** — 写作过程中随时在输入框注入修改意见（无需暂停），系统自动评估影响范围并重写受影响章节
 - **可选逐章验收** — 默认仍全自动；需要精细控制时用 `/review on`，每次 `/next` 只放行一个新章节，返工和崩溃恢复不会误消耗许可
-- **统一 TUI 入口** — 交互界面实时观察进度，也支持携带一句需求直接启动
+- **TUI + Headless 双入口** — 既可在交互界面实时观察和干预，也可在服务器、NAS 或 CI 中无界面持续运行
 - **多 LLM 支持** — OpenRouter / Anthropic / Gemini / OpenAI 等等随意切换
 
 ## 架构
@@ -56,7 +56,7 @@
 | 角色 | 职责 | 工具 |
 |--------|------|------|
 | **Arbiter** | 语义裁定：启动选规划师、用户干预分诊、失败/僵局出路 | 无（单次 LLM 调用，输出结构化决策） |
-| **Architect** | 生成前提、大纲、角色档案、世界规则 | `novel_context` `save_foundation` |
+| **Architect** | 生成书名、小说简介、前提、大纲、角色档案、世界规则 | `novel_context` `save_book` `save_foundation` |
 | **Writer** | 自主完成一章的构思、写作、自审和提交 | `novel_context` `read_chapter` `plan_chapter` `draft_chapter` `check_consistency` `commit_chapter` |
 | **Editor** | 阅读原文，从结构和审美两个层面审阅 | `novel_context` `read_chapter` `save_review` `save_arc_summary` `save_volume_summary` |
 
@@ -216,6 +216,23 @@ ainovel-cli
 > Windows 或手动安装：前往 [Releases](https://github.com/voocel/ainovel-cli/releases/latest) 下载对应平台的包。
 > 安装脚本会从同一 GitHub Release 下载 SHA256 清单，校验通过后才提取并安装二进制。
 
+### Headless 模式
+
+`--headless` 无需 TUI，适合在服务器、NAS、CI 或后台任务中持续运行。它不提供首次配置引导，请先运行一次 `ainovel-cli` 完成配置，或手动创建 `~/.ainovel/config.json`。
+
+```bash
+# 使用一句话需求启动新任务
+ainovel-cli --headless --prompt "写一本东方玄幻长篇，主角从边陲小城起步"
+
+# 从文件读取需求
+ainovel-cli --headless --prompt-file prompt.txt
+
+# 在同一目录恢复未完成的任务
+ainovel-cli --headless
+```
+
+`--prompt` 与 `--prompt-file` 只能在 Headless 模式下使用，且不能同时指定。模型流式输出写入 stdout，运行事件写入 stderr，完整运行日志保存在作品目录的 `logs/headless.log`。
+
 ### Docker
 
 Docker 镜像适合在服务器/NAS 上运行 headless 长任务，也可以用 `-it` 进入 TUI。配置和作品目录建议挂载到宿主机：
@@ -250,6 +267,14 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
 - `共创规划`：与 AI 多轮对话澄清需求，**右侧实时同步整理出的创作指令草稿**；AI 每轮主动提供 1-3 条引导建议，可连续按数字键组合填入，编辑后发送，按 `Ctrl+S` 进入正式创作
 
 两种模式最终都会收敛为同一份创作指令，再进入同一套创作引擎。
+
+已有较长的世界设定或故事大纲时，可在欢迎页直接从文件创建新书：
+
+```text
+/start ./outline.md
+```
+
+`/start` 会把文件全文作为初始创作要求，交给 Architect 整理为内部设定和动态大纲，不会将文件内容当成已完成章节。导入已有小说并续写仍使用 `/import`。
 
 ### 管理多本小说
 
@@ -348,6 +373,17 @@ output/novel/meta/simulation_profile.json
 
 `/importsim` 只接受本功能生成的 `simulation_profile.v1` JSON，并按语料指纹合并，重复来源会跳过。只导入可信来源的画像文件；导入内容会成为后续 Agent 的上下文参考。画像会以 compact 形式注入 `novel_context`，Architect、Writer、Editor 都能读取；各 Agent 只借鉴结构、节奏、钩子和吸引读者手法，不复制原文表达或专有设定。
 
+## 接纳手动修订
+
+可以直接编辑 `output/novel/chapters/*.md` 中已经完成的章节。系统按已接纳正文的 SHA-256 识别变化，不依赖文件修改时间：
+
+```text
+/sync --check   # 只列出发生变化的章节，不调用模型
+/sync           # 接纳修改，重建摘要、时间线、伏笔、关系、状态与风格记忆
+```
+
+检测到未接纳修改时，恢复创作、继续输入和 `/next` 都会明确要求先执行 `/sync`，避免旧事实继续驱动新章节。`/sync` 不改写用户正文；模型只负责从新正文重新提取完整章节事实和可复用风格偏好，文件版本、状态投影与崩溃恢复均由程序确定性处理。受影响的审阅、弧/卷摘要和角色快照会失效并由 Editor 补建；剧情变化会在续写前交给 Architect 更新后续计划，确认原计划仍适用时也会显式落盘。
+
 ## 导入
 
 在 TUI 中输入 `/import <文件路径>` 可把一本已有的小说**语义编译**进项目。一次启动绑定一本书（启动目录下的 `output/novel`），因此导入通常在**新目录启动后的欢迎界面**直接发起——它和"输入需求起新书"、"共创起新书"并列，是起一本书的第三种方式；引擎正在创作时该命令会被拒绝。管线分阶段推进：源文件快照（ingest）→ LLM 识别章节边界（segment）→ 确认切分 → 逐章提取事实（analyze）→ 分层归纳全书前提 / 角色 / 世界观 / 分层大纲 / 指南针（synthesize）→ 发布正式 Foundation 并逐章落盘（publish）。章节边界由模型按语义裁定，不依赖硬编码标题规则；Go 侧只掌管坐标、覆盖校验、幂等与顺序。
@@ -387,12 +423,12 @@ output/novel/meta/simulation_profile.json
 
 ## 导出
 
-在 TUI 中输入 `/export` 可把已完成的章节合并导出，默认 TXT，写到 `{novelDir}/{NovelName}.txt`。导出是只读操作，写作中途也可以随时拿"现阶段成品"，不影响引擎运行。
+在 TUI 中输入 `/export` 可把已完成的章节合并导出，默认 TXT，写到 `{小说目录}/{书名}.txt`。导出是只读操作，写作中途也可以随时拿"现阶段成品"，不影响引擎运行。
 
 格式由**输出路径后缀**决定（`.txt` / `.epub`）：
 
 ```text
-/export                            # 默认 TXT，{novelDir}/{NovelName}.txt
+/export                            # 默认 TXT，{小说目录}/{书名}.txt
 /export ~/光斑.txt                  # 后缀 .txt → TXT
 /export ~/光斑.epub                 # 后缀 .epub → EPUB（Apple Books / 微信读书 / Kindle 转换器可读）
 /export from=10 to=30 --overwrite  # 章节区间 + 覆盖
@@ -400,7 +436,7 @@ output/novel/meta/simulation_profile.json
 ```
 
 - **TXT** — `《书名》` → 卷分隔 → 章节正文（长篇分层模式自动加卷分隔）。两类内部数据**不进导出**：premise（创作蓝图，含目标读者 / 写作禁区等后台信息，写给作者与引擎看的）、弧分隔（读者视角下弧是过细的内部结构）。导出器统一生成"第 N 章 标题"，正文里 writer 自带的重复标题（`# 第N章…` 或 `# 章节名`）会被剥掉。
-- **EPUB** — EPUB 3 标准容器，含封面页、目录、按章拆分的 XHTML，标识符基于内容稳定派生（重导出同一本书阅读器识别为更新版本）。不带封面图。
+- **EPUB** — EPUB 3 标准容器，含书名、小说简介元数据、封面页、目录和按章拆分的 XHTML，标识符基于内容稳定派生（重导出同一本书阅读器识别为更新版本）。不带封面图。
 
 范围内未完成的章节会跳过并显示在结果里，不算错误。
 
@@ -563,6 +599,7 @@ style/
 
 ```
 output/{novel_name}/
+├── book.md             # 书名与小说简介（可读投影）
 ├── chapters/           # 终稿（Markdown）
 │   ├── 01.md
 │   └── ...
@@ -571,21 +608,20 @@ output/{novel_name}/
 ├── reviews/            # 评审报告
 ├── timeline.jsonl      # 时间线事实（追加日志）
 ├── timeline.md         # 时间线可读投影
+├── premise.md          # 故事前提
+├── outline.json        # 扁平章节大纲（仅含已展开的章节）
+├── layered_outline.json # 分层大纲（长篇模式）
+├── characters.json     # 角色档案
+├── world_rules.json    # 世界规则
 ├── meta/
-│   ├── premise.md      # 故事前提
-│   ├── outline.json    # 扁平章节大纲（仅含已展开的章节）
-│   ├── layered_outline.json # 分层大纲（当前卷 + 预览卷，长篇模式）
+│   ├── book.json       # 作品信息唯一事实源
 │   ├── compass.json   # 终局方向指南针（长篇模式）
-│   ├── characters.json # 角色档案
-│   ├── world_rules.json# 世界规则
 │   ├── progress.json   # 进度状态
 │   ├── foreshadow.json # 伏笔台账
 │   ├── state_changes.jsonl # 角色状态变化追加日志
 │   ├── style_rules.json# 写作风格规则（弧边界时提炼）
 │   ├── snapshots/      # 角色状态快照（长篇）
-│   ├── checkpoints.jsonl # Step 级 checkpoint（每个工具成功后追加）
-│   ├── characters.md   # 角色档案（可读版）
-│   └── world_rules.md  # 世界规则（可读版）
+│   └── checkpoints.jsonl # Step 级 checkpoint（每个工具成功后追加）
 ```
 
 ## 断点恢复
@@ -651,6 +687,7 @@ output/{novel_name}/
 | "把感情线提前到第4章" | 调整大纲，可能重写第4章及后续 |
 | "加入一个反派角色" | 更新角色档案和世界规则，在后续章节引入 |
 | "节奏太慢了，加快推进" | 调整后续章节的大纲密度 |
+| "写到第20章" | 连续创作至第20章稳定提交后暂停 |
 
 ## 设计理念
 

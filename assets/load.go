@@ -36,6 +36,7 @@ type Prompts struct {
 	ImportRange      string // 长书 Map 阶段连续区间摘要（RangeDigest）
 	SimulationSource string
 	SimulationMerge  string
+	RevisionAnalyze  string
 
 	// Arbiter 裁定提示词(LLM-as-function,无 simulation guidance 包装)。
 	ArbiterPlanStart    string
@@ -184,6 +185,7 @@ func loadPrompts() Prompts {
 		ImportRange:      mustRead(promptsFS, "prompts/import-range.md"),
 		SimulationSource: mustRead(promptsFS, "prompts/simulation-source.md"),
 		SimulationMerge:  mustRead(promptsFS, "prompts/simulation-merge.md"),
+		RevisionAnalyze:  mustRead(promptsFS, "prompts/revision-analyze.md"),
 
 		ArbiterPlanStart:    mustRead(promptsFS, "prompts/arbiter-plan-start.md"),
 		ArbiterIntervention: mustRead(promptsFS, "prompts/arbiter-intervention.md"),
@@ -231,7 +233,7 @@ var promptRole = map[string]string{
 
 const simulationGuidance = `## 仿写画像
 
-当 novel_context 返回 simulation_profile 时，必须把它视为当前作品的仿写方向约束。{{role}} 应读取其中的 style、lexicon、plot_design、hook_design、pacing_density、reader_engagement 和 role_guidance。
+当 novel_context 的 planning_memory 或 working_memory 中存在 simulation_profile 时，必须把它视为当前作品的仿写方向约束。{{role}} 应读取其中的 style、lexicon、plot_design、hook_design、pacing_density、reader_engagement 和 role_guidance。
 
 使用原则：借鉴结构、节奏、钩子、信息释放和吸引读者的手法；不要复制原文句子、人物、地名、专有设定或固定桥段。若 simulation_profile 与用户显式要求冲突，优先服从用户要求。`
 

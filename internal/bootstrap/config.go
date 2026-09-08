@@ -226,6 +226,10 @@ type Config struct {
 
 	// Notify 无人值守告警配置；缺省启用（system 通道兜底）。
 	Notify NotifyConfig `json:"notify,omitzero"`
+
+	// DisableUpdateCheck 关闭启动时的新版本检查提醒（默认开）。检查只读
+	// GitHub Releases 公开接口，结果缓存在本地配置目录，不上报任何数据。
+	DisableUpdateCheck bool `json:"disable_update_check,omitempty"`
 }
 
 // BudgetConfig 是用户对单本书钱包的政策声明。越线停机等同于用户在那一刻

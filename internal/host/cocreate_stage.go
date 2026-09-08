@@ -23,12 +23,22 @@ func buildStoryStateSummary(s *store.Store) string {
 		}
 	}
 
+	if book, err := s.Book.Load(); book != nil {
+		fmt.Fprintf(&b, "- 书名：《%s》\n", book.Title)
+	} else {
+		warn("book", err)
+	}
+
 	if progress, err := s.Progress.Load(); progress != nil {
-		if name := strings.TrimSpace(progress.NovelName); name != "" {
-			fmt.Fprintf(&b, "- 书名：《%s》\n", name)
-		}
 		fmt.Fprintf(&b, "- 进度：已完成 %d 章", len(progress.CompletedChapters))
-		if progress.TotalChapters > 0 {
+		if progress.Layered {
+			outline, outlineErr := s.Outline.LoadOutline()
+			if outlineErr != nil {
+				warn("outline", outlineErr)
+			} else if len(outline) > 0 {
+				fmt.Fprintf(&b, " / 当前已细化 %d 章（后续按弧动态规划）", len(outline))
+			}
+		} else if progress.TotalChapters > 0 {
 			fmt.Fprintf(&b, " / 规划 %d 章", progress.TotalChapters)
 		}
 		fmt.Fprintf(&b, "，约 %d 字，下一章为第 %d 章\n", progress.TotalWordCount, progress.NextChapter())

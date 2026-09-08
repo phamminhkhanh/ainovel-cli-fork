@@ -188,8 +188,8 @@ func (s *cocreateState) resetSuggestionInput() {
 	s.selectedSuggestions = nil
 }
 
-func (s *cocreateState) buildPlan() (startup.Plan, error) {
-	return s.session.BuildPlan()
+func (s *cocreateState) buildPrompt() (string, error) {
+	return s.session.BuildPrompt()
 }
 
 func renderStartupModeBar(width int, mode startupMode) string {

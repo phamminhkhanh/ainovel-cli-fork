@@ -103,10 +103,6 @@ func renderStateContent(snap host.UISnapshot, contentW int) string {
 		sections = append(sections, renderSidebarSection("缓存", body, contentW))
 	}
 
-	if body := renderContextSidebar(snap, contentW); body != "" {
-		sections = append(sections, renderSidebarSection("上下文", body, contentW))
-	}
-
 	return strings.Join(sections, "\n\n")
 }
 
@@ -565,30 +561,6 @@ func formatTokensCompact(n int) string {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
 	return fmt.Sprintf("%d", n)
-}
-
-func renderContextSidebar(snap host.UISnapshot, width int) string {
-	if snap.ContextWindow <= 0 && snap.ContextStrategy == "" && snap.ContextScope == "" {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString(renderContextUsageField("主上下文", snap.ContextPercent, snap.ContextTokens, snap.ContextWindow))
-	if strategy := contextStrategyLabel(snap.ContextStrategy); strategy != "" {
-		b.WriteString(renderField("最近策略", truncate(strategy, max(8, width-12))))
-	}
-	if scope := contextScopeLabel(snap.ContextScope); scope != "" {
-		b.WriteString(renderField("当前视图", scope))
-	}
-	if snap.ContextSummaryCount > 0 {
-		b.WriteString(renderField("摘要", fmt.Sprintf("%d 条", snap.ContextSummaryCount)))
-	}
-	if snap.ContextActiveMessages > 0 {
-		b.WriteString(renderField("消息数", fmt.Sprintf("%d", snap.ContextActiveMessages)))
-	}
-	if snap.ContextCompactedCount > 0 || snap.ContextKeptCount > 0 {
-		b.WriteString(renderField("最近重写", fmt.Sprintf("%d → %d", snap.ContextCompactedCount, snap.ContextKeptCount)))
-	}
-	return b.String()
 }
 
 func contextScopeLabel(scope string) string {

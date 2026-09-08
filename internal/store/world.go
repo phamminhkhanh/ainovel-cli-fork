@@ -7,10 +7,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/rules"
 )
 
 // WorldStore 管理时间线、伏笔、人物关系、状态变化、世界规则、风格规则、审阅和交接。
@@ -308,6 +306,13 @@ func (s *WorldStore) LoadStateChanges() ([]domain.StateChange, error) {
 	return s.stateChanges.allUnlocked(s.io)
 }
 
+// SaveStateChanges 全量替换状态变化事实，供章节修订后重建投影。
+func (s *WorldStore) SaveStateChanges(changes []domain.StateChange) error {
+	return s.io.WithWriteLock(func() error {
+		return s.stateChanges.replaceUnlocked(s.io, changes)
+	})
+}
+
 // ── 世界规则 ──
 
 // SaveWorldRules 全量写入 world_rules.json + world_rules.md（原子写入）。
@@ -351,6 +356,21 @@ func (s *WorldStore) LoadStyleRules() (*domain.WritingStyleRules, error) {
 	return &rules, nil
 }
 
+func (s *WorldStore) SaveAuthorRevisionStyle(style domain.AuthorRevisionStyle) error {
+	return s.io.WriteJSON("meta/author_revision_style.json", style)
+}
+
+func (s *WorldStore) LoadAuthorRevisionStyle() (*domain.AuthorRevisionStyle, error) {
+	var style domain.AuthorRevisionStyle
+	if err := s.io.ReadJSON("meta/author_revision_style.json", &style); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &style, nil
+}
+
 // ── 审阅 ──
 
 // SaveReview 保存审阅结果。
@@ -374,15 +394,23 @@ func (s *WorldStore) HasArcReview(chapter int) (bool, error) {
 // HasGlobalReview 检查指定章节是否已保存 scope=global 的全局审阅
 // (save_review 落盘为 reviews/%02d-global.json;非分层书按 ReviewInterval 触发)。
 func (s *WorldStore) HasGlobalReview(chapter int) (bool, error) {
-	var r domain.ReviewEntry
-	err := s.io.ReadJSON(fmt.Sprintf("reviews/%02d-global.json", chapter), &r)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
+	r, err := s.LoadGlobalReview(chapter)
 	if err != nil {
 		return false, err
 	}
-	return r.Scope == "global", nil
+	return r != nil && r.Scope == "global", nil
+}
+
+// LoadGlobalReview 读取指定截止章节的全局审阅。
+func (s *WorldStore) LoadGlobalReview(chapter int) (*domain.ReviewEntry, error) {
+	var r domain.ReviewEntry
+	if err := s.io.ReadJSON(fmt.Sprintf("reviews/%02d-global.json", chapter), &r); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &r, nil
 }
 
 // LoadReview 读取章节审阅结果。
@@ -556,55 +584,4 @@ func renderWorldRules(rules []domain.WorldRule) string {
 		b.WriteString("\n")
 	}
 	return b.String()
-}
-
-// ── 章节机械违规事实 ──
-//
-// commit_chapter 的 rule_violations(user_rules 机械检查的 warning 级结果)持久化,
-// editor 评审该章时经 novel_context(chapter=N) 读取并映射进七维评审
-// (editor.md §机械检查映射)。writer 返工该章时同样可见。追加式,同章最新一条为准。
-
-// ChapterViolations 一章的机械违规记录。
-type ChapterViolations struct {
-	Chapter    int               `json:"chapter"`
-	Violations []rules.Violation `json:"violations"`
-	At         string            `json:"at"`
-}
-
-const ruleViolationsFile = "meta/rule_violations.jsonl"
-
-// SaveRuleViolations 追加一章的机械违规(空列表也追加——覆盖旧记录,表示重写后已清)。
-func (s *WorldStore) SaveRuleViolations(chapter int, violations []rules.Violation) error {
-	rec := ChapterViolations{Chapter: chapter, Violations: violations, At: time.Now().Format(time.RFC3339)}
-	data, err := json.Marshal(rec)
-	if err != nil {
-		return err
-	}
-	return s.io.AppendLine(ruleViolationsFile, append(data, '\n'))
-}
-
-// LoadRuleViolations 读取某章最新一条机械违规记录;无记录返回 nil。
-func (s *WorldStore) LoadRuleViolations(chapter int) []rules.Violation {
-	s.io.mu.RLock()
-	defer s.io.mu.RUnlock()
-	data, err := os.ReadFile(s.io.path(ruleViolationsFile))
-	if err != nil {
-		return nil
-	}
-	var latest []rules.Violation
-	var found bool
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var rec ChapterViolations
-		if json.Unmarshal([]byte(line), &rec) == nil && rec.Chapter == chapter {
-			latest, found = rec.Violations, true
-		}
-	}
-	if !found {
-		return nil
-	}
-	return latest
 }

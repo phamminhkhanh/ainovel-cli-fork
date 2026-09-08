@@ -2,9 +2,9 @@
 
 ## 执行协议
 
-先调用 `novel_context(chapter=N)` 读取本章上下文，根据任务和持久化状态判断是在写新章还是处理已完成章节，不重复已经完成的工作。优先看 `working_memory`、`episodic_memory`、`reference_pack` 和 `memory_policy`；按连续性需要回读前章结尾、`related_chapters` 或相关角色上次出场。
+先调用 `novel_context(chapter=N)` 读取本章上下文，根据任务和持久化状态判断是在写新章还是处理已完成章节，不重复已经完成的工作。当前任务数据位于 `working_memory`，已写事实位于 `episodic_memory`，参考资料位于 `reference_pack`，加载策略位于 `memory_policy`；按连续性需要参考 `working_memory.previous_tail`，并回读 `episodic_memory.related_chapters` 或相关角色上次出场。
 
-- 写新章时，没有 `chapter_plan` 就调用 `plan_chapter`，已有计划则直接使用；上下文中的章节契约字段直接传给工具，不要自行序列化。
+- 写新章时，`working_memory.chapter_plan` 不存在就调用 `plan_chapter`，已有计划则直接使用；章节契约字段直接传给工具，不要自行序列化。
 - 写新章时，没有草稿就调用 `draft_chapter` 写入完整正文，已有草稿则先回读，再判断是继续、覆盖还是直接自审。
 - 提交前必须回读最新草稿并调用 `check_consistency`。发现硬伤就修改正文后重新检查；没有硬伤则提交，不为微小措辞反复重写。
 - 所有正文和结构化事实都通过工具落盘，只输出在聊天里不算完成。
@@ -31,7 +31,7 @@
 
 ## 章节契约
 
-如果上下文中有 `chapter_contract`，它就是本章完成定义：
+如果上下文中有 `working_memory.chapter_contract`，它就是本章完成定义：
 
 - 优先完成 `required_beats`。
 - 避免 `forbidden_moves`。
@@ -56,7 +56,7 @@
 
 ## 配角连续性
 
-`characters.json` 只列主角和关键配角。其他**有名字的次要角色**（如客栈老板、赌坊打手）由系统在配角名册中自动追踪。
+`characters.json` 只列主角和关键配角。其他**有名字的次要角色**（如客栈老板、赌坊打手）由系统根据章节记录自动追踪。
 
 - **读**：`episodic_memory.recent_cast` 是最近活跃的次要角色清单（每条含 `name` / `brief_role` / `first_seen` / `last_seen` / `appearance_count`）。本章涉及其中任何一个名字时，先按需 `read_chapter(chapter=<last_seen>)` 找回上次的口吻、外貌、行为细节，避免把"老周"重新写成另一个人。`recent_cast` 中没有的旧角色，按"新角色"处理或不再使用。
 - **写**：本章**首次引入**有名字的次要角色，且判断**后续可能再出现**时，在 `commit_chapter.cast_intros` 中声明。已在 `characters.json` 的核心角色和过场无名群众**不要列**。不确定时宁可不填——首次漏填可在再次出场时补回；填错的 `brief_role` 不会被后续覆盖。

@@ -3,7 +3,6 @@ package eval
 import (
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/logger"
 )
 
 // RunOptions 控制单次 case 运行。
@@ -44,33 +42,23 @@ func RunCase(cfg bootstrap.Config, bundle assets.Bundle, c Case, opts RunOptions
 		cfg.Style = c.Style
 	}
 
-	eng, err := host.New(cfg, bundle)
+	eng, err := host.New(cfg, bundle, host.WithFileLog("headless.log", false))
 	if err != nil {
 		return fmt.Errorf("装配 host: %w", err)
 	}
-	// 落 logs/headless.log，diag 的运行时规则（stream idle storm 等）从中取证；
-	// 会话 jsonl 由引擎自写，无需额外接线。defer 顺序对齐 headless：Close 先于 cleanup
-	// 执行，收尾日志仍被文件捕获。
-	cleanup, err := logger.SetupFile(eng.Dir(), "headless.log", false)
-	if err != nil {
-		slog.Warn("评测文件日志不可用，继续运行", "module", "eval", "err", err)
-		cleanup = func() {}
-	}
-	defer cleanup()
 	defer eng.Close()
+	if logErr := eng.FileLogError(); logErr != nil {
+		return fmt.Errorf("评测文件日志不可用: %w", logErr)
+	}
 
-	plan, err := startup.PrepareQuick(startup.Request{
-		Mode:       startup.ModeQuick,
-		UserPrompt: c.Prompt,
-		OutputDir:  eng.Dir(),
-	})
+	prompt, err := startup.PrepareQuick(c.Prompt)
 	if err != nil {
 		return err
 	}
-	if err := eng.PrepareUserRules(plan.RawPrompt); err != nil {
+	if err := eng.PrepareUserRules(prompt); err != nil {
 		return fmt.Errorf("准备用户规则: %w", err)
 	}
-	if err := eng.StartPrepared(plan.RawPrompt); err != nil {
+	if err := eng.StartPrepared(prompt); err != nil {
 		return fmt.Errorf("启动: %w", err)
 	}
 

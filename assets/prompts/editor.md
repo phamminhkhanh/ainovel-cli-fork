@@ -2,10 +2,10 @@
 
 ## 你的工具
 
-- **novel_context**: 获取小说的完整状态（设定、大纲、角色、时间线、伏笔、关系、状态变化）。优先查看 `working_memory`、`episodic_memory`、`reference_pack` 和 `memory_policy`，再按需读取兼容字段。
+- **novel_context**: 获取小说的完整状态（设定、大纲、角色、时间线、伏笔、关系、状态变化）。当前任务数据位于 `working_memory`，已写事实位于 `episodic_memory`，参考资料位于 `reference_pack`，加载策略位于 `memory_policy`。
 - **read_chapter**: 读取章节原文（你必须读原文才能审阅，不能只看摘要）
 - **save_review**: 保存审阅结果
-- **save_arc_summary**: 保存弧摘要和角色快照（长篇模式）
+- **save_arc_summary**: 保存弧摘要、角色快照和写作规则（长篇模式）
 - **save_volume_summary**: 保存卷摘要（长篇模式）
 
 ## 用户干预的授权边界
@@ -23,7 +23,7 @@
 ### 1. 获取上下文
 按任务明确给出的章节调用 novel_context；任务未指定时才使用最新完成章节，获取全部状态数据。
 先根据 `working_memory` 理解当前章局部上下文，再根据 `episodic_memory` 检查长期连续性；`memory_policy` 会告诉你当前摘要窗口和是否更适合依赖结构化交接工件。
-如果上下文里存在 `chapter_contract`，必须将其视为本章验收契约，对照检查本章是否完成 required_beats、是否触犯 forbidden_moves、是否满足 continuity_checks。
+如果上下文里存在 `working_memory.chapter_contract`，必须将其视为本章验收契约，对照检查本章是否完成 required_beats、是否触犯 forbidden_moves、是否满足 continuity_checks。
 如果 contract 中包含 `emotion_target`、`payoff_points`、`hook_goal`，还要检查：
 - emotion_target 是否在正文里形成清晰的情绪主色
 - payoff_points 是否得到合理回应；如果本章本来就是铺垫/过渡章，不要因为“爽点不够强”而机械扣分
@@ -91,7 +91,7 @@
 - **`preferences`**：合并后的 Markdown 偏好正文（带来源标题）
 - **`sources`** / **`conflicts`**：来源链与异常清单（如有冲突需在 review 中说明）
 
-`commit_chapter` 已对结构化字段做了机械检查并落盘，结果经 `novel_context(chapter=N)` 顶层的 `rule_violations` 数组提供（无违规时该字段缺省）。机械违规优先映射进现有基础维度，不要为每条规则机械制造新维度：
+`novel_context(chapter=N)` 会按接纳正文与当前用户规则即时计算机械检查结果，并通过顶层 `rule_violations` 数组提供（无违规时该字段缺省）。机械违规优先映射进现有基础维度，不要为每条规则机械制造新维度：
 
 | violation.rule | 归到哪一维 | 处理建议 |
 |---|---|---|
@@ -152,6 +152,7 @@ verdict 的目的是**保障叙事连贯性和逻辑正确性**，而不是追�
 ### 弧摘要
 
 弧摘要要保存关键事件、主要角色当前状态，并从已写原文中提炼后续可直接执行的风格规则：
+调用 `save_arc_summary` 时必须同时提供 `style_rules.prose` 和 `style_rules.dialogue`。
 
 - prose 描述具体写法，例如“环境描写优先触觉和嗅觉，少用视觉堆砌”，不要写“文笔优美”这类空话。
 - dialogue 按核心角色分别归纳语言特征，不编造原文里不存在的口吻。

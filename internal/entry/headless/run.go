@@ -12,7 +12,6 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/logger"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -34,17 +33,14 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
-	eng, err := host.New(cfg, bundle)
+	eng, err := host.New(cfg, bundle, host.WithFileLog("headless.log", false))
 	if err != nil {
 		return err
 	}
-	cleanup, err := logger.SetupFile(eng.Dir(), "headless.log", false)
-	if err != nil {
-		fmt.Fprintf(stderr, "警告：文件日志不可用，继续使用终端日志：%v\n", err)
-		cleanup = func() {}
-	}
-	defer cleanup()
 	defer eng.Close()
+	if logErr := eng.FileLogError(); logErr != nil {
+		fmt.Fprintf(stderr, "警告：文件日志不可用，继续使用终端日志：%v\n", logErr)
+	}
 	// 运行结束 / 出错返回时落一份脱敏诊断，方便 headless 用户贴 issue。
 	// （外部 kill 的挂死不走 defer，仍需在 TUI 里手动 /diag。）
 	defer func() {
@@ -55,21 +51,16 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 
 	prompt := strings.TrimSpace(opts.Prompt)
 	if prompt != "" {
-		plan, err := startup.PrepareQuick(startup.Request{
-			Mode:        startup.ModeQuick,
-			UserPrompt:  prompt,
-			OutputDir:   eng.Dir(),
-			Interactive: true,
-		})
+		prompt, err = startup.PrepareQuick(prompt)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stderr, "headless 启动: %s\n", eng.Dir())
 		// 启动侧确定性生成本书用户规则快照（用原始 prompt 归一化），须在 StartPrepared 前。
-		if err := eng.PrepareUserRules(plan.RawPrompt); err != nil {
+		if err := eng.PrepareUserRules(prompt); err != nil {
 			return err
 		}
-		if err := eng.StartPrepared(plan.RawPrompt); err != nil {
+		if err := eng.StartPrepared(prompt); err != nil {
 			return err
 		}
 	} else {
@@ -77,10 +68,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 		if err != nil {
 			return err
 		}
-		roundHasContent, err := replayQueue(items, stdout, stderr)
-		if err != nil {
-			return err
-		}
+		replayQueue(items, stderr)
 		label, err := eng.Resume()
 		if err != nil {
 			return err
@@ -89,7 +77,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 			return fmt.Errorf("headless 模式需要 --prompt，或输出目录 %q 下已有可恢复会话", eng.Dir())
 		}
 		fmt.Fprintf(stderr, "headless 恢复: %s (%s)\n", eng.Dir(), label)
-		return consume(eng, stdout, stderr, roundHasContent)
+		return consume(eng, stdout, stderr, false)
 	}
 
 	return consume(eng, stdout, stderr, false)
@@ -180,33 +168,12 @@ func writeEvent(w io.Writer, ev host.Event) {
 	fmt.Fprintf(w, "[%s] [%s] %s\n", ts, ev.Category, ev.Summary)
 }
 
-func replayQueue(items []domain.RuntimeQueueItem, stdout, stderr io.Writer) (bool, error) {
-	var roundHasContent bool
+func replayQueue(items []domain.RuntimeQueueItem, stderr io.Writer) {
 	for _, item := range items {
-		switch item.Kind {
-		case domain.RuntimeQueueUIEvent:
-			writeEvent(stderr, host.Event{
-				Time:     item.Time,
-				Category: item.Category,
-				Summary:  item.Summary,
-			})
-		case domain.RuntimeQueueStreamClear:
-			if roundHasContent {
-				if _, err := io.WriteString(stdout, "\n\n"); err != nil {
-					return roundHasContent, err
-				}
-				roundHasContent = false
-			}
-		case domain.RuntimeQueueStreamDelta:
-			text := host.ReplayDeltaText(item)
-			if text == "" {
-				continue
-			}
-			if _, err := io.WriteString(stdout, text); err != nil {
-				return roundHasContent, err
-			}
-			roundHasContent = true
-		}
+		writeEvent(stderr, host.Event{
+			Time:     item.Time,
+			Category: item.Category,
+			Summary:  item.Summary,
+		})
 	}
-	return roundHasContent, nil
 }

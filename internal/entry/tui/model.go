@@ -47,61 +47,65 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 // 事件流"进行中"行专用的 spinner 帧序列（bubbles.Spinner.Dot）。
 // 7 个点 + 1 个缺口沿 3×3 格子顺时针旋转，视觉上像完整的加载圆圈。
 // 用独立帧索引 + 更快 tick，不影响顶栏和星星动画的节奏。
-var toolSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+var eventSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
 // Model 是 TUI 的顶层状态。
 type Model struct {
-	runtime        *host.Host
-	cocreate       *cocreateState
-	help           *helpState
-	modelSwitch    *modelSwitchState
-	modelConfig    *modelConfigState
-	report         *reportState
-	version        string
-	importer       *importState
-	importSeq      int
-	simulator      *simulationState
-	simSeq         int
-	compItems      []commandPaletteItem
-	compIdx        int
-	compActive     bool
-	commandToken   string // 当前已注册的命令 token；仅渲染该段，不染参数
-	snapshot       host.UISnapshot
-	events         []host.Event
-	eventIndex     map[string]int   // event.ID → m.events 下标；调用类事件到达时原地更新
-	viewport       viewport.Model   // 事件流 viewport
-	streamVP       viewport.Model   // 流式输出 viewport
-	detailVP       viewport.Model   // 右侧详情 viewport
-	stateVP        viewport.Model   // 左侧状态侧栏 viewport（可滚动）
-	streamBuf      *strings.Builder // 流式文本累积缓冲
-	streamRounds   []string
-	textarea       textarea.Model
-	width          int
-	height         int
-	autoScroll     bool
-	streamScroll   bool      // 流式面板自动跟随
-	streamDirty    bool      // streamRounds 有未刷新的 delta；由 streamFlushTick 60fps 合并
-	lastKeyAt      time.Time // 上次非 Enter 按键时间；KeyEnter 节流防粘贴 \n 流误触发提交
-	inputHistory   []string  // 已提交的输入历史（去重：相邻不重复）
-	historyIdx     int       // 当前浏览索引；== len(inputHistory) 表示"未浏览，正在编辑草稿"
-	historyDraft   string    // 进入历史浏览前保存的草稿，回到末端时恢复
-	focusPane      focusPane
-	hoverPane      focusPane
-	hoverActive    bool
-	mode           appMode
-	starting       bool // UI 已进入工作台，Host 正在执行启动初始化
-	startupMode    startupMode
-	importHint     string // 启动时检测到未完成导入的提示（欢迎屏显示；发起导入后清空）
-	cocreateSeq    int
-	reportSeq      int
-	err            error
-	spinnerIdx     int
-	toolSpinnerIdx int  // 事件流进行中行的独立帧索引（150ms tick，不影响顶栏/星星）
-	cursorIdx      int  // 流式光标帧索引（独立 tick）
-	streamRound    int  // 流式输出轮次计数
-	quitPending    bool // 双次 Ctrl+C 退出确认
-	abortPending   bool // 等待 Done 回来的手动暂停
-	mouseOff       bool // true 时已禁用鼠标上报，让用户原生拖拽选中复制；再次切换恢复
+	runtime            *host.Host
+	cocreate           *cocreateState
+	help               *helpState
+	modelSwitch        *modelSwitchState
+	modelConfig        *modelConfigState
+	report             *reportState
+	version            string
+	importer           *importState
+	importSeq          int
+	simulator          *simulationState
+	simSeq             int
+	compItems          []commandPaletteItem
+	compIdx            int
+	compActive         bool
+	commandToken       string // 当前已注册的命令 token；仅渲染该段，不染参数
+	snapshot           host.UISnapshot
+	events             []host.Event
+	eventIndex         map[string]int   // event.ID → m.events 下标；调用类事件到达时原地更新
+	viewport           viewport.Model   // 事件流 viewport
+	streamVP           viewport.Model   // 流式输出 viewport
+	detailVP           viewport.Model   // 右侧详情 viewport
+	stateVP            viewport.Model   // 左侧状态侧栏 viewport（可滚动）
+	streamBuf          *strings.Builder // 流式文本累积缓冲
+	streamRounds       []string
+	textarea           textarea.Model
+	width              int
+	height             int
+	autoScroll         bool
+	streamScroll       bool      // 流式面板自动跟随
+	streamDirty        bool      // streamRounds 有尚未刷新的 delta
+	flushPending       bool      // 已调度一次流式刷新，避免每个 delta 重复启动 timer
+	lastKeyAt          time.Time // 上次非 Enter 按键时间；KeyEnter 节流防粘贴 \n 流误触发提交
+	inputHistory       []string  // 已提交的输入历史（去重：相邻不重复）
+	historyIdx         int       // 当前浏览索引；== len(inputHistory) 表示"未浏览，正在编辑草稿"
+	historyDraft       string    // 进入历史浏览前保存的草稿，回到末端时恢复
+	focusPane          focusPane
+	hoverPane          focusPane
+	hoverActive        bool
+	mode               appMode
+	starting           bool // UI 已进入工作台，Host 正在执行启动初始化
+	startupMode        startupMode
+	importHint         string // 启动时检测到未完成导入的提示（欢迎屏显示；发起导入后清空）
+	updateHint         string // 启动版本检查发现新版本的提示（欢迎屏与事件流显示）
+	disableUpdateCheck bool   // 配置关闭启动版本检查（bootstrap.Config.DisableUpdateCheck）
+	cocreateSeq        int
+	reportSeq          int
+	err                error
+	spinnerIdx         int
+	eventSpinnerIdx    int  // 事件流进行中行的独立帧索引（150ms tick，不影响顶栏/星星）
+	eventSpinnerActive bool // 已启动事件动画 timer；无运行事件时自动停止
+	cursorIdx          int  // 流式光标帧索引（随主动画推进）
+	streamRound        int  // 流式输出轮次计数
+	quitPending        bool // 双次 Ctrl+C 退出确认
+	abortPending       bool // 等待 Done 回来的手动暂停
+	mouseOff           bool // true 时已禁用鼠标上报，让用户原生拖拽选中复制；再次切换恢复
 }
 
 // NewModel 创建 TUI Model。
@@ -158,7 +162,7 @@ func NewModel(rt *host.Host, version string) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textarea.Blink,
 		listenEvents(m.runtime),
 		listenDone(m.runtime),
@@ -166,10 +170,12 @@ func (m Model) Init() tea.Cmd {
 		tickSnapshot(m.runtime),
 		bootstrapRuntime(m.runtime),
 		tickSpinner(),
-		tickToolSpinner(),
-		tickCursor(),
-		tickStreamFlush(),
-	)
+	}
+	// 启动版本检查：后台一次；错误仅写日志，命中新版本才浮出提醒。
+	if !m.disableUpdateCheck {
+		cmds = append(cmds, checkForUpdate(m.version))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) paneAtMouse(x, y int) (focusPane, bool) {
@@ -215,7 +221,7 @@ func (m *Model) paneHighlighted(pane focusPane) bool {
 }
 
 // hasRunningEvent 是否存在未完成（spinner 仍在转）的调用类事件。
-// toolSpinnerTick 用此判断是否值得重渲：没有 running 事件时 spinner 帧不影响输出，
+// tickEventSpinner 用此判断是否值得重渲：没有 running 事件时 spinner 帧不影响输出，
 // 整个 refreshEventViewport 是确定的无效工作。
 func (m *Model) hasRunningEvent() bool {
 	for i := range m.events {
@@ -240,7 +246,7 @@ func (m *Model) flushStreamIfDirty() bool {
 // refreshEventViewport 重新渲染事件流内容并设置 viewport。
 func (m *Model) refreshEventViewport() {
 	centerW := m.eventFlowWidth()
-	content := renderEventContent(m.events, centerW, m.toolSpinnerIdx)
+	content := renderEventContent(m.events, centerW, m.eventSpinnerIdx)
 	snap := m.snapshot
 	if m.starting {
 		snap.IsRunning = true
@@ -647,7 +653,7 @@ func (m Model) View() string {
 		if m.err != nil {
 			errMsg = m.err.Error()
 		}
-		body = renderWelcome(m.width, bodyH, errMsg, m.startupMode, m.importHint)
+		body = renderWelcome(m.width, bodyH, errMsg, m.startupMode, m.importHint, m.updateHint)
 	} else {
 		leftW := m.sidebarWidth()
 		rightW := m.detailWidth()
@@ -775,13 +781,13 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(resumeFromCoCreate(m.runtime, draft), m.textarea.Focus())
 		}
 		// 冷启动共创：用整理好的创作指令开始创作。
-		plan, err := state.buildPlan()
+		prompt, err := state.buildPrompt()
 		if err != nil {
 			m.err = err
 			return m, nil
 		}
-		cmd := m.enterStarting(plan.RawPrompt)
-		return m, tea.Batch(startRuntime(m.runtime, plan), cmd)
+		cmd := m.enterStarting(prompt)
+		return m, tea.Batch(startRuntime(m.runtime, prompt), cmd)
 	case tea.KeyEnter:
 		// Alt+Enter → 主动换行，让 textarea.Update 接管（KeyMap.InsertNewline 已绑此键）
 		if msg.Alt {

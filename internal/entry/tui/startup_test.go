@@ -2,9 +2,41 @@ package tui
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestStartCommandLoadsPromptFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "outline files")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "story outline.md")
+	want := "世界设定\n\n第一卷大纲"
+	if err := os.WriteFile(path, []byte("  "+want+"  "), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(nil, "")
+	cmd, ok := parseSlashCommand("/start " + path)
+	if !ok {
+		t.Fatal("/start should parse as slash command")
+	}
+	prompt, err := prepareFileStart(cmd.args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt != want {
+		t.Fatalf("prompt = %q, want full file content", prompt)
+	}
+	next, startCmd := m.handleSlashCommand(cmd)
+	got := next.(Model)
+	if startCmd == nil || !got.starting || got.mode != modeRunning {
+		t.Fatalf("start state = mode %v, starting %v, cmd %v", got.mode, got.starting, startCmd)
+	}
+}
 
 func TestEnterStartingSwitchesToWorkbenchImmediately(t *testing.T) {
 	m := NewModel(nil, "")
@@ -82,5 +114,22 @@ func TestApplyStartupPromptEventTruncatesSummaryButKeepsDetail(t *testing.T) {
 	}
 	if !strings.HasSuffix(ev.Summary, "...") {
 		t.Fatalf("summary should be truncated with ellipsis, got %q", ev.Summary)
+	}
+}
+
+func TestStreamFlushTimerRunsOnlyForPendingData(t *testing.T) {
+	m := NewModel(nil, "")
+	next, cmd, handled := m.handleRuntimeMsg(streamDeltaMsg("正文"))
+	if !handled || cmd == nil {
+		t.Fatal("流式增量应启动一次刷新")
+	}
+	got := next.(Model)
+	if !got.streamDirty || !got.flushPending {
+		t.Fatal("流式增量应标记待刷新")
+	}
+	next, cmd, handled = got.handleRuntimeMsg(streamFlushTickMsg{})
+	got = next.(Model)
+	if !handled || cmd != nil || got.streamDirty || got.flushPending {
+		t.Fatal("刷新完成后 timer 应停止")
 	}
 }

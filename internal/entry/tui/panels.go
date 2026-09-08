@@ -11,9 +11,9 @@ import (
 // renderTopBar 渲染顶部状态栏。
 // 左侧：provider/model，中间：书名，右侧：状态胶囊。
 func renderTopBar(snap host.UISnapshot, width int, spinnerFrame, version string) string {
-	novelName := snap.NovelName
-	if novelName == "" {
-		novelName = "未定书名"
+	bookTitle := snap.BookTitle
+	if bookTitle == "" {
+		bookTitle = "未定书名"
 	}
 
 	var infoParts []string
@@ -62,7 +62,7 @@ func renderTopBar(snap host.UISnapshot, width int, spinnerFrame, version string)
 	}
 
 	innerW := max(12, width-2)
-	titleText := truncate(novelName, max(8, innerW/3))
+	titleText := truncate(bookTitle, max(8, innerW/3))
 	centerW := max(16, lipgloss.Width(titleText)+6)
 	if centerW > innerW-24 {
 		centerW = max(8, innerW-24)
@@ -141,7 +141,7 @@ func renderDetailPanel(vp viewport.Model, width, height int, focused bool) strin
 }
 
 // renderWelcome 渲染新建态首屏。
-func renderWelcome(width, height int, errMsg string, mode startupMode, importHint string) string {
+func renderWelcome(width, height int, errMsg string, mode startupMode, importHint, updateHint string) string {
 	// 简洁标题
 	title := lipgloss.NewStyle().
 		Foreground(colorAccent).
@@ -227,7 +227,13 @@ func renderWelcome(width, height int, errMsg string, mode startupMode, importHin
 			Render("! " + importHint))
 	} else {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).
-			Render("已有小说存稿想接着写？输入 /import <文件路径> 导入后续写"))
+			Render("已有设定/大纲？/start <文件路径> 创建新书 · 已有小说存稿？/import <文件路径> 导入续写"))
+	}
+	if updateHint != "" {
+		// 启动版本检查命中新版本：与 importHint 同款强调样式追加一行。
+		b.WriteString("\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(colorAccent2).Bold(true).
+			Render("! " + updateHint))
 	}
 	b.WriteString("\n\n")
 	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Italic(true).

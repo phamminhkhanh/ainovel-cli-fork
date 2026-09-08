@@ -5,6 +5,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
 )
 
 // contextManagerConfig 聚合 ContextManager 的全部配置参数。
@@ -56,6 +57,33 @@ func newContextManager(cfg contextManagerConfig) *corecontext.ContextEngine {
 	engine.SetProjectHook(callback)
 	engine.SetRecoverHook(callback)
 	return engine
+}
+
+// roleContextProfile 描述 Architect / Editor 这类"单任务、多次读取"Worker 的压缩档案：
+// 只清理旧的 novel_context 结果（落盘数据可随时重读），写工具结果与章节原文保留；
+// 仍超限时用角色专属提示词做全量摘要。
+type roleContextProfile struct {
+	Agent           string
+	KeepRecentReads int // 保留最近几次 novel_context 结果不清理
+	Summary         corecontext.FullSummaryConfig
+}
+
+// newRoleContextManager 按当前模型窗口构建该档案的 ContextManager。
+func newRoleContextManager(p roleContextProfile, model agentcore.ChatModel, window int, contextToolName string) *corecontext.ContextEngine {
+	summary := p.Summary
+	return newContextManager(contextManagerConfig{
+		Model:           model,
+		ContextWindow:   window,
+		ReserveTokens:   bootstrap.CompactReserveTokens(window),
+		Agent:           p.Agent,
+		CommitProjected: true,
+		ToolMicrocompact: &corecontext.ToolResultMicrocompactConfig{
+			KeepRecent:      p.KeepRecentReads,
+			MinResultTokens: 200,
+			Classifier:      func(toolName string) bool { return toolName == contextToolName },
+		},
+		Summary: &summary,
+	})
 }
 
 // contextRewriteCallback 创建上下文重写的日志回调。
