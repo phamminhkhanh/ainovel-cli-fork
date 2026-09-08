@@ -71,7 +71,7 @@ func TestSyncRunOutputIntoHost(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(runDir, "meta"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := domain.Progress{CompletedChapters: []int{1}, NovelName: "Test"}
+	p := domain.Progress{CompletedChapters: []int{1}}
 	data, _ := json.Marshal(p)
 	if err := os.WriteFile(filepath.Join(runDir, "meta", "progress.json"), data, 0o644); err != nil {
 		t.Fatal(err)

@@ -50,6 +50,8 @@ func (s *server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 
 // handleReplay 把持久化运行时队列归一化成与实时 SSE 同构的信封数组，
 // 前端 reconnect/刷新时按同一 handle() 重建历史，无需第二套解析逻辑。
+// upstream 重构后队列只持久化事件（流式增量/clear 不再落盘），故回放仅含 event 帧；
+// 刷新时会话中正在生成的部分流式文本无法恢复，须等下一条实时增量。
 func (s *server) handleReplay(w http.ResponseWriter, r *http.Request) {
 	var after int64
 	if v := r.URL.Query().Get("after"); v != "" {
@@ -62,19 +64,8 @@ func (s *server) handleReplay(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs := make([]sseMessage, 0, len(items))
 	for _, it := range items {
-		switch it.Kind {
-		case domain.RuntimeQueueUIEvent:
-			ev := host.Event{Time: it.Time, Category: it.Category, Agent: it.Agent, Summary: it.Summary}
-			msgs = append(msgs, sseMessage{Type: "event", Seq: it.Seq, Data: mustJSON(ev)})
-		case domain.RuntimeQueueStreamClear:
-			msgs = append(msgs, sseMessage{Type: "clear", Seq: it.Seq})
-		case domain.RuntimeQueueStreamDelta:
-			text := host.ReplayDeltaText(it)
-			if text == "" {
-				continue
-			}
-			msgs = append(msgs, sseMessage{Type: "stream", Seq: it.Seq, Text: text})
-		}
+		ev := host.Event{Time: it.Time, Category: it.Category, Agent: it.Agent, Summary: it.Summary}
+		msgs = append(msgs, sseMessage{Type: "event", Seq: it.Seq, Data: mustJSON(ev)})
 	}
 	writeJSON(w, http.StatusOK, msgs)
 }
@@ -143,22 +134,17 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	if s.blockIfRecoverable(w, body.Force) {
 		return
 	}
-	plan, err := startup.PrepareQuick(startup.Request{
-		Mode:        startup.ModeQuick,
-		UserPrompt:  body.Prompt,
-		OutputDir:   s.eng.Dir(),
-		Interactive: true,
-	})
+	prompt, err := startup.PrepareQuick(body.Prompt)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	// 启动侧确定性生成本书用户规则快照（用原始 prompt 归一化），须在 StartPrepared 前。
-	if err := s.eng.PrepareUserRules(plan.RawPrompt); err != nil {
+	if err := s.eng.PrepareUserRules(prompt); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := s.eng.StartPrepared(plan.RawPrompt); err != nil {
+	if err := s.eng.StartPrepared(prompt); err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}

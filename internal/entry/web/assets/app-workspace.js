@@ -592,12 +592,13 @@ function loadSystemTab() {
     }
   }
 
-  // Costs & Context
-  if (sysCtx) sysCtx.textContent = snap.ContextPercent ? Math.round(snap.ContextPercent) + '%' : '—';
+  // Costs & Context (context per-agent — lấy max % như dashboard)
+  const ctxPct = maxAgentContextPercent(snap);
+  if (sysCtx) sysCtx.textContent = ctxPct ? Math.round(ctxPct) + '%' : '—';
   if (sysModel) sysModel.textContent = snap.ModelName || '—';
   if (sysCost) sysCost.textContent = snap.TotalCostUSD ? '$' + Number(snap.TotalCostUSD).toFixed(2) : '—';
-  if (sysCtxFill && snap.ContextPercent) {
-    sysCtxFill.style.width = Math.round(snap.ContextPercent) + '%';
+  if (sysCtxFill && ctxPct) {
+    sysCtxFill.style.width = Math.round(ctxPct) + '%';
   }
 
   // Mirror event log into System Radar panel (last 50 entries)

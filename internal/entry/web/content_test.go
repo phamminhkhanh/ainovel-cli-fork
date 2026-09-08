@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -303,7 +304,24 @@ func TestServeWorldReturnsData(t *testing.T) {
 func TestServeCharactersReturnsData(t *testing.T) {
 	eng := newFakeEngine(t, 1)
 	writeFile(t, eng.dir, "characters.json", `[{"name":"Alice"}]`)
-	writeFile(t, eng.dir, "meta/cast_ledger.json", `[{"name":"Bob"}]`)
+
+	// Supporting cast is now projected from the accepted chapter record
+	// (upstream removed Cast.RecentActive / cast_ledger.json), so seed both
+	// the record (with a non-core character) and matching progress.
+	record, err := eng.Store().ChapterRecords.Prepare(1, domain.ChapterOriginGenerated, "Bob waves.", domain.ChapterFacts{
+		Title:      "One",
+		Characters: []string{"Bob"},
+		CastIntros: []domain.CastIntro{{Name: "Bob", BriefRole: "neighbor"}},
+	}, domain.StyleDelta{})
+	if err != nil {
+		t.Fatalf("prepare record: %v", err)
+	}
+	if err := eng.Store().ChapterRecords.Save(*record); err != nil {
+		t.Fatalf("save record: %v", err)
+	}
+	if err := eng.Store().Progress.Save(&domain.Progress{CompletedChapters: []int{1}}); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/characters", nil)
 	rec := httptest.NewRecorder()

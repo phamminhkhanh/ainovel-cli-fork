@@ -77,11 +77,12 @@ func exportRunEPUB(ps *prodRunStore, id string) (string, error) {
 	}
 	chapters = kept
 
-	data, err := renderRunEPUB(stripXMLIllegal(strings.TrimSpace(prog.NovelName)), chapters, headings, bodies)
+	title := loadRunBookTitle(novelDir)
+	data, err := renderRunEPUB(stripXMLIllegal(title), chapters, headings, bodies)
 	if err != nil {
 		return "", fmt.Errorf("render epub: %w", err)
 	}
-	name := strings.TrimSpace(prog.NovelName)
+	name := title
 	if name == "" {
 		name = r.Name
 	}
@@ -95,6 +96,22 @@ func exportRunEPUB(ps *prodRunStore, id string) (string, error) {
 // ExportEPUB builds the run's EPUB and returns its path. Mirrors ExportTXT.
 func (pm *prodRunManager) ExportEPUB(id string) (string, error) {
 	return exportRunEPUB(pm.store, id)
+}
+
+// loadRunBookTitle reads the run's book title from meta/book.json (upstream
+// moved NovelName out of Progress into BookMetadata). Empty when absent/unparsable.
+func loadRunBookTitle(novelDir string) string {
+	raw, err := os.ReadFile(filepath.Join(novelDir, "meta", "book.json"))
+	if err != nil {
+		return ""
+	}
+	var book struct {
+		Title string `json:"title"`
+	}
+	if json.Unmarshal(raw, &book) != nil {
+		return ""
+	}
+	return strings.TrimSpace(book.Title)
 }
 
 func loadRunProgress(path string) (*domain.Progress, error) {
@@ -345,4 +362,3 @@ func epubBookID(title string) string {
 	return fmt.Sprintf("urn:uuid:%x-%x-%x-%x-%x",
 		sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
 }
-

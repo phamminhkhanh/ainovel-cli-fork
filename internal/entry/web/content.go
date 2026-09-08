@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -181,10 +182,16 @@ func serveCharacters(eng contentEngine, w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	cast, err := st.Cast.RecentActive(50)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
+	// Cast 视图由已完成章节的接纳记录投影而来（upstream 移除了 Cast.RecentActive）；
+	// 沿用旧接口的"最近 50 个"语义，用 RecentCast 按 LastSeenChapter 截断。
+	var cast []domain.CastEntry
+	if progress, perr := st.Progress.Load(); perr == nil && progress != nil && len(progress.CompletedChapters) > 0 {
+		cast, err = st.BuildCast(progress.CompletedChapters)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		cast = domain.RecentCast(cast, 50)
 	}
 	writeJSON(w, http.StatusOK, charactersResponse{
 		Characters: chars,

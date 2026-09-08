@@ -150,13 +150,30 @@ function handleEvent(ev) {
 }
 
 // ── Dashboard (Snapshot) ──
+// maxAgentContext trả về AgentContextSnapshot của agent có % context cao nhất
+// (null nếu chưa có dữ liệu). Snapshot của upstream chỉ có context per-agent.
+function maxAgentContext(s) {
+  let max = null;
+  (s.Agents || []).forEach((a) => {
+    if (a.Context && a.Context.ContextWindow && (!max || (a.Context.Percent || 0) > (max.Percent || 0))) {
+      max = a.Context;
+    }
+  });
+  return max;
+}
+
+function maxAgentContextPercent(s) {
+  const c = maxAgentContext(s);
+  return (c && c.Percent) || 0;
+}
+
 function renderSnapshot(s) {
   if (!s) return;
   lastSnapshot = s;
   currentState = s.RuntimeState || 'idle';
   hasNovelState = (s.CompletedCount || 0) > 0 || (s.CurrentChapter || 0) > 0 || (s.TotalChapters || 0) > 0;
 
-  $('#novelName').textContent = s.NovelName || 'Chưa có tên';
+  $('#novelName').textContent = s.BookTitle || 'Chưa có tên';
   const badge = $('#stateBadge');
   badge.dataset.state = currentState;
   badge.textContent = s.StatusLabel || currentState;
@@ -203,10 +220,13 @@ function renderSnapshot(s) {
     prevAnyActive = anyActive;
   }
 
-  $('#ctx').textContent = s.ContextWindow
-    ? `${(s.ContextTokens || 0).toLocaleString()} / ${s.ContextWindow.toLocaleString()}`
-    : '—';
-  $('#ctxFill').style.width = Math.min(100, s.ContextPercent || 0) + '%';
+  // Context meter: upstream chỉ publish context per-agent trong snapshot;
+  // hiển thị agent "nặng" nhất (max %) — tức agent gần ngưỡng compact nhất.
+  const ctxMax = maxAgentContext(s);
+  $('#ctx').textContent = ctxMax
+    ? `${(ctxMax.Tokens || 0).toLocaleString()} / ${(ctxMax.ContextWindow || 0).toLocaleString()}`
+    : (s.ModelContextWindow ? `0 / ${s.ModelContextWindow.toLocaleString()}` : '—');
+  $('#ctxFill').style.width = Math.min(100, (ctxMax && ctxMax.Percent) || 0) + '%';
   $('#model').textContent = s.ModelName || '—';
   $('#cost').textContent = (s.TotalCostUSD != null)
     ? ('$' + Number(s.TotalCostUSD).toFixed(4) + (s.BudgetLimitUSD ? ' / $' + s.BudgetLimitUSD : ''))
@@ -236,7 +256,8 @@ function renderSnapshot(s) {
   const healthClass = isRunning ? 'good' : 'warn';
   const healthText = isRunning ? 'running' : 'idle';
   const cost = s.TotalCostUSD != null ? `$${Number(s.TotalCostUSD).toFixed(2)}` : '—';
-  const ctx = s.ContextPercent ? `${Math.round(s.ContextPercent)}%` : '—';
+  const ctxPct = maxAgentContextPercent(s);
+  const ctx = ctxPct ? `${Math.round(ctxPct)}%` : '—';
 
   $('#statusEngine').textContent = engine;
   $('#statusCh').textContent = chNum + totCh;

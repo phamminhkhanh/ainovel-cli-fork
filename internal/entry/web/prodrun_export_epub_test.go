@@ -150,5 +150,3 @@ func zipNames(zr *zip.Reader) []string {
 	}
 	return out
 }
-
-
