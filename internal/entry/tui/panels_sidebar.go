@@ -260,6 +260,8 @@ func snapshotPhaseLabel(phase string) string {
 
 func snapshotRuntimeStateLabel(state string) string {
 	switch state {
+	case "starting":
+		return "启动中"
 	case "running":
 		return "运行中"
 	case "pausing":

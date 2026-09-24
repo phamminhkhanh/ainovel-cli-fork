@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // handleToolUpdate 处理 Worker 的进度中继(ProgressPayload):TOOL 行、流式正文、
@@ -79,7 +80,7 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 			Time:     time.Now(),
 			Category: "SYSTEM",
 			Agent:    ev.Progress.Agent,
-			Summary:  retryPrefix(ev.Progress.Attempt, ev.Progress.MaxRetries, 0) + truncate(ev.Progress.Message, 80),
+			Summary:  retryPrefix(ev.Progress.Attempt, ev.Progress.MaxRetries, 0) + utils.TruncateRunes(ev.Progress.Message, 80),
 			Detail:   retryPrefix(ev.Progress.Attempt, ev.Progress.MaxRetries, delay) + ev.Progress.Message,
 			Kind:     errorKind(nil, ev.Progress.Message),
 			Level:    "warn",
@@ -109,7 +110,7 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 				Failed:     true,
 				Category:   "TOOL",
 				Agent:      ev.Progress.Agent,
-				Summary:    fmt.Sprintf("%s 错误: %s", call.summary, truncate(msg, 100)),
+				Summary:    fmt.Sprintf("%s 错误: %s", call.summary, utils.TruncateRunes(msg, 100)),
 				Detail:     detail,
 				Kind:       errorKind(nil, msg),
 				Level:      "error",
@@ -125,7 +126,7 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 			Time:     time.Now(),
 			Category: "ERROR",
 			Agent:    ev.Progress.Agent,
-			Summary:  fmt.Sprintf("%s 错误: %s", ev.Progress.Tool, truncate(msg, 100)),
+			Summary:  fmt.Sprintf("%s 错误: %s", ev.Progress.Tool, utils.TruncateRunes(msg, 100)),
 			Detail:   fmt.Sprintf("%s 错误: %s", ev.Progress.Tool, msg),
 			Kind:     errorKind(nil, msg),
 			Level:    "error",
@@ -164,7 +165,7 @@ func dispatchSummary(agent, task string) string {
 	if firstLine == "" {
 		return agent
 	}
-	return agent + "（" + truncate(firstLine, 30) + "）"
+	return agent + "（" + utils.TruncateRunes(firstLine, 30) + "）"
 }
 
 func dispatchDetail(task, reason string) string {
@@ -193,7 +194,7 @@ func (o *observer) emitCallFinish(call *activeCall, category, agentName string, 
 	if failed {
 		detail = callErr.Error()
 		kind = errorKind(callErr, detail)
-		summary = fmt.Sprintf("%s 错误: %s", call.summary, truncate(detail, 100))
+		summary = fmt.Sprintf("%s 错误: %s", call.summary, utils.TruncateRunes(detail, 100))
 	}
 	finishEv := Event{
 		ID:         call.id,

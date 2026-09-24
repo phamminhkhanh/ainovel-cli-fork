@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // InterventionFacts 干预分诊的事实包(Collect 时刻快照)。
@@ -119,7 +120,7 @@ func CollectInterventionFacts(st *storepkg.Store) (InterventionFacts, error) {
 			continue
 		}
 		f.RecentDecisions = append(f.RecentDecisions, RecentDecision{
-			At: r.At, Input: truncateRunes(r.Input, 80), Reason: r.Reason,
+			At: r.At, Input: utils.TruncateRunes(r.Input, 80), Reason: r.Reason,
 		})
 	}
 	return f, nil
@@ -255,12 +256,4 @@ func DecideIntervention(ctx context.Context, model agentcore.ChatModel, systemPr
 	return decide(ctx, model, interventionContract, systemPrompt, payload, func(d *InterventionDecision) error {
 		return d.ValidateAgainst(facts)
 	})
-}
-
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

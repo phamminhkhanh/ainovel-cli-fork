@@ -470,6 +470,12 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, fetchSnapshot(m.runtime), true
 	case snapshotMsg:
 		next := host.UISnapshot(msg)
+		// 启动期 Host 尚未进入 running（规则归一化/启动裁定都在 StartPrepared 之前或之中），
+		// 直接套用快照会把工作台显示成"空闲"，让正在进行的启动看起来像卡死。
+		if m.starting {
+			next.IsRunning = true
+			next.RuntimeState = "starting"
+		}
 		detailChanged := !sameDetailSnapshot(m.snapshot, next)
 		runningChanged := m.snapshot.IsRunning != next.IsRunning
 		m.snapshot = next
@@ -801,7 +807,7 @@ func (m *Model) enterStarting(rawPrompt string) tea.Cmd {
 	m.err = nil
 	m.starting = true
 	m.snapshot.IsRunning = true
-	m.snapshot.RuntimeState = "running"
+	m.snapshot.RuntimeState = "starting"
 	enableMouse := m.enterRunning()
 	m.resetOutputPanels()
 	m.resizeTextarea()

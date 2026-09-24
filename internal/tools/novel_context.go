@@ -12,6 +12,7 @@ import (
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // References 嵌入的参考资料。
@@ -555,7 +556,7 @@ func (t *ContextTool) buildRelatedChapters(
 	// 1. 伏笔反查：活跃伏笔的描述是否与当前章大纲相关
 	for _, f := range foreshadow {
 		if strings.Contains(outlineText, f.ID) || containsAny(outlineText, strings.Fields(f.Description)) {
-			add(f.PlantedAt, fmt.Sprintf("伏笔%s(%s)埋设章", f.ID, truncateRunes(f.Description, 15)))
+			add(f.PlantedAt, fmt.Sprintf("伏笔%s(%s)埋设章", f.ID, utils.TruncateRunes(f.Description, 15)))
 		}
 		if len(results) >= maxResults {
 			break
@@ -687,7 +688,7 @@ func (t *ContextTool) selectStoryThreads(state contextBuildState) []domain.Recal
 			Key:     entry.ID,
 			Chapter: entry.PlantedAt,
 			Reason:  "当前章可能需要承接既有伏笔",
-			Summary: fmt.Sprintf("伏笔“%s”埋于第%d章：%s", entry.ID, entry.PlantedAt, truncateRunes(entry.Description, 30)),
+			Summary: fmt.Sprintf("伏笔“%s”埋于第%d章：%s", entry.ID, entry.PlantedAt, utils.TruncateRunes(entry.Description, 30)),
 		})
 		if len(items) >= maxThreads {
 			return items
@@ -702,7 +703,7 @@ func (t *ContextTool) selectStoryThreads(state contextBuildState) []domain.Recal
 			Key:     entry.ID,
 			Chapter: entry.PlantedAt,
 			Reason:  "伏笔久挂未回收，注意适时推进或回收",
-			Summary: fmt.Sprintf("伏笔“%s”埋于第%d章，已 %d 章未回收：%s", entry.ID, entry.PlantedAt, state.chapter-entry.PlantedAt, truncateRunes(entry.Description, 30)),
+			Summary: fmt.Sprintf("伏笔“%s”埋于第%d章，已 %d 章未回收：%s", entry.ID, entry.PlantedAt, state.chapter-entry.PlantedAt, utils.TruncateRunes(entry.Description, 30)),
 		})
 		if len(items) >= maxThreads {
 			break
@@ -771,7 +772,7 @@ func (t *ContextTool) selectReviewLessons(chapter int, reads *contextReads) []do
 					Key:     fmt.Sprintf("review-%d-issue-%d", review.Chapter, i),
 					Chapter: review.Chapter,
 					Reason:  "最近审阅指出需要避免重复问题",
-					Summary: fmt.Sprintf("第%d章审阅提醒：%s", review.Chapter, truncateRunes(issue.Description, 36)),
+					Summary: fmt.Sprintf("第%d章审阅提醒：%s", review.Chapter, utils.TruncateRunes(issue.Description, 36)),
 				})
 			}
 			if len(items) >= 3 {
@@ -898,10 +899,3 @@ func longestCommonSubstringRunes(a, b []rune) int {
 }
 
 // truncateRunes 截断字符串到指定 rune 数。
-func truncateRunes(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
-	}
-	return string(runes[:maxRunes]) + "..."
-}

@@ -64,3 +64,6 @@ mynovel_*.txt
 .kimchi/*
 .gitnexus/*
 .kilo/*
+
+# Upstream: local database file
+ainovel.db

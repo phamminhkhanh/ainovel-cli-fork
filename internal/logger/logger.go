@@ -9,12 +9,6 @@ import (
 	"time"
 )
 
-// Setup 初始化 slog 默认 logger。
-// w 为日志输出目标，level 为最低日志级别。
-func Setup(w io.Writer, level slog.Level) {
-	slog.SetDefault(slog.New(newTextHandler(w, level)))
-}
-
 func newTextHandler(w io.Writer, level slog.Level) slog.Handler {
 	return slog.NewTextHandler(w, &slog.HandlerOptions{
 		Level: level,

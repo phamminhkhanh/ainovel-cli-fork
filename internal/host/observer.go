@@ -70,11 +70,6 @@ type observer struct {
 	agents  map[string]*agentState
 	agentMu sync.Mutex
 
-	// aborting 由 Host 在 Abort()/Close() 入口置位、Start/Resume/Continue 清位。
-	// 置位期间所有 context-cancel 衍生的错误事件被抑制（既是用户期望，也避免与
-	// "用户手动暂停"事件重复）。真实异常（非 cancel）仍照常上报。
-	aborting atomic.Bool
-
 	streamThinking      bool
 	lastThinkingByAgent map[string]string          // agent → 最近的累积 thinking 文本（用于提取增量 delta）
 	dispatchStarts      map[string]*activeCall     // dispatched agent → 进行中的 DISPATCH 调用
@@ -187,10 +182,6 @@ func (o *observer) finalize() {
 		a.tool = ""
 	}
 }
-
-// setAborting 由 Host 在 Abort/Close/Start 等生命周期切换处调用，控制
-// "context canceled" 类衍生事件是否需要抑制（避免与"用户手动暂停"重复）。
-func (o *observer) setAborting(v bool) { o.aborting.Store(v) }
 
 func (o *observer) retryEventID(scope string, attempt int) string {
 	if strings.TrimSpace(scope) == "" {

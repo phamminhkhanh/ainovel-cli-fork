@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/voocel/ainovel-cli/internal/chapterfacts"
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -75,7 +74,7 @@ func (p *Projector) build(records []domain.ChapterRecord) (projection, error) {
 			Chapter: record.Chapter, Title: facts.Title, Summary: facts.Summary,
 			Characters: facts.Characters, KeyEvents: facts.KeyEvents,
 		})
-		count := utf8.RuneCountInString(record.Content)
+		count := domain.WordCount(record.Content)
 		result.wordCounts[record.Chapter] = count
 		result.totalWords += count
 		setChapterHistory(&result.hookHistory, record.Chapter, facts.HookType)

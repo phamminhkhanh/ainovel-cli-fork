@@ -32,6 +32,7 @@ import (
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 	"github.com/voocel/ainovel-cli/internal/userrules"
+	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // Host 是运行时外壳:生命周期/干预入口/事件投影/模型管理。
@@ -92,6 +93,10 @@ const (
 	lifecyclePaused    lifecycle = "paused"
 	lifecycleCompleted lifecycle = "completed"
 )
+
+// userRulesBuildTimeout 封顶启动/恢复期的规则归一化。整本大纲作为输入时单次调用
+// 可达分钟级,留足余量;超时按既有 degraded 路径降级为 raw preferences,不阻塞开书。
+const userRulesBuildTimeout = 3 * time.Minute
 
 // New 创建 Host。
 func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Host, error) {
@@ -306,20 +311,38 @@ func (h *Host) PrepareUserRules(rawPrompt string) error {
 	if err := h.refuseNewBookOverExisting(); err != nil {
 		return err
 	}
+	// 归一化是启动期的第一次 LLM 调用：必须可取消(runCtx)且有超时上限——
+	// llmretry 对 retryable 错误(429/5xx/超时)会一直重试到 ctx 结束,
+	// 裸 context.Background() 会让 provider 持续限流时永久卡在这里(issue #125)。
+	// 超时落到既有 degraded 路径：宁可降级为 raw preferences 也不阻塞开书。
+	ctx, cancel := context.WithTimeout(h.runCtx, userRulesBuildTimeout)
+	defer cancel()
 	svc := userrules.NewService(h.store, h.models.Default, rules.DefaultOptions())
-	snap, err := svc.Build(context.Background(), rawPrompt)
+	snap, err := runObservedStep(h.observer, "SYSTEM", "rules", "规则归一化",
+		func() (*rules.Snapshot, error) { return svc.Build(ctx, rawPrompt) })
 	if err != nil {
 		return fmt.Errorf("用户规则快照落盘失败，无法继续: %w", err)
 	}
 	logUserRulesSnapshot(snap)
+	// 归一化失败是静默降级(normalizeOrDegrade)——不报错但规则没被结构化,
+	// 用户有权知道自己的要求只是以原文形态生效。
+	if snap != nil && snap.Status == rules.StatusDegraded {
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
+			Summary: "部分规则未能归一化，已按原文作为风格偏好生效",
+			Detail:  strings.Join(snap.Uncertain, "; ")})
+	}
 	return nil
 }
 
 // ensureUserRules 在恢复路径确保快照存在；缺失时按
 // system_defaults + rules 文件生成。
 func (h *Host) ensureUserRules() {
+	// 与 PrepareUserRules 同源：快照缺失时 GetOrBuild 会走 Build 发起 LLM 调用,
+	// 同样必须可取消 + 有超时,否则恢复路径复现 issue #125 的静默卡死。
+	ctx, cancel := context.WithTimeout(h.runCtx, userRulesBuildTimeout)
+	defer cancel()
 	svc := userrules.NewService(h.store, h.models.Default, rules.DefaultOptions())
-	snap, err := svc.GetOrBuild(context.Background())
+	snap, err := svc.GetOrBuild(ctx)
 	if err != nil {
 		slog.Warn("用户规则快照读取/生成失败，运行时将退到内置默认", "module", "rules", "err", err)
 		return
@@ -477,7 +500,6 @@ func (h *Host) startEngine(initial *flow.Instruction) bool {
 	if h.engine.isRunning() {
 		return false
 	}
-	h.observer.setAborting(false)
 	previous := h.lifecycle
 	h.lifecycle = lifecycleRunning
 	if !h.engine.start(initial) {
@@ -891,9 +913,6 @@ func (h *Host) abortWithEvent(summary, level string) bool {
 	cancelExclusive := h.exclusiveCancel
 	h.mu.Unlock()
 	if running {
-		// 置位必须在 engine.abort 之前：cancel 传播会立刻引发 stream init / worker
-		// 失败事件，observer 凭此标志识别为 abort 衍生噪声并抑制。
-		h.observer.setAborting(true)
 		h.engine.abort()
 		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
 		return true
@@ -920,7 +939,6 @@ func (h *Host) Close() {
 		cancelExclusive := h.exclusiveCancel
 		h.mu.Unlock()
 
-		h.observer.setAborting(true)
 		if h.runCancel != nil {
 			h.runCancel() // 中断在途的宿主侧裁定调用与 supervisor 转发
 		}
@@ -1198,7 +1216,7 @@ func (h *Host) Snapshot() UISnapshot {
 
 	if book, _ := h.store.Book.Load(); book != nil {
 		snap.BookTitle = book.Title
-		snap.Synopsis = truncate(book.Synopsis, 200)
+		snap.Synopsis = utils.TruncateRunes(book.Synopsis, 200)
 	}
 	progress, _ := h.store.Progress.Load()
 	if progress != nil {
@@ -1242,7 +1260,7 @@ func (h *Host) Snapshot() UISnapshot {
 // fillDetails 填充详情区:设定、角色、最近 commit/review/摘要。
 func (h *Host) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 	if premise, _ := h.store.Outline.LoadPremise(); premise != "" {
-		snap.Premise = truncate(premise, 80)
+		snap.Premise = utils.TruncateRunes(premise, 80)
 	}
 	if outline, _ := h.store.Outline.LoadOutline(); len(outline) > 0 {
 		completed := make(map[int]struct{})
@@ -1328,7 +1346,7 @@ func (h *Host) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 			ch := progress.CompletedChapters[i]
 			if summary, err := h.store.Summaries.LoadSummary(ch); err == nil && summary != nil {
 				snap.RecentSummaries = append(snap.RecentSummaries,
-					fmt.Sprintf("第%d章: %s", ch, truncate(summary.Summary, 50)))
+					fmt.Sprintf("第%d章: %s", ch, utils.TruncateRunes(summary.Summary, 50)))
 			}
 		}
 	}
@@ -1554,7 +1572,7 @@ func (h *Host) PauseForCoCreate() bool {
 	running := h.lifecycle == lifecycleRunning
 	h.mu.Unlock()
 
-	// 运行中复用 abortWithEvent 停机（running→paused + setAborting + Abort + 事件），与手动
+	// 运行中复用 abortWithEvent 停机（running→paused + Abort + 事件），与手动
 	// 暂停同序、不另抄一遍；已停止（idle/paused）只置标记，规划完经 Continue 续跑。
 	if running {
 		h.abortWithEvent("进入阶段共创，创作已暂停", "info")
@@ -1675,14 +1693,6 @@ func (h *Host) requireCleanChapters() error {
 		return fmt.Errorf("检测到章节正文已被外部修改：%v；请先执行 /sync", chapters)
 	}
 	return nil
-}
-
-func truncate(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
-	}
-	return string(runes[:maxRunes]) + "..."
 }
 
 // ImportFrom 启动一次外部小说语义编译导入：ingest → segment → analyze → synthesize → publish。

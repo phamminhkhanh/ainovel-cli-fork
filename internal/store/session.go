@@ -339,8 +339,3 @@ func extractJSONFieldInt(data json.RawMessage, field string) int {
 
 // CompactTag 是占位标记前缀，方便搜索和还原。
 const CompactTag = "[session_compact:"
-
-// IsCompacted 检查文本是否已被压缩。
-func IsCompacted(text string) bool {
-	return strings.HasPrefix(text, CompactTag)
-}

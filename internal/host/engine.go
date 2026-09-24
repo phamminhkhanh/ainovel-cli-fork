@@ -775,8 +775,7 @@ func (e *engine) applyControlOp(ctx context.Context, op controlOp) error {
 		}
 	}
 	if op.reopen != nil {
-		args, _ := json.Marshal(map[string]any{"chapters": op.reopen.Chapters, "reason": op.reopen.Reason})
-		if _, err := tools.NewReopenBookTool(e.store).Execute(ctx, args); err != nil {
+		if err := tools.ReopenBook(e.store, op.reopen.Chapters, op.reopen.Reason); err != nil {
 			e.emitEvent(Event{Time: time.Now(), Category: "ERROR", Summary: "重开返工失败: " + err.Error(), Level: "error"})
 			fail(err)
 		} else {

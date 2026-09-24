@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 func TestStartCommandLoadsPromptFile(t *testing.T) {
@@ -92,6 +94,52 @@ func TestStartupFailureStaysInWorkbench(t *testing.T) {
 	}
 	if len(got.events) == 0 || got.events[len(got.events)-1].Category != "ERROR" {
 		t.Fatalf("工作台应保留启动错误事件: %+v", got.events)
+	}
+}
+
+// issue #125 回归：启动期 Host 尚未进入 running（规则归一化/启动裁定都在其之前），
+// 真实快照回包不得把工作台显示成"空闲"，否则正在进行的启动看起来像卡死。
+func TestStartingSnapshotShowsStartingNotIdle(t *testing.T) {
+	m := NewModel(nil, "")
+	m.width = 120
+	m.height = 40
+	m.resizeTextarea()
+	m.updateViewportSize()
+
+	m.enterStarting("写一本东方玄幻长篇")
+
+	next, _, handled := m.handleRuntimeMsg(snapshotMsg(host.UISnapshot{RuntimeState: "idle"}))
+	if !handled {
+		t.Fatal("snapshotMsg 应被 handleRuntimeMsg 处理")
+	}
+	got := next.(Model)
+	if got.snapshot.RuntimeState != "starting" {
+		t.Fatalf("启动期运行态 = %q, want starting", got.snapshot.RuntimeState)
+	}
+	if !got.snapshot.IsRunning {
+		t.Fatal("启动期不应显示为已停止")
+	}
+	if label := snapshotRuntimeStateLabel(got.snapshot.RuntimeState); label != "启动中" {
+		t.Fatalf("侧栏标签 = %q, want 启动中", label)
+	}
+}
+
+// 启动结束（成功或失败）后 starting 复位，快照恢复如实反映 Host。
+func TestSnapshotResumesTruthAfterStartingCleared(t *testing.T) {
+	m := NewModel(nil, "")
+	m.width = 120
+	m.height = 40
+	m.resizeTextarea()
+	m.updateViewportSize()
+
+	m.enterStarting("写一本东方玄幻长篇")
+	failed, _ := m.handleStartResultMsg(startResultMsg{err: errors.New("模型账户未激活")})
+	m = failed.(Model)
+
+	next, _, _ := m.handleRuntimeMsg(snapshotMsg(host.UISnapshot{RuntimeState: "idle"}))
+	got := next.(Model)
+	if got.snapshot.RuntimeState != "idle" {
+		t.Fatalf("启动结束后应如实显示，got %q", got.snapshot.RuntimeState)
 	}
 }
 

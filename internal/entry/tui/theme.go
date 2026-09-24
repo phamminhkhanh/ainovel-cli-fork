@@ -117,9 +117,6 @@ var (
 				Foreground(colorAccent).
 				Bold(true)
 
-	contextUsageMetaStyle = lipgloss.NewStyle().
-				Foreground(colorDim)
-
 	cardTitleStyle = lipgloss.NewStyle().
 			Foreground(colorMuted).
 			Italic(true)
